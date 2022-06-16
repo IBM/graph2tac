@@ -3,7 +3,7 @@ from typing import Optional, Iterable
 
 import numpy as np
 import tensorflow as tf
-from graph2tac.tf2.datatypes import RaggedPair
+from graph2tac.tf2.datatypes import InnerInput, RaggedPair
 from graph2tac.tf2.graph_nn_batch import make_flat_batch_np
 from graph2tac.tf2.graph_nn_def_batch import make_flat_def_batch_np
 from graph2tac.tf2.model import ModelWrapper, np_to_tensor, np_to_tensor_def
@@ -94,7 +94,9 @@ class Predict:
                              # np.array([False] * max_args),
         )
         self.dummy_id = 0
-        self.pred_fn = self.model_wrapper.get_predict_fn()
+
+        self.pred_fn_step1 = self.model_wrapper.get_predict_fn_step1()
+        self.pred_fn_step2 = self.model_wrapper.get_predict_fn_step2()
         self.set_def_fn = self.model_wrapper.get_set_def_fn()
         self.tactic_index_to_numargs = np.array(self.dataset_consts.tactic_index_to_numargs)
 
@@ -128,7 +130,7 @@ class Predict:
         batch = [(state, self.dummy_action, self.dummy_id)]  # dummy action and dummy_id isn't used to get tactic logits
         model_input = np_to_tensor(make_flat_batch_np(batch, len(self.dataset_consts.global_context),
                                                       self.dataset_consts.tactic_max_arg_num))
-        tactic_logits, _, _ = self.pred_fn(model_input)  # [bs, tactics], _, _
+        tactic_logits, _, _ = self.pred_fn_step1(model_input.states)  # [bs, tactics], _, _
         return tactic_logits[0].numpy()
 
     def predict_arg_logits(self, state: tuple, tactic_id: int) -> np.ndarray:  # [args, cxt]
@@ -145,9 +147,13 @@ class Predict:
         action = (tactic_id, self.dummy_action[1], self.dummy_action[2])
         batch = [(state, action, self.dummy_id)]  # only action tactic is used to get arg logits
         cxt_len = len(state[3])  # this is how many local context elements there are
+
         model_input = np_to_tensor(make_flat_batch_np(batch, len(self.dataset_consts.global_context),
                                                       self.dataset_consts.tactic_max_arg_num))
-        _, arg_nums, arg_logits = self.pred_fn(model_input)  # [bs], [total_args, (local_global_ctx)] (ragged)
+        _, context_embs, state_embs = self.pred_fn_step1(model_input.states)
+        tactic_labels = model_input.actions.tactic_labels
+        inner_input = InnerInput(tactics=tactic_labels, context_emb=context_embs, state_emb=state_embs)
+        arg_nums, arg_logits = self.pred_fn_step2(inner_input)  # [bs], [total_args, (local_global_ctx)] (ragged)
         arg_cnt = int(arg_nums[0])
         local_context_arg_cnt = arg_cnt * cxt_len  # how many logits there are for local context elements in all arguments
         return tf.reshape(arg_logits.values[:local_context_arg_cnt], [arg_cnt, cxt_len])
@@ -156,16 +162,44 @@ class Predict:
         """
         returns a matrix of tactic / arg logits expanding arguments call with top_tactics
         """
-        tactic_logits = self.predict_tactic_logits(state)
+        batch = [(state, self.dummy_action, self.dummy_id)]  # dummy action and dummy_id isn't used to get tactic logits
+        model_input = np_to_tensor(make_flat_batch_np(batch, self.dataset_consts))
+        tactic_logits, context_embs, state_embs = self.pred_fn_step1(model_input.states)  # [bs, tactics], _, _
+        tactic_logits = tactic_logits[0].numpy()
+
         pre_top_tactic_ids = np.argsort(-tactic_logits)  # [:tactic_expand_bound]
         top_tactic_ids = pre_top_tactic_ids[np.isin(pre_top_tactic_ids, allowed_model_tactics)][:tactic_expand_bound]
         top_tactic_ids = top_tactic_ids[self.tactic_index_to_numargs[top_tactic_ids] < NUMPY_NDIM_LIMIT]
-        batch = [(state, (tactic_id, self.dummy_action[1]), self.dummy_id) for tactic_id in top_tactic_ids]
-        if not batch:
+# HEAD SPEEDUP PREDICT STARTS HERE
+
+        if top_tactic_ids.shape[0] == 0:
             return top_tactic_ids, tactic_logits[top_tactic_ids], [], []
-        model_input = np_to_tensor(make_flat_batch_np(batch, len(self.dataset_consts.global_context),
-                                                      self.dataset_consts.tactic_max_arg_num))
-        _, arg_nums, arg_logits = self.pred_fn(model_input)
+
+        # make a batch for the second half by repeating the output of pred_fn_step for every tactic
+        tactic_cnt = len(top_tactic_ids)
+        batch_context_embs = RaggedPair(  # [num_tactics, (cxt), cxt_dim]
+            indices=tf.repeat(
+                tf.range(tactic_cnt, dtype=tf.int32),
+                repeats=context_embs.indices.shape[0]
+            ),
+            values=tf.tile(context_embs.values, multiples=[tactic_cnt,1])
+        )
+        batch_state_embs = tf.tile(state_embs, multiples=[tactic_cnt, 1])  # [num_tactics, state_dim]
+        inner_input = InnerInput(
+            tactics=np.array(top_tactic_ids).astype('int32'),
+            context_emb=batch_context_embs,
+            state_emb=batch_state_embs
+        )
+
+        arg_nums, arg_logits = self.pred_fn_step2(inner_input)
+# MAIN STARTS HERE =======
+        # batch = [(state, (tactic_id, self.dummy_action[1]), self.dummy_id) for tactic_id in top_tactic_ids]
+        # if not batch:
+        #     return top_tactic_ids, tactic_logits[top_tactic_ids], [], []
+        # model_input = np_to_tensor(make_flat_batch_np(batch, len(self.dataset_consts.global_context),
+        #                                               self.dataset_consts.tactic_max_arg_num))
+        # _, arg_nums, arg_logits = self.pred_fn(model_input)
+# MAIN FINISHES HERE
         cxt_len = len(state[3])  # this is how many local context elements there are
         arg_cnt = sum(arg_nums)
         local_context_arg_cnt = arg_cnt * cxt_len  # how many logits there are for local context elements in all arguments
@@ -173,6 +207,7 @@ class Predict:
         local_arg_logits = tf.reshape(arg_logits.values[:local_context_arg_cnt], [arg_cnt, cxt_len])  # [all_args, cxt]
         gctx_len = len(self.dataset_consts.global_context)
         global_arg_logits = tf.reshape(arg_logits.values[global_context_start:], [arg_cnt, gctx_len])  # [all_args, gcxt]
+
         if available_global is not None:
             available_global = tf.constant(available_global, dtype=tf.int32)
             global_arg_logits = tf.transpose(tf.gather(tf.transpose(global_arg_logits), available_global))
