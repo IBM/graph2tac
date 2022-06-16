@@ -47,8 +47,6 @@ class Predict:
         self.params = ModelWrapper.get_params_from_checkpoint(checkpoint_dir)
         self.dataset_consts = self.params.dataset_consts
         assert self.dataset_consts is not None
-        self.n_predict = 0
-        self.t_predict = 0
 
     def get_tactic_index_to_numargs(self) -> Iterable:
         """
@@ -91,7 +89,6 @@ class Predict:
         max_args = self.dataset_consts.tactic_max_arg_num
         self.dummy_action = (0,
                              np.zeros([max_args, 2]),
-                             # np.array([False] * max_args),
         )
         self.dummy_id = 0
         self.pred_fn = self.model_wrapper.get_predict_fn()
@@ -183,9 +180,18 @@ class Predict:
     def ranked_predictions(self, state: tuple, allowed_model_tactics: list, available_global=None, tactic_expand_bound=20, total_expand_bound=1000000):
         """
         available_global is np.array of indices into global_context
-        """
-        t0 = time.time()
 
+        returns (ranked_actions, ranked_values)
+
+        where ranked_actions is the list of actions  and ranked_values is the list of corresponding probabilities
+
+        The sum of probabalities is constrained to be a positive real number less or equal to 1.0
+
+        The set of actions are returned by this function is a subset of all potential actions.
+
+        The probabilities for all potential actions sum up to 1.0 by the way tf.nn.softmax is normalized.
+
+        """
         context_len = len(state[3])
         global_context = np.arange(len(self.dataset_consts.global_context), dtype = np.uint32)
         if available_global is not None:
@@ -194,7 +200,8 @@ class Predict:
                 available_global = available_global[available_global < len(self.dataset_consts.global_context)]
             global_context = global_context[available_global]
         if (state[0] >= self.dataset_consts.node_label_num).any():
-            #print("Warning: ignoring new node types!")
+            # let's deprecate this unless we have a bug in a pipeline?
+            assert False, "this branch shouldn't be executed after support of new definitions"
             nodes_c = state[0]
             mask = (nodes_c >= self.dataset_consts.node_label_num)
             nodes_c[mask] = self.dataset_consts.node_label_num-1
@@ -244,16 +251,6 @@ class Predict:
         else:
             result_value = np.zeros(0)
         ranked_indices = np.argsort(-result_value)
-        # ranked_actions = np.array(result_idx, dtype=object)[ranked_indices]
         ranked_actions = [np.array(result_idx[idx], dtype=np.uint32) for idx in ranked_indices]
         ranked_values = result_value[ranked_indices]
-
-        t1 = time.time()
-        self.t_predict += (t1 - t0)
-        self.n_predict += 1
-        # print(f'Predict.ranked_predictions this call {t1-t0:.6f} seconds')
-        # if self.n_predict != 0 and self.n_predict % 10 == 0:
-        #    print(f'Predict.ranked_predictions average  {self.t_predict/self.n_predict:.6f} second/call')
-
-
         return ranked_actions, ranked_values
