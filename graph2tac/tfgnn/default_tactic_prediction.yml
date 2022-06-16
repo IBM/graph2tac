@@ -1,0 +1,17 @@
+prediction_task_type: base_tactic_prediction
+hidden_size: 128
+tactic_embedding_size: 128
+gnn_type: simple_convolution_gnn
+gnn_config:
+  hops: 8
+  dense_activation: relu
+  residual_activation: relu
+  dropout_rate: 0.1
+  layer_norm: true
+  reduce_type: max
+  final_reduce_type: max
+tactic_head_type: dense_tactic
+tactic_head_config:
+  hidden_layers:
+  - activation: relu
+    units: 256

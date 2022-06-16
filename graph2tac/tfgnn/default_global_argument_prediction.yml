@@ -1,0 +1,23 @@
+prediction_task_type: global_argument_prediction
+hidden_size: 128
+tactic_embedding_size: 128
+gnn_type: simple_convolution_gnn
+gnn_config:
+  hops: 8
+  dense_activation: relu
+  residual_activation: relu
+  dropout_rate: 0.1
+  layer_norm: true
+  reduce_type: max
+  final_reduce_type: max
+tactic_head_type: dense_tactic
+tactic_head_config:
+  hidden_layers:
+  - activation: relu
+    units: 256
+arguments_head_type: simple_rnn
+arguments_head_config:
+  activation: relu
+  recurrent_activation: tanh
+  recurrent_depth: 2
+arguments_loss_coefficient: 0.1
