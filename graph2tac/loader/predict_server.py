@@ -557,6 +557,12 @@ def main():
                         action='store_true',
                         help=("call newtwork update embedding on cluster containit all definitions (overwrites update new definitions)"))
 
+    parser.add_argument('--tf_eager',
+                        default=False,
+                        action='store_true',
+                        help=("with tf_eager=True activated network tf2 may initialize faster but run slower, use carefully if you need")
+                        )
+
 
 
     args = parser.parse_args()
@@ -600,6 +606,7 @@ def main():
         log_info("importing tensorflow...")
         import tensorflow as tf
         tf.get_logger().setLevel(int(tf_log_levels[args.log_level]))
+        tf.config.run_functions_eagerly(args.tf_eager)
         log_info("importing Predict class..")
         from graph2tac.tf2.predict import Predict
         log_info(f"initializing predict network from {Path(args.model).expanduser().absolute()}")
