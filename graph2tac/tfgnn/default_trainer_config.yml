@@ -1,0 +1,14 @@
+batch_size: 64
+optimizer_type: adam
+optimizer_config:
+  amsgrad: false
+  beta_1: 0.9
+  beta_2: 0.999
+  decay: 0.0
+  epsilon: 1.0e-07
+  learning_rate: 0.001
+  name: Adam
+l2_regularization_coefficient: 1.0e-05
+definition_loss_coefficient: 1.0
+max_to_keep: 1
+keep_checkpoint_every_n_hours: null

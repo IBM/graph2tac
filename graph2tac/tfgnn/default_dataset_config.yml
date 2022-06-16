@@ -1,0 +1,4 @@
+symmetrization: bidirectional
+add_self_edges: true
+split_random_seed: 0
+max_subgraph_size: 1024
