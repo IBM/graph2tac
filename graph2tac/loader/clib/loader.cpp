@@ -780,6 +780,7 @@ std::unordered_map<c_GlobalNode, size_t> forward_closure(
     return visited;
 }
 
+/*
 std::vector<std::vector<std::array<c_NodeIndex, 2>>> get_subgraph_edges_split_by_label(
     const c_ConflateLabels & conflate,
     const c_Data & data,
@@ -807,6 +808,8 @@ std::vector<std::vector<std::array<c_NodeIndex, 2>>> get_subgraph_edges_split_by
     return edges_split_by_label;
 }
 
+*/
+
 std::tuple< std::vector<c_NodeIndex>, std::vector<c_EdgeLabel>,
 	    std::vector<std::array<c_NodeIndex, 2>>>
 compute_offsets(const std::vector<std::vector<std::array<c_NodeIndex, 2>>>&
@@ -833,7 +836,7 @@ compute_offsets(const std::vector<std::vector<std::array<c_NodeIndex, 2>>>&
 }
 
 
-
+/*
 c_SubGraph build_subgraph (
     const c_Data * const p_data,
     const std::vector<c_GlobalNode> & roots,
@@ -906,8 +909,8 @@ c_SubGraph build_subgraph (
 	    };
 
 }
-
-
+*/
+/*
 std::unordered_map<c_GlobalNode, c_SubGraph>  get_file_subgraphs(
     c_Data * const p_data,
     const bool bfs_option,
@@ -949,7 +952,9 @@ std::unordered_map<c_GlobalNode, c_SubGraph>  get_file_subgraphs(
     return file_subgraphs;
 }
 
+*/
 
+/*
 void pass_subgraphs_task(
     c_Data * const p_data,
     const bool bfs_option,
@@ -962,12 +967,12 @@ void pass_subgraphs_task(
     }
 }
 
-
+*/
 
 // TODO: make subgraphs stored in file_graph individually
 
 
-
+/*
 void    pass_subgraphs(
     c_Data * const p_data,
     const std::vector<std::vector<size_t>>& tasks,
@@ -1009,7 +1014,7 @@ void    pass_subgraphs(
 
 }
 
-
+*/
 c_Tactics build_index_tactic_hashes(
     const std::vector<std::vector<c_ProofStep>> &proof_steps) {
 
@@ -1266,7 +1271,7 @@ std::vector<std::vector<c_ProofStep>> make_global_proof_steps(
 
 
 
-
+/*
 static PyObject * get_step_state(const c_GlobalNode& root,
 				 const std::vector<c_GlobalNode>  context,
 				 const c_SubGraph& subgraph,
@@ -1292,8 +1297,10 @@ static PyObject * get_step_state(const c_GlobalNode& root,
 			 subgraph.glob_to_sub.at(root),
 			 numpy_ndarray1d(context_local));
 }
+*/
 
 
+/*
 static PyObject * load_msg(c_Data * p_data,
 	      const char* msg_data,
 	      const size_t msg_data_size,
@@ -1350,6 +1357,7 @@ static PyObject * load_msg(c_Data * p_data,
     return get_step_state(root, context, subgraph, p_data->def_table.hash_to_node_label, p_data->eval_label_to_train_label);
 }
 
+*/
 
 void send_response(const std::vector<std::vector<std::pair<uint32_t,uint32_t>>>& predictions,
 		   const std::vector<double>& confidences,
@@ -1580,7 +1588,7 @@ static PyObject * c_encode_prediction(PyObject *self, PyObject *args) {
 
 
 
-
+/*
 c_Data load_init_msg(const char* data,
 		     const size_t data_size,
 		     const std::vector<c_TacticHash> &network_tactic_index_to_hash,
@@ -1725,33 +1733,8 @@ c_Data load_init_msg(const char* data,
     log_verbose("populated visible context of size " + std::to_string(c_data.global_context.size()));
     return c_data;
 }
-
-/*
-// SCHEDULED TO DEPRECATE
-std::map<c_FileIndex, std::set<c_FileIndex>> get_local_to_global_file_idx(    const std::string &data_dir,
-								      const std::vector<std::string> &fnames) {
-
-    FileTable file_table (fnames, data_dir);
-    auto task = get_tasks(1, fnames).front();
-
-    std::map<c_FileIndex, std::set<c_FileIndex>> global_dep_links;
-
-    for (const auto file_idx: task) {
-	FileMessageReader pf(file_table.fname(file_idx));
-	const auto dataset =  pf.msg.getRoot<Dataset>();
-	const auto dependencies = dataset.getDependencies();
-	const auto dep_local_to_global = build_dependencies(&dependencies,
-							    file_table);
-
-	global_dep_links[file_idx] = std::set<c_FileIndex> (
-	    dep_local_to_global.begin(),
-	    dep_local_to_global.end());
-    }
-
-    return global_dep_links;
-}
-
 */
+
 
 std::map<c_FileIndex, std::vector<c_FileIndex>> get_local_to_global_file_idx(    const std::string &data_dir,
 										 const std::vector<std::string> &fnames) {
@@ -1760,30 +1743,22 @@ std::map<c_FileIndex, std::vector<c_FileIndex>> get_local_to_global_file_idx(   
 
     FileTable file_table (fnames, data_dir);
 
-    auto tasks = get_tasks(1, fnames);
+    for (size_t file_idx = 0; file_idx < file_table.fnames().size(); ++file_idx) {
 
-    if (tasks.size() == 1) {
-	auto task = tasks[0];
-
-	for (const auto file_idx: task) {
-
-	    auto fname = file_table.fname(file_idx);
-	    MMapFileMessageReader freader(fname);
-	    const auto dataset =  freader.msg->getRoot<Dataset>();
-	    const auto dependencies = dataset.getDependencies();
-	    const auto dep_local_to_global = build_dependencies(&dependencies,
-								file_table);
-	    global_dep_links[file_idx] = std::vector<c_FileIndex> (
-		dep_local_to_global.begin(),
-		dep_local_to_global.end());
-	}
+	auto fname = file_table.fname(file_idx);
+	MMapFileMessageReader freader(fname);
+	const auto dataset =  freader.msg->getRoot<Dataset>();
+	const auto dependencies = dataset.getDependencies();
+	const auto dep_local_to_global = build_dependencies(&dependencies,
+							    file_table);
+	global_dep_links[file_idx] = std::vector<c_FileIndex> (
+	    dep_local_to_global.begin(),
+	    dep_local_to_global.end());
     }
-
-    log_info("return global_dep_links");
     return global_dep_links;
 }
 
-
+/*
 c_Data get_data(
     const unsigned int num_proc,
     const std::string &data_dir,
@@ -1845,6 +1820,7 @@ c_Data get_data(
 
     return data;
 }
+*/
 
 
 
@@ -2842,6 +2818,8 @@ static PyObject *c_capnp_unpack(PyObject *self, PyObject *args) {
 }
 
 
+
+
 static PyObject *c_check(PyObject *self, PyObject *args) {
     PyObject *bytesObj;
     if (!PyArg_ParseTuple(args, "S", &bytesObj)) {
@@ -2878,6 +2856,7 @@ static PyObject *c_check(PyObject *self, PyObject *args) {
 }
 
 
+/*
 
 static PyObject *c_get_data(PyObject *self, PyObject *args) {
 
@@ -2909,7 +2888,9 @@ static PyObject *c_get_data(PyObject *self, PyObject *args) {
 	return NULL;
     }
 }
+*/
 
+/*
 static PyObject *c_load_init_msg(PyObject *self, PyObject *args) {
     PyObject * bytesObj;
     PyObject * p_ListObj;
@@ -2963,7 +2944,7 @@ static PyObject *c_load_init_msg(PyObject *self, PyObject *args) {
 	return NULL;
     }
 }
-
+*/
 
 static PyObject * c_load_msg_online(PyObject *self, PyObject *args) {
     PyObject * p_msg_data;
@@ -3025,7 +3006,7 @@ static PyObject * c_load_msg_online(PyObject *self, PyObject *args) {
 			     numpy_ndarray1d(encoded_context),
 			     numpy_ndarray1d(context));
     }  catch (const std::exception &ia) {
-	log_critical("exception in load_msg");
+	log_critical("exception in load_msg_online");
 	log_critical(ia.what());
 	PyErr_SetString(PyExc_TypeError, ia.what());
 	return NULL;
@@ -3033,7 +3014,7 @@ static PyObject * c_load_msg_online(PyObject *self, PyObject *args) {
 }
 
 
-
+/*
 
 static PyObject *c_load_msg(PyObject *self, PyObject *args) {
     PyObject * capsObj;
@@ -3066,10 +3047,12 @@ static PyObject *c_load_msg(PyObject *self, PyObject *args) {
     }
 }
 
+*/
 
 
 
 
+/*
 static PyObject *c_get_proof_steps_size(PyObject *self, PyObject *args) {
 
     PyObject *capsObj;
@@ -3093,11 +3076,11 @@ static PyObject *c_get_proof_steps_size(PyObject *self, PyObject *args) {
     }
     return PyLong_FromSize_t(counter);
 }
+*/
 
 
 
-
-
+/*
 static PyObject *c_get_subgraph(PyObject *self, PyObject *args) {
 
     PyObject *capsObj;
@@ -3140,7 +3123,9 @@ static PyObject *c_get_subgraph(PyObject *self, PyObject *args) {
 
 }
 
+*/
 
+/*
 static PyObject *c_build_subgraphs(PyObject *self, PyObject *args) {
 
     PyObject *capsObj;
@@ -3170,11 +3155,12 @@ static PyObject *c_build_subgraphs(PyObject *self, PyObject *args) {
 
 }
 
+*/
 
 
 
 
-
+/*
 static PyObject *c_get_proof_step(PyObject *self, PyObject *args) {
 
     PyObject *capsObj;
@@ -3221,6 +3207,7 @@ static PyObject *c_get_proof_step(PyObject *self, PyObject *args) {
 	proof_step.root.file_idx);
 }
 
+*/
 
 
 
@@ -3261,7 +3248,7 @@ static PyObject *c_get_step_state_text(PyObject *self, PyObject *args) {
 }
 
 
-
+/*
 static PyObject *c_get_step_state(PyObject *self, PyObject *args) {
 	PyObject *capsObj;
 	Py_ssize_t proof_step_idx;
@@ -3346,9 +3333,10 @@ static PyObject * c_get_node_label_subgraph(PyObject *self, PyObject *args) {
 			 numpy_ndarray1d(subgraph.edge_label_offsets));
 }
 
+*/
 
 
-
+/*
 static PyObject * c_build_def_clusters(PyObject * self, PyObject *args) {
     PyObject *capsObj;
     int bfs_option;
@@ -3453,8 +3441,9 @@ static PyObject * c_build_def_clusters(PyObject * self, PyObject *args) {
 			 PyList_FromVector(vect_of_clusters_np));
 }
 
+*/
 
-
+/*
 static PyObject * c_get_def_cluster_subgraph(PyObject *self, PyObject *args) {
 	PyObject *capsObj;
 	uint32_t cluster_idx;
@@ -3495,6 +3484,7 @@ static PyObject * c_get_def_cluster_subgraph(PyObject *self, PyObject *args) {
 			 numpy_ndarray1d(subgraph.edge_label_offsets),
 			 static_cast<uint64_t>(subgraph.number_of_roots));
 }
+*/
 
 
 static PyObject *c_get_step_label_text(PyObject *self, PyObject *args) {
@@ -3653,7 +3643,7 @@ static PyObject *c_get_step_hash_and_size(PyObject *self, PyObject *args) {
 }
 
 
-
+/*
 static PyObject *c_get_node_label_to_hash(PyObject *self, PyObject *args) {
     PyObject *capsObj;
 
@@ -3672,8 +3662,10 @@ static PyObject *c_get_node_label_to_hash(PyObject *self, PyObject *args) {
 
     return Py_BuildValue("N", numpy_ndarray1d(p_data->def_table.node_label_to_hash));
 }
+*/
 
 
+/*
 static PyObject *c_get_hash_to_name(PyObject *self, PyObject *args) {
 
     PyObject *capsObj;
@@ -3702,6 +3694,7 @@ static PyObject *c_get_hash_to_name(PyObject *self, PyObject *args) {
 }
 
 
+*/
 
 static PyObject *c_get_files_num_nodes(PyObject *self, PyObject *args) {
 
@@ -3795,7 +3788,7 @@ static PyObject *c_get_graph_constants_online(PyObject *self, PyObject *args) {
 }
 
 
-
+/*
 static PyObject *c_get_graph_constants(PyObject *self, PyObject *args) {
     PyObject *capsObj;
 
@@ -3848,6 +3841,7 @@ static PyObject *c_get_graph_constants(PyObject *self, PyObject *args) {
 	PyListBytes_FromVectorString(node_label_to_name));
 }
 
+*/
 
 
 static PyObject *c_test2d(PyObject *self, PyObject *args) {
@@ -3926,8 +3920,8 @@ static PyMethodDef GraphMethods[] = {
     /* python function name, c function name, _ , doc string" */
     {"parse_memory_view", parse_memory_view, METH_VARARGS,
      "memoryview -> int"},
-    {"get_data", c_get_data, METH_VARARGS,
-     "data_dir: bytes, proj_dir: bytes, fnames: list[bytes], num_proc --> data_capsule"},
+//    {"get_data", c_get_data, METH_VARARGS,
+//     "data_dir: bytes, proj_dir: bytes, fnames: list[bytes], num_proc --> data_capsule"},
     {"get_file_dep", c_get_file_dep, METH_VARARGS,
      "fname -> file deps"},
     {"get_buf_def", c_get_buf_def,  METH_VARARGS,
@@ -3959,14 +3953,14 @@ static PyMethodDef GraphMethods[] = {
      "c_data_online, [file_idx, def_local_node, step_idx, outcome_idx]: numpy1d, glob_to_sub capsule -> proof state"},
     {"get_proof_step_online_text", c_get_proof_step_online_text, METH_VARARGS,
      "c_data_online, [file_idx, def_local_node, step_idx, outcome_idx]: numpy1d -> action_base_text, action_interm_text, action_text"},
-    {"load_init_msg", c_load_init_msg, METH_VARARGS,
-     "fname: bytes -> cdata"},
+//    {"load_init_msg", c_load_init_msg, METH_VARARGS,
+//     "fname: bytes -> cdata"},
     {"capnp_unpack", c_capnp_unpack, METH_VARARGS,
      "fname: bytes -> void; unpacks capnp file"},
     {"check", c_check, METH_VARARGS,
      "fname: bytes -> void; unpacks capnp file"},
-    {"load_msg", c_load_msg, METH_VARARGS,
-     "fname: bytes, cdata -> void"},
+//    {"load_msg", c_load_msg, METH_VARARGS,
+//     "fname: bytes, cdata -> void"},
     {"load_msg_online", c_load_msg_online, METH_VARARGS,
      "msg_data: buffer, glob_to_sub: capsule, file_idx: integer -> encoded_context, encoded_root"},
     {"encode_prediction", c_encode_prediction, METH_VARARGS,
@@ -3977,41 +3971,41 @@ static PyMethodDef GraphMethods[] = {
      "data_capsule -> num_nodes: np.array shape=(num_files), dtype=np.uint64"},
     {"get_files_num_edges", c_get_files_num_edges, METH_VARARGS,
      "data_capsule -> num_edges: np.array shape=(num_files), dtype=np.uint64"},
-    {"get_proof_steps_size", c_get_proof_steps_size, METH_VARARGS,
-     "data_capsule -> total number of proof steps"},
-    {"get_proof_step", c_get_proof_step, METH_VARARGS,
-     "data_capsule, proof_step_idx -> a tuple of proof_step (root, def_hash, "
-     "step_idx, "
-     "tactic_hash, tactic_args, context, state_text, tactic_text, "
-     "tactic_base_text"},
-    {"get_hash_to_name", c_get_hash_to_name, METH_VARARGS,
-     "data_capsule, hash of definition -> name of definition"},
-    {"get_node_label_to_hash", c_get_node_label_to_hash, METH_VARARGS,
-     "data_capsule,  vector of hashes of definiton"},
-    {"get_subgraph", c_get_subgraph, METH_VARARGS,
-     "data_capsule, root: c_GlobalNode as pyint, bfs_option -> subgraph: (nodes, labels, edges3, edges_flat, edges_offset)"},
-    {"build_subgraphs", c_build_subgraphs, METH_VARARGS,
-     "data_capsule, bfs_option -> total size of all proof_step_subgraphs"},
-    {"get_step_state", c_get_step_state, METH_VARARGS,
-     "data_capsule, step_idx -> (labels, edges_flat, edges_offset, root, context)"},
-    {"get_step_state_text", c_get_step_state_text, METH_VARARGS,
-     "data_capsule, step_idx -> state_text"},
-    {"get_node_label_subgraph", c_get_node_label_subgraph, METH_VARARGS,
-     "data_capsule -> (labels, edges_flat, edges_label_flat, edges_offset)"},
-    {"get_def_cluster_subgraph", c_get_def_cluster_subgraph, METH_VARARGS,
-     "data_capsule -> (labels, edges_flat, edges_label_flat, edges_offset, number_of_roots)"},
-    {"get_step_label", c_get_step_label, METH_VARARGS,
-     "data_capsule -> tactic index, tactic args, mask (args is index in a local context or one element beyond)"},
-    {"get_step_label_text", c_get_step_label_text, METH_VARARGS,
-     "data_capsule, step_idx -> tactic_base_text, tactic_interm_text, tactic_text"},
-    {"get_step_hash_and_size", c_get_step_hash_and_size, METH_VARARGS,
-     "data_capsule -> step_hash (from defid), step_nodes_size"},
-    {"get_graph_constants", c_get_graph_constants, METH_VARARGS,
-     "data_capsule -> step_hash (from defid), step_nodes_size, ..., cluster_subgraphs_size, available_def_classes"},
-    {"get_graph_constants_online", c_get_graph_constants_online, METH_VARARGS,
-     "c_data_online -> base_node_label_num, edge_conflate_map.size()"},
-    {"build_def_clusters", c_build_def_clusters, METH_VARARGS,
-     "data_capsule -> nparray def_idx, comp_idx"},
+//    {"get_proof_steps_size", c_get_proof_steps_size, METH_VARARGS,
+//     "data_capsule -> total number of proof steps"},
+//    {"get_proof_step", c_get_proof_step, METH_VARARGS,
+//     "data_capsule, proof_step_idx -> a tuple of proof_step (root, def_hash, "
+//     "step_idx, "
+//    {"tactic_hash, tactic_args, context, state_text, tactic_text, "
+//     "tactic_base_text"},
+//    {"get_hash_to_name", c_get_hash_to_name, METH_VARARGS,
+//     "data_capsule, hash of definition -> name of definition"},
+//    {"get_node_label_to_hash", c_get_node_label_to_hash, METH_VARARGS,
+//     "data_capsule,  vector of hashes of definiton"},
+//    {"get_subgraph", c_get_subgraph, METH_VARARGS,
+//     "data_capsule, root: c_GlobalNode as pyint, bfs_option -> subgraph: (nodes, labels, edges3, edges_flat, edges_offset)"},
+//    {"build_subgraphs", c_build_subgraphs, METH_VARARGS,
+//     "data_capsule, bfs_option -> total size of all proof_step_subgraphs"},
+//    {"get_step_state", c_get_step_state, METH_VARARGS,
+//     "data_capsule, step_idx -> (labels, edges_flat, edges_offset, root, context)"},
+//    {"get_step_state_text", c_get_step_state_text, METH_VARARGS,
+//     "data_capsule, step_idx -> state_text"},
+//    {"get_node_label_subgraph", c_get_node_label_subgraph, METH_VARARGS,
+//     "data_capsule -> (labels, edges_flat, edges_label_flat, edges_offset)"},
+//    {"get_def_cluster_subgraph", c_get_def_cluster_subgraph, METH_VARARGS,
+//     "data_capsule -> (labels, edges_flat, edges_label_flat, edges_offset, number_of_roots)"},
+//    {"get_step_label", c_get_step_label, METH_VARARGS,
+//     "data_capsule -> tactic index, tactic args, mask (args is index in a local context or one element beyond)"},
+//    {"get_step_label_text", c_get_step_label_text, METH_VARARGS,
+//     "data_capsule, step_idx -> tactic_base_text, tactic_interm_text, tactic_text"},
+//    {"get_step_hash_and_size", c_get_step_hash_and_size, METH_VARARGS,
+//     "data_capsule -> step_hash (from defid), step_nodes_size"},
+//    {"get_graph_constants", c_get_graph_constants, METH_VARARGS,
+//     "data_capsule -> step_hash (from defid), step_nodes_size, ..., cluster_subgraphs_size, available_def_classes"},
+      {"get_graph_constants_online", c_get_graph_constants_online, METH_VARARGS,
+       "c_data_online -> base_node_label_num, edge_conflate_map.size()"},
+/*    {"build_def_clusters", c_build_def_clusters, METH_VARARGS,
+      "data_capsule -> nparray def_idx, comp_idx"}, */
     {"get_global_context", c_get_global_context, METH_VARARGS,
      "data_capsule -> visible context def class"},
     {"test2d", c_test2d, METH_VARARGS,
