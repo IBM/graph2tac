@@ -21,7 +21,6 @@ from graph2tac.loader.helpers import get_all_fnames
 import tqdm
 from graph2tac.common import uuid
 
-FILE_MULTIPLIER = np.array([2**32], dtype=np.uint64)
 
 from graph2tac.loader.clib.loader import (
     capnp_unpack,
@@ -45,7 +44,6 @@ from graph2tac.loader.clib.loader import (
 @dataclass
 class GraphConstants:
     tactic_num: int
-    # tactic_max_arg_num: int
     edge_label_num: int
     base_node_label_num: int
     node_label_num: int
@@ -123,15 +121,16 @@ def get_global_def_table(buf_list, message_type: str, restrict_to_spine=False):
 def local_to_global_file_idx(data_dir: Path, fnames: list[Path]):
     return get_local_to_global_file_idx(os.fsencode(data_dir), list(map(os.fsencode,fnames)))
 
+
 def get_global_nodes_in_spine(buf_list, message_type):
     global_nodes_in_spine = set()
     global_def_table_spine = get_global_def_table(buf_list, message_type, restrict_to_spine=True)
     for file_idx, file_table in enumerate(global_def_table_spine):
         for node_idx, def_hash, def_name in zip(*file_table):
-            global_nodes_in_spine.add((file_idx * FILE_MULTIPLIER +  node_idx).item())
+            global_nodes_in_spine.add((file_idx,node_idx))
     return global_nodes_in_spine
 
-def build_def_index(global_def_table, global_nodes_in_spine: set[int]) -> DefIndexTable:
+def build_def_index(global_def_table, global_nodes_in_spine: set[tuple[int,int]]) -> DefIndexTable:
     def_idx_to_global_node = []
     def_idx_to_name = []
     def_idx_to_hash = []
@@ -140,7 +139,7 @@ def build_def_index(global_def_table, global_nodes_in_spine: set[int]) -> DefInd
 
     for file_idx, (node_indexes, def_hashes, def_names) in enumerate(global_def_table):
         for node_idx, def_hash, def_name in zip(node_indexes, def_hashes, def_names):
-            global_node_id = (file_idx * FILE_MULTIPLIER + node_idx).item()
+            global_node_id = (file_idx, node_idx)
             global_node_to_def_idx[global_node_id] = len(def_idx_to_global_node)
             def_idx_to_global_node.append(global_node_id)
             def_idx_to_name.append(def_name)
@@ -152,11 +151,12 @@ def build_def_index(global_def_table, global_nodes_in_spine: set[int]) -> DefInd
 
 
 def def_hash_of_tactic_point(def_index_table, tactic_point):
-    def_idx = def_index_table.global_node_to_idx[(tactic_point[2]*FILE_MULTIPLIER + tactic_point[3]).item()]
+    def_idx = def_index_table.global_node_to_idx[(tactic_point[2].item(), tactic_point[3].item())]
+
     return def_index_table.idx_to_hash[def_idx]
 
 def def_name_of_tactic_point(def_index_table, tactic_point):
-    def_idx = def_index_table.global_node_to_idx[(tactic_point[2]*FILE_MULTIPLIER + tactic_point[3]).item()]
+    def_idx = def_index_table.global_node_to_idx[(tactic_point[2].item(), tactic_point[3].item())]
     return def_index_table.idx_to_name[def_idx]
 
 def def_hash_split(x, prob, seed):
@@ -217,7 +217,7 @@ class Data2():
 
         self.__def_index_table = build_def_index(self.__global_def_table, global_nodes_in_spine)
 
-        self.__def_idx_to_node = np.array(self.__def_index_table.idx_to_global_node, dtype=np.uint64)
+        self.__def_idx_to_node = np.array(self.__def_index_table.idx_to_global_node, dtype=np.uint32)
         print(f"LOADING | definitions: {len(self.__def_idx_to_node)} ")
 
 
@@ -247,10 +247,6 @@ class Data2():
         data_error_report = get_tactic_hash_num_args_collision(self.__tactical_data, self.__fnames)
         if data_error_report:
             raise Exception(f"the data contains tactic_hash num_args collisions, for example \n" + "\n".join(data_error_report))
-        ############################################################################################################
-        ####### if you want  tactic indices chronological, consider the following code                          ####
-        ####### tactics_args = tactical_data[np.sort(np.unique(tactical_data[:,0], return_index=True)[1]),:2]   ####
-        ############################################################################################################
 
         tactic_hashes = np.unique(self.__tactical_data[:,0])
         tactic_indexes = np.arange(len(tactic_hashes), dtype=np.uint32)
@@ -317,13 +313,6 @@ class Data2():
         tactic_index_to_hash = idx_thash_narg_tdataidx[:,1]
         tactic_index_to_numargs = idx_thash_narg_tdataidx[:,2]
 
-        # DEPRECATE
-        #if len(tactic_index_to_numargs) > 0:
-        #    tactic_max_arg_num = np.max(tactic_index_to_numargs).item()
-        #else:
-        #    tactic_max_arg_num = 0
-        # self.__tactic_max_arg_num = tactic_max_arg_num       # we should move out the mutable state of max_arg_num to the clients
-
         tactic_index_to_string = list(self.get_proof_step_text(tdataidx)[1] for tdataidx in idx_thash_narg_tdataidx[:,3])
 
         base_node_label_names, edge_label_num = get_graph_constants_online();
@@ -339,7 +328,6 @@ class Data2():
         else:
             node_label_num = 0
         return GraphConstants(tactic_num=tactic_num,
-                              # tactic_max_arg_num=tactic_max_arg_num,  #DEPRECATE
                               edge_label_num=edge_label_num,
                               base_node_label_num=base_node_label_num,
                               node_label_num=node_label_num,
@@ -363,26 +351,18 @@ class Data2():
 
 
     def get_proof_step(self, data_point_idx,
-                       # tactic_max_arg_num=None,  #DEPRECATE
                        skip_text=False):
-        # if tactic_max_arg_num is None:
-        #    assert self.__tactic_max_arg_num is not None   #DEPRECATE
-        # max_arg_size = self.__tactic_max_arg_num
         tactic_point = self.__tactical_data[data_point_idx]
         tactic_hash, num_args, file_idx, def_node_idx, proof_step_idx, outcome_idx, state_root_node, def_hash = tactic_point
         res = get_subgraph_online(
-            self.__c_data_online, file_idx*FILE_MULTIPLIER + state_root_node, self.__bfs_option, self.__max_subgraph_size, False)
+            self.__c_data_online,
+            np.array([(file_idx.item(), state_root_node.item())], dtype=np.uint32),
+            self.__bfs_option, self.__max_subgraph_size, False)
         nodes, edges, edge_labels, edges_offset, global_visited, _, _, _, _ = res
         edges_grouped_by_label = np.split(edges, edges_offset)
 
         context, root, tactic_index, args = get_proof_step_online(self.__c_data_online, tactic_point[2:6], global_visited)
 
-        # REFACTOR and move out the following 3 lines to network files
-        # tail_args = np.tile(np.array([[0,len(context)]]), (max_arg_size-len(args),1))
-        # a = np.full((len(args),), True)
-        # b = np.full((max_arg_size - len(args),), False)
-        # mirek_mask = np.concatenate([a,b])
-        # mirek_args = np.concatenate([args, tail_args], axis=0)
 
         def_name = def_name_of_tactic_point(self.__def_index_table, tactic_point)
 

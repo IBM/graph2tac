@@ -1742,11 +1742,11 @@ static PyObject * c_data_online_extend(PyObject *self, PyObject *args) {
 
 
 static PyObject * c_build_data_online_from_buf(PyObject *self, PyObject *args) {
-    PyArrayObject * p_PyArray_def_idx_to_node;
+    PyArrayObject * p_PyArray_def_idx_to_node_32x2;
     PyArrayObject * p_PyArray_tactic_hashes;
     PyArrayObject * p_PyArray_tactic_indexes;
     if (!PyArg_ParseTuple(args, "O!O!O!",
-			  &PyArray_Type,  &p_PyArray_def_idx_to_node,
+			  &PyArray_Type,  &p_PyArray_def_idx_to_node_32x2,
 			  &PyArray_Type, &p_PyArray_tactic_hashes,
 			  &PyArray_Type, &p_PyArray_tactic_indexes)) {
 	return NULL;
@@ -1770,9 +1770,9 @@ static PyObject * c_build_data_online_from_buf(PyObject *self, PyObject *args) {
 	}
 
 	// DEF INDEX
-	auto def_idx_to_node_uint64_t = PyArray_AsVector_uint64_t(p_PyArray_def_idx_to_node);
-	for (const auto &x: def_idx_to_node_uint64_t) {
-	    c_GlobalNode node = node_of_uint64(x);
+	auto def_idx_to_node_uint32x2 = Py2dArray_AsVector_uint32_pair(p_PyArray_def_idx_to_node_32x2);
+	for (const auto &x: def_idx_to_node_uint32x2) {
+	    c_GlobalNode node {x.first, x.second};
 	    p_data_online->def_node_to_idx[node] = p_data_online->def_idx_to_node.size();
 	    p_data_online->def_idx_to_node.emplace_back(node);
 	}
@@ -1851,13 +1851,13 @@ static PyObject *c_get_def_deps_online(PyObject *self, PyObject *args) {
 
 static PyObject *c_get_subgraph_online(PyObject *self, PyObject *args) {
     PyObject *capsObj;
-    PyArrayObject *p_roots_uint64;
+    PyArrayObject *p_roots_uint32x2;
     int bfs_option {false};
     uint64_t max_subgraph_size;
     int with_node_counter {false};
 
     if (!PyArg_ParseTuple(args, "O!O!pKp", &PyCapsule_Type, &capsObj,
-			  &PyArray_Type, &p_roots_uint64,
+			  &PyArray_Type, &p_roots_uint32x2,
 			  &bfs_option, &max_subgraph_size, &with_node_counter)) {
 	return NULL;
     }
@@ -1878,8 +1878,8 @@ static PyObject *c_get_subgraph_online(PyObject *self, PyObject *args) {
 
 	std::vector<c_NodeIndex> local_roots;
 	std::vector<c_GlobalNode> roots;
-	for (const auto &e:  PyArray_AsVector_uint64_t(p_roots_uint64)) {
-	    auto this_node = node_of_uint64(e);
+	for (const auto &e:  Py2dArray_AsVector_uint32_pair(p_roots_uint32x2)) {
+	    auto this_node = c_GlobalNode {e.first, e.second};
 	    if (roots.size() > 0) {
 		if (roots.back().file_idx != this_node.file_idx) {
 		    throw std::invalid_argument(
