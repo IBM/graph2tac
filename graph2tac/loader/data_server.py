@@ -24,21 +24,6 @@ from graph2tac.common import uuid
 FILE_MULTIPLIER = np.array([2**32], dtype=np.uint64)
 
 from graph2tac.loader.clib.loader import (
-    get_data,
-    get_proof_steps_size,
-    build_subgraphs,
-    get_step_state,
-    get_step_state_text,
-    get_step_label,
-    get_step_label_text,
-    get_step_hash_and_size,
-    get_graph_constants,
-    get_node_label_subgraph,
-    build_def_clusters,
-    get_def_cluster_subgraph,
-    get_proof_step,
-    get_node_label_to_hash,
-    get_hash_to_name,
     capnp_unpack,
     files_get_scc_components,
     get_buf_def,
@@ -480,238 +465,6 @@ class Data2():
 
 
 
-class Data():
-    """
-    this is low-level api class which will provide the sources
-    of state action pairs to the training network
-    using as its own source various mechanisms:
-
-    - importing from a set of bin files in a directory
-    - from interactive session with coq
-    """
-
-    def __init__(self, project_dir: Path,   split_random_seed=0):
-        self.__default_num_proc = max(1, multiprocessing.cpu_count() // 2)
-        self.__project_dir = project_dir
-        os.makedirs(self.__project_dir, exist_ok=True)
-        if self.__project_dir.is_dir():
-            print(f"Data: using {str(self.__project_dir)} for processed data storage")
-        else:
-            raise Exception(f"Failed to create or find {project_dir}")
-        self.__fnames = None
-        self.__c_data = None
-        self.__split_labels = None
-        self.__train_steps = None
-        self.__valid_steps = None
-        self.__test_steps = None
-        self.__split_random_seed = split_random_seed
-        print(f"LOADING | ")
-
-    def file_name(self, file_idx) -> str:
-        return self.__fnames[file_idx]
-
-    def import_data(self, data_dir: Path,
-                             bfs_option,
-                             max_subgraph_size,
-                             split=(8,1,1),
-                             num_proc=None,
-                             ignore_def_hash=False):
-        """
-        imports data from capnp .bin files using capnp v3 format
-        """
-        t0 = time.time()
-
-
-        self.__fnames = top_sort_dataset_modules(data_dir)
-
-        print(f"LOADING | processing {len(self.__fnames)} .binx files")
-
-        if num_proc is None:
-            num_proc = self.__default_num_proc
-
-        self.__c_data = get_data(os.fsencode(data_dir),
-                                           os.fsencode(self.__project_dir),
-                                           list(map(os.fsencode, self.__fnames)),
-                                           num_proc, bfs_option, max_subgraph_size, ignore_def_hash)
-        t1 = time.time()
-        print(f"LOADING | c_data call complete")
-        print(f"LOADING | building dataset complete in {t1-t0} seconds")
-
-        self.__split_dataset(split)
-        t2 = time.time()
-        print(f"LOADING | splitting data to train, valid, test complete in {t2-t1} seconds")
-
-        build_def_clusters(self.__c_data, bfs_option, max_subgraph_size)
-        t3 = time.time()
-        print(f"LOADING | building def clusters complete {t3-t2} seconds")
-
-
-    def __split_dataset(self, split):
-        self.__split_labels = [get_split_label(self.step_hash(i), split,
-                                               seed=self.__split_random_seed)
-                               for i in range(self.proof_steps_size())]
-
-        self.__train_steps = [step_idx for step_idx in range(self.proof_steps_size())
-                              if self.__split_labels[step_idx] == 0]
-
-        self.__valid_steps = [step_idx for step_idx in range(self.proof_steps_size())
-                              if self.__split_labels[step_idx] == 1]
-
-        self.__test_steps  = [step_idx for step_idx in range(self.proof_steps_size())
-                              if self.__split_labels[step_idx] == 2]
-
-
-    def proof_steps_size(self):
-        """
-        returns number of proof steps
-        """
-        return get_proof_steps_size(self.__c_data)
-
-    def get_proof_step(self, proof_step_idx):
-        """
-        returns a raw proof_step tuple
-        """
-        return get_proof_step(self.__c_data, proof_step_idx)
-
-
-    def step_state(self, proof_step: int, tf_gnn=False):
-        """
-        returns the step state by default in the format:
-        (node colors, edges grouped by type, root, context)
-
-        if tf_gnn then returns
-        (node_colors, edge_sources, edge_targets, edge_labels, root, context)
-        """
-        node_labels, edges, edge_labels, edges_split_offset, root, context = get_step_state(self.__c_data, proof_step)
-
-        if tf_gnn:
-            return (node_labels, edges[:, 0], edges[:, 1], edge_labels, root, context)
-        else:
-            edges_grouped_by_label = np.split(edges, edges_split_offset)
-            return (node_labels, edges_grouped_by_label, root, context)
-
-    def step_state_text(self, proof_step) -> bytes:
-        """
-        returns step state text as python bytes
-        """
-        return get_step_state_text(self.__c_data, proof_step)
-
-
-
-    def node_label_subgraph(self, node_label: int, tf_gnn=False):
-        """
-        returns the subgraph for the definition node passed by its assigned node label
-        """
-        assert (self.graph_constants().base_node_label_num <=
-                node_label
-                < self.graph_constants().node_label_num), "the node_label must be of used_definition"
-        node_labels, edges, edges_labels, edges_split_offset = get_node_label_subgraph(self.__c_data, node_label)
-        if tf_gnn:
-            return (node_labels, edges[:, 0], edges[:, 1], edges_labels)
-        else:
-            edges_grouped_by_label = np.split(edges, edges_split_offset)
-            return (node_labels, edges_grouped_by_label)
-
-
-    def def_cluster_subgraph(self, cluster_idx: int, tf_gnn=False):
-        """
-        returns subgraph for the def cluster_idx in the same format as node_label_subgraph
-        and also number of roots (entry points to the cluster strongly connected component)
-        """
-        # assert (0 <= cluster_idx < self.graph_constants().cluster_subgraphs_num), f"the cluster_idx {cluster_idx} must be bounded by cluster_subgraphs_num {self.graph_constants().cluster_subgraphs_num}"
-
-        node_labels, edges, edges_labels, edges_split_offset, nroots = get_def_cluster_subgraph(self.__c_data, cluster_idx)
-
-        if tf_gnn:
-            return (node_labels, edges[:, 0], edges[:, 1], edges_labels, nroots)
-        else:
-            edges_grouped_by_label = np.split(edges, edges_split_offset)
-            return (node_labels, edges_grouped_by_label, nroots)
-
-
-    def step_label(self, proof_step: int):
-        """
-        return the step local label in the v3 format:
-        (tac_idx, list[ctxt_idx], mask_args)
-        """
-        return get_step_label(self.__c_data, proof_step, True)
-
-    def step_label_text(self, proof_step: int):
-        """
-        return the step local label in the text format:
-        tactic_base_text, tactic_interm_text, tactic_text
-        """
-        return get_step_label_text(self.__c_data, proof_step)
-
-    def step_hash(self, proof_step: int):
-        """
-        return the step hash as defined by the definition hash
-        """
-        return get_step_hash_and_size(self.__c_data, proof_step)[0]
-
-    def step_nodes_size(self, proof_step: int):
-        """
-        returns the step node size
-        """
-        return get_step_hash_and_size(self.__c_data, proof_step)[1]
-
-    def data_train(self):
-        """
-        returns the list of step_idx with the train label
-        """
-        return self.__train_steps
-
-    def data_valid(self):
-        """
-        returns the list of step_idx with the valid label
-        """
-        return self.__valid_steps
-
-    def data_test(self):
-        """
-        returns the list of step_idx with the valid label
-        """
-        return self.__test_steps
-
-    def graph_constants(self):
-        """
-        returns
-        tactic_num: int
-#        tactic_max_arg_num: int   DEPRECATE
-        edge_label_num: int
-        base_node_label_num: int
-        node_label_num: int
-        cluster_subgraphs_num: int
-        tactic_index_to_numargs: np.ndarray  # dtype = np.uint32
-        tactic_index_to_string: list[str]    # tactic names
-        tactic_index_to_hash: np.ndarray
-        global_context: np.ndarray
-        node_label_to_hash: np.ndarray
-        class_to_names: list[str]
-
-        packed as GraphConstants dataclass object
-        """
-        assert False, "need to remove tactic_max_arg_num from the second position in legacy graph_constants "
-        # OR JUST REMOVE tactic_max_arg_num when packaging to graph_constants
-        return GraphConstants(* get_graph_constants(self.__c_data))
-
-    def node_label_to_hash(self):
-        """
-        debug function: color to hash
-        """
-        return get_node_label_to_hash(self.__c_data)
-
-
-    def hash_to_name(self, node_hash: int):
-        """
-        debug function: hash to name
-        """
-        return get_hash_to_name(self.__c_data, node_hash)
-
-
-
-
-
 class Iterator:
     def __init__(self, source, *fs):
         self.__stream__ = iter(source)
@@ -753,7 +506,6 @@ class DataServer:
                  num_proc = None,
                  ignore_def_hash: bool = True,
                  restrict_to_spine: bool = False,
-                 legacy = False
     ):
         """
         - data_dir is the directory containing capnp schema file and *.bin files
@@ -782,34 +534,12 @@ class DataServer:
         self.__cluster_subgraphs = None
         self.__cluster_subgraphs_tf_gnn = None
 
-        if legacy:
-            self.__project_dir = work_dir.joinpath(uuid(data_dir))
-            self.__data = Data(self.__project_dir, split_random_seed=split_random_seed)
-            self.__data.import_data(data_dir, bfs_option, max_subgraph_size,
-                                             split, num_proc=num_proc, ignore_def_hash=ignore_def_hash)
-
-
-    def data_point(self, proof_step_idx, legacy=False):
-        if not legacy:
-            return self.__online_data.get_proof_step(proof_step_idx)
-        else:
-            proof_step_raw = self.__data.get_proof_step(proof_step_idx)
-            return DataPoint(proof_step_idx,
-                             self.__data.step_state(proof_step_idx, tf_gnn=False),
-                             self.__data.step_state(proof_step_idx, tf_gnn=True),
-                             self.__data.step_label(proof_step_idx),
-                             self.__data.step_state_text(proof_step_idx),
-                             self.__data.step_label_text(proof_step_idx)[0],
-                             self.__data.step_label_text(proof_step_idx)[1],
-                             self.__data.step_label_text(proof_step_idx)[2],
-                             proof_step_raw[2],
-                             proof_step_raw[3],
-                             self.__data.file_name(proof_step_raw[10])
-                             )
+    def data_point(self, proof_step_idx):
+        return self.__online_data.get_proof_step(proof_step_idx)
 
 
 
-    def data_train(self, shuffled=False, tf_gnn=False, as_text=False, legacy=False):
+    def data_train(self, shuffled=False, tf_gnn=False, as_text=False):
         """
         returns a stream of training data, optionally shuffled
         with the default format (state, action) where
@@ -827,7 +557,7 @@ class DataServer:
         returns action as a tuple (tactic_base_text, tactic_interm_text, tactic_text)
         (depending on your goals choose what you use from this tuple)
         """
-        data = self.__data if legacy else self.__online_data
+        data =  self.__online_data
 
         shuffled_copy = list(data.data_train())
         if shuffled:
@@ -846,12 +576,12 @@ class DataServer:
 
 
 
-    def data_valid(self, tf_gnn=False, as_text=False, legacy=False):
+    def data_valid(self, tf_gnn=False, as_text=False):
         """
         returns a stream of validation data in the same format as  data_train
         see doc_string for data_train for the format
         """
-        data = self.__data if legacy else self.__online_data
+        data = self.__online_data
 
 
         if as_text:
@@ -867,24 +597,7 @@ class DataServer:
 
 
 
-
-    def def_class_subgraph(self, node_label_idx, tf_gnn, legacy=False):
-        assert legacy, "Not implemented in refactored loader, who use this function?"
-        """
-        get the subgraph associated to the definition index in compressed
-        sense. The node_label_idx must be in the range
-        [graph_constants().base_node_label_num: graph_constants().node_label_num]
-
-        tf_gnn=False returns
-        (nodes, edges_grouped_by_label)
-
-        tf_gnn=True returns
-        (nodes, edge_sources, edge_targets, edge_labels)
-        """
-
-        return self.__data.node_label_subgraph(node_label_idx, tf_gnn=tf_gnn)
-
-    def def_cluster_subgraph(self, cluster_idx, tf_gnn, legacy=False):
+    def def_cluster_subgraph(self, cluster_idx, tf_gnn):
         """
         returns a definition cluster with cluster_idx
         in the same format as def_class_subgraph (see docstring there)
@@ -892,7 +605,7 @@ class DataServer:
         but also an integer K that denotes the number of definitions in this cluster
         the entry points to the definition nodes are the first K in the list of returned nodes
         """
-        data = self.__data if legacy else self.__online_data
+        data = self.__online_data
         return data.def_cluster_subgraph(cluster_idx, tf_gnn=tf_gnn)
 
 
@@ -920,20 +633,9 @@ class DataServer:
             return self.__cluster_subgraphs
 
 
-    def graph_constants(self, legacy=False):
-        if legacy:
-            print("WARNING! Legacy graph constants")
-            return self.__data.graph_constants()
-        else:
-            return self.__online_data.graph_constants()
+    def graph_constants(self):
+        return self.__online_data.graph_constants()
 
-
-    def _debug_data(self):
-        """
-        you shouldn't call this method
-        for debug purposes only
-        """
-        return self.__data
 
     def _debug_online_data(self):
         return self.__online_data
