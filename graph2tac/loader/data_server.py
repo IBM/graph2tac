@@ -24,21 +24,6 @@ from graph2tac.common import uuid
 FILE_MULTIPLIER = np.array([2**32], dtype=np.uint64)
 
 from graph2tac.loader.clib.loader import (
-#    get_data,
-#    get_proof_steps_size,
-#    build_subgraphs,
-#    get_step_state,
-#    get_step_state_text,
-#    get_step_label,
-#    get_step_label_text,
-#    get_step_hash_and_size,
-#    get_graph_constants,
-#    get_node_label_subgraph,
-#    build_def_clusters,
-#    get_def_cluster_subgraph,
-#    get_proof_step,
-#    get_node_label_to_hash,
-#    get_hash_to_name,
     capnp_unpack,
     files_get_scc_components,
     get_buf_def,

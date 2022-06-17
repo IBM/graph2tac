@@ -34,16 +34,12 @@ graph_api_capnp = capnp.load(graph_api_filename)
 LOG_LEVEL = logging.INFO
 
 from graph2tac.loader.clib.loader import (
-#    load_init_msg,
     get_buf_def,
     get_scc_components,
     data_online_extend,
     get_def_deps_online,
     get_subgraph_online,
-#    build_subgraphs,
-#    load_msg,
     load_msg_online,
-    encode_prediction,
     encode_prediction_online,
     get_global_context,
     get_graph_constants_online,
