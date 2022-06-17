@@ -12,7 +12,7 @@ import argparse
 import numpy as np
 
 from graph2tac.common import uuid
-from graph2tac.loader.data_server import DataServer, build_def_index, get_global_def_table, FILE_MULTIPLIER
+from graph2tac.loader.data_server import DataServer, build_def_index, get_global_def_table
 
 import io
 import logging
@@ -34,7 +34,6 @@ graph_api_capnp = capnp.load(graph_api_filename)
 LOG_LEVEL = logging.INFO
 
 from graph2tac.loader.clib.loader import (
-    get_buf_def,
     get_scc_components,
     data_online_extend,
     get_def_deps_online,
@@ -153,12 +152,12 @@ def get_train_name_to_label(train_node_label_to_name, train_node_label_in_spine)
     log_verbose(f"train names in spine: {len(train_name_to_label)}")
     return train_name_to_label
 
-def get_def_idx_to_node__trail_to_eval__eval_to_train__eval_names(msg_data, train_node_label_to_name, train_node_label_in_spine, message_type):
+def get_def_idx_to_node__train_to_eval__eval_to_train__eval_names(msg_data, train_node_label_to_name, train_node_label_in_spine, message_type):
     train_name_to_label = get_train_name_to_label(train_node_label_to_name, train_node_label_in_spine)
     node_indexes, def_hashes, def_idx_to_name  = get_global_def_table([msg_data], message_type, restrict_to_spine=False)[0]
     eval_names = BASE_NAMES + def_idx_to_name
     def_index_table = build_def_index([(node_indexes, def_hashes, eval_names)], set())
-    def_idx_to_node =  np.array(def_index_table.idx_to_global_node, dtype=np.uint64)
+    def_idx_to_node =  np.array(def_index_table.idx_to_global_node, dtype=np.uint32)
     train_label_to_eval_label, eval_label_to_train_label = get_train_eval_alignment(train_name_to_label, eval_names, len(train_node_label_to_name))
     return def_idx_to_node, train_label_to_eval_label, eval_label_to_train_label, eval_names
 
@@ -175,21 +174,34 @@ def log_clusters_verbose(def_scc_clusters, eval_label_to_train_label, train_node
 
             eval_label = len(BASE_NAMES) + eval_def_idx.item()
             train_label = eval_label_to_train_label[eval_label]
-            # log_verbose(f"train_label {train_label}")
             train_name = train_node_label_to_name[train_label] if train_label < len(train_node_label_to_name) else ".MISSING"
-            # log_verbose(f"train_name {train_name}")
             result += f" {train_name}"
 
         log_verbose(f"cluster {i}: {result}")
 
 
 
-def get_unaligned_nodes(al_def_idx_to_node, al_def_idx_to_name, al_eval_label_to_train_label, original_train_len):
+def get_unaligned_nodes(def_idx_to_node, def_idx_to_name, eval_label_to_train_label, original_train_len):
     unaligned_nodes = []
-    for (node_idx, train_label, eval_name) in zip(al_def_idx_to_node, al_eval_label_to_train_label[len(BASE_NAMES):], al_def_idx_to_name):
+    for (node_idx, train_label, eval_name) in zip(def_idx_to_node, eval_label_to_train_label[len(BASE_NAMES):], def_idx_to_name):
         if (train_label >= original_train_len):
             unaligned_nodes.append((node_idx, eval_name))
     return unaligned_nodes
+
+def process_alignment_request(al_msg_data, train_node_label_to_name, train_node_label_in_spine):
+    al_def_idx_to_node, al_train_label_to_eval_label, al_eval_label_to_train_label, al_eval_names = get_def_idx_to_node__train_to_eval__eval_to_train__eval_names(
+        al_msg_data, train_node_label_to_name, train_node_label_in_spine, "request.checkAlignment")
+    al_def_idx_to_name = al_eval_names[len(BASE_NAMES):]
+    unaligned_nodes = get_unaligned_nodes(al_def_idx_to_node,
+                                          al_def_idx_to_name,
+                                          al_eval_label_to_train_label,
+                                          len(train_node_label_to_name))
+    log_info("checkAlignment unaligned nodes: ", unaligned_nodes)
+
+    unaligned_tactics = list(sorted(set(evaluation_tactic_hash_to_numargs.items())
+                                    - set(network_tactic_hash_to_numargs)))
+    log_info("checkAlignment unaligned tactics: ", unaligned_tactics)
+
 
 def main_loop(reader, sock, predict, debug_dir, session_idx=0,
               bfs_option=True,
@@ -229,22 +241,11 @@ def main_loop(reader, sock, predict, debug_dir, session_idx=0,
         elif msg_type == "checkAlignment":
             log_info("checkAlignment request")
             al_msg_data = msg.as_builder().to_bytes()
-            al_def_idx_to_node, al_train_label_to_eval_label, al_eval_label_to_train_label, al_eval_names = get_def_idx_to_node__trail_to_eval__eval_to_train__eval_names(
-                al_msg_data, train_node_label_to_name, train_node_label_in_spine, "request.checkAlignment")
-            al_def_idx_to_name = al_eval_names[len(BASE_NAMES):]
-            unaligned_nodes = get_unaligned_nodes(al_def_idx_to_node,
-                                                  al_def_idx_to_name,
-                                                  al_eval_label_to_train_label,
-                                                  len(train_node_label_to_name))
-            log_info("checkAlignment unaligned nodes: ", unaligned_nodes)
-
-            unaligned_tactics = list(sorted(set(evaluation_tactic_hash_to_numargs.items())
-                                            - set(network_tactic_hash_to_numargs)))
-            log_info("checkAlignment unaligned tactics: ", unaligned_tactics)
+            unaligned_tactics, unaligned_nodes = process_alignment_request(al_msg_data, train_node_label_to_name, train_node_label_in_spine)
 
             response = graph_api_capnp.PredictionProtocol.Response.new_message(
                 alignment={'unalignedTactics': [x for (x,v) in unaligned_tactics],
-                           'unalignedDefinitions': [x.item() for (x,n) in unaligned_nodes]})
+                           'unalignedDefinitions': [node_idx.item() for ((file_idx, node_idx),n) in unaligned_nodes]})
             log_info("sending checkAlignment response to coq")
             response.write_packed(sock)
 
@@ -252,13 +253,12 @@ def main_loop(reader, sock, predict, debug_dir, session_idx=0,
         elif msg_type == "initialize":
             context_cnt += 1
             log_info(f'session {session_idx} theorem {context_cnt} initialization begin ...')
-            log_debug(f'### CONTEXT {context_cnt} ####')
 
             wrap_debug_record(debug_dir, msg, context_cnt)
 
             msg_data = msg.as_builder().to_bytes()
 
-            def_idx_to_node, train_label_to_eval_label, eval_label_to_train_label, eval_names = get_def_idx_to_node__trail_to_eval__eval_to_train__eval_names(
+            def_idx_to_node, train_label_to_eval_label, eval_label_to_train_label, eval_names = get_def_idx_to_node__train_to_eval__eval_to_train__eval_names(
                 msg_data, train_node_label_to_name, train_node_label_in_spine, "request.initialize")
 
             log_verbose(f"train_label_to_eval_label {train_label_to_eval_label}")
@@ -306,7 +306,10 @@ def main_loop(reader, sock, predict, debug_dir, session_idx=0,
             def_clusters_for_update = [def_cluster for def_cluster in def_scc_clusters
                                        if (update_all_definitions or
                                            (update_new_definitions and
-                                            (set(node for node, _ in unaligned_nodes).intersection(set(def_idx_to_node[def_cluster])))))]
+                                            (set(tuple(node.tolist())
+                                                 for node, _ in unaligned_nodes).intersection(
+                                                         set(tuple(node.tolist()) for node in
+                                                             def_idx_to_node[def_cluster])))))]
             if update_all_definitions:
                 log_info(f"Prepared for update all {len(def_clusters_for_update)} definition clusters")
             elif update_new_definitions:
@@ -375,7 +378,7 @@ def main_loop(reader, sock, predict, debug_dir, session_idx=0,
             log_info(f"online_data stores {n_msg_recorded} graphs")
 
 
-            roots = np.array(msg_idx * FILE_MULTIPLIER +  msg.predict.state.root).astype(np.uint64).reshape((1,))
+            roots = np.array( [(msg_idx, msg.predict.state.root)], dtype=np.uint32)
 
             res = get_subgraph_online(c_data_online,
                                       roots,

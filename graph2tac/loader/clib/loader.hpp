@@ -56,22 +56,6 @@ namespace std {
     };
 }
 
-static inline uint64_t uint64_of_node(c_GlobalNode a) {
-  return ((uint64_t(a.file_idx)) << 32 | uint64_t(a.node_idx));
-}
-
-static inline c_GlobalNode node_of_uint64(uint64_t a) {
-  return c_GlobalNode{static_cast<c_FileIndex>(a >> 32),
-		      static_cast<c_NodeIndex>(a)};
-}
-
-
-bool test_uint64_of_node() {
-    if (!(node_of_uint64(uint64_of_node(c_GlobalNode {239, 57})) == c_GlobalNode {239, 57})) {
-	return false;
-    }
-    return true;
-}
 
 struct c_EdgeTarget {
     c_EdgeLabel label;
