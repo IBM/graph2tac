@@ -500,7 +500,7 @@ class DataServer:
                  work_dir: Path = Path('.'),
                  split: tuple[int] = (8, 1, 1),
                  cross_valid_fold: int = 0,
-                 bfs_option = False,
+                 bfs_option = True,
                  max_subgraph_size: int = 20000,
                  split_random_seed = 0,
                  num_proc = None,
