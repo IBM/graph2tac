@@ -41,7 +41,6 @@ from graph2tac.loader.clib.loader import (
     get_subgraph_online,
     load_msg_online,
     encode_prediction_online,
-    get_global_context,
     get_graph_constants_online,
     build_data_online_from_buf)
 
@@ -103,20 +102,6 @@ def process_initialize(sock, msg):
     log_verbose("tactics num args", tac_numargs)
     return tacs, tac_numargs
 
-## SCHEDULED TO DEPRECATE THIS FUNCTION AS USING C_DATA LEGACY LOADER
-def old_model_predictions(raw_state, c_data, predict, allowed_model_tactics,
-                    tactic_expand_bound, total_expand_bound):
-    node_classes, edges, edge_classes, edges_split_offset, root, context = raw_state
-    edges_grouped_by_class = np.split(edges, edges_split_offset)
-    state = (node_classes, edges_grouped_by_class, root, context)
-    global_context = get_global_context(c_data)
-    available_global = np.arange(0,len(global_context),1,dtype=np.uint64)
-
-
-    actions, confidences = predict.ranked_predictions(state, allowed_model_tactics, available_global=available_global,
-                                                      tactic_expand_bound=tactic_expand_bound,
-                                                      total_expand_bound=total_expand_bound)
-    return actions
 
 
 def check_consistency(evaluation_tactic_hash_to_numargs, network_tactic_hash_to_numargs):
