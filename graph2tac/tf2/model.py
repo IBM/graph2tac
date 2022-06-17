@@ -12,7 +12,7 @@ from tensorflow.keras.constraints import UnitNorm
 from tensorflow.keras.layers import Layer, Dense, Embedding
 
 
-from graph2tac.tf2.datatypes import ActionTensor, EdgeTypeTensor, GraphTensor, RaggedPair, StateActionTensor, StateTensor, GraphDefTensor
+from graph2tac.tf2.datatypes import ActionTensor, EdgeTypeTensor, GraphTensor, InnerInput, RaggedPair, StateActionTensor, StateTensor, GraphDefTensor
 from graph2tac.tf2.graph_nn import GraphNN
 from graph2tac.tf2.graph_nn_batch import FlatBatchNP
 from graph2tac.tf2.graph_nn_def_batch import FlatDefBatchNP
@@ -193,9 +193,13 @@ class StateEmbedding(Layer):
 
     Note: The output dimension will depend on the settings of this layer.
     """
-    def __init__(self, final_collapse: bool):
+    def __init__(self, final_collapse: bool, node_dim: int):
         super().__init__()
         self.final_collapse = final_collapse
+        if self.final_collapse:
+            self.dim = 3 * node_dim  # for avg, max and root_emb
+        else:
+            self.dim = node_dim  # just root_emb
 
     def call(
         self,
@@ -586,7 +590,8 @@ class ModelWrapper:
             limit_constants = params.dataset_consts.base_node_label_num
         else:
             limit_constants = None
-        self.model, self.model_def, self.node_and_def_emb = self._build_model(
+
+        self.model, self.model_def, self.node_and_def_emb, self.model_step1, self.model_step2, self.inner_spec = self._build_model(
             input_spec=self.input_spec,
             def_input_spec=self.def_input_spec,
             num_embeddings=params.dataset_consts.node_label_num,
@@ -620,8 +625,9 @@ class ModelWrapper:
         )
 
     @staticmethod
-    def _build_model(input_spec, def_input_spec, num_embeddings, et, num_tactics,
-                     tactic_max_args, tactic_index_to_numargs, global_context,
+    def _build_model(input_spec: StateActionTensor.Spec, def_input_spec: GraphDefTensor.Spec,
+                    num_embeddings, et, num_tactics,
+                    tactic_max_args, tactic_index_to_numargs, global_context,
                     total_hops, node_dim,
                     network_type, norm_msgs, aggreg_max,
                     nonlin_type, nonlin_position, residuals,
@@ -632,12 +638,10 @@ class ModelWrapper:
 
         # Using the Functional API (all functions here have to be Layers or Models)
 
-        # input
-        state_actions: StateActionTensor = tf.keras.Input(type_spec=input_spec)
-
-        # split states and actions
-        states = StateActionTensor.GetStates()(state_actions)
-        actions = StateActionTensor.GetActions()(state_actions)
+        # Build Main Model Step 1:
+        # Takes proof state as input and computes tactic logits
+        # along with hidden states needed later for arg prediciton
+        states: StateTensor = tf.keras.Input(type_spec=input_spec.states)
 
         # split state parts
         graphs = StateTensor.GetGraphs()(states)
@@ -691,18 +695,36 @@ class ModelWrapper:
         node_embs = GraphTensor.GetNodes()(graphs_with_emb)  # [bs, (nodes), dim] (ragged)
 
         # get state embedding (dim of output not necessarily node dim)
-        state_embs = StateEmbedding(final_collapse=final_collapse)(node_embs, roots) # [bs, dim]
+        state_embedding_layer = StateEmbedding(final_collapse=final_collapse, node_dim=node_dim)
+        state_dim = state_embedding_layer.dim  # this is not always the node_dim
+        state_embs = state_embedding_layer(node_embs, roots) # [bs, dim]
+
 
         # get embeddings for each element of context
         context_emb_layer = ContextEmbedding(node_dim=node_dim)
         context_dim = context_emb_layer.dim   # future version of this may change the output dim
         context_emb = context_emb_layer(node_embs, context)  # [bs, (cxt), dim] (ragged)
 
-        # split actions
-        tactic_labels = ActionTensor.GetTacticLabels()(actions)  # [bs]  dtype=int32
-
         # predict tactic from state embeddings
         tactic_logits = TacticLogits(num_tactics=num_tactics)(state_embs)  # [bs, tactics]
+
+        out1 = (tactic_logits, context_emb, state_embs)  # ([bs, tactics], [bs, (cxt), dim], [bs, dim])
+        model_step1 = Model(states, out1, name="tactic_prediction")
+
+        # Build Main Model Step 2:
+        # Takes tactic and various hidden states as input. Computes arg logits
+
+        inner_spec = InnerInput.Spec(
+                batch_size=None,
+                context_dim=context_dim,
+                state_dim=state_dim
+            )
+        inner_input = tf.keras.Input(type_spec=inner_spec)
+
+        # extract parts
+        tactic_labels = InnerInput.GetTactics()(inner_input)   # [bs] dtype=int
+        context_emb = InnerInput.GetContextEmb()(inner_input)  # [bs, (cxt), dim]
+        state_emb = InnerInput.GetStateEmb()(inner_input)      # [bs, dim]
 
         # embedd tactic
         tactic_embs = TacticEmbedding(  # [bs, dim]
@@ -723,11 +745,35 @@ class ModelWrapper:
             max_args=tactic_max_args,
             const_emb = node_and_def_emb,
             global_context = global_context,
-        )(context_emb, state_embs, tactic_embs, arg_cnt = arg_cnt)
+        )(context_emb, state_emb, tactic_embs, arg_cnt = arg_cnt)
 
-        out = (tactic_logits, arg_cnt, arg_logits)
+        out2 = (arg_cnt, arg_logits)  # [bs], [total_args, (local_global_ctx)]
+        model_step2 = Model(inner_input, out2, name="arg_prediction")
 
+        # combine the two models into one for training
+
+        # input
+        state_actions: StateActionTensor = tf.keras.Input(type_spec=input_spec)
+        states = StateActionTensor.GetStates()(state_actions)
+
+        # step 1
+        tactic_logits, context_emb, state_emb = model_step1(states)
+
+        # split states and actions
+        actions = StateActionTensor.GetActions()(state_actions)
+        tactic_labels = ActionTensor.GetTacticLabels()(actions)  # [bs]  dtype=int32
+
+        # step 2
+        inner_inputs = InnerInput.Build()(
+            tactics=tactic_labels,
+            context_emb=context_emb,
+            state_emb=state_emb
+        )
+        arg_cnt, arg_logits = model_step2(inner_inputs)
+
+        out = (tactic_logits, arg_cnt, arg_logits)  # [bs, tactics], [bs], [total_args, (local_global_ctx)]
         model = Model(state_actions, out, name="tactic_arg_training")
+
 
         # build the model for definition learning
 
@@ -756,7 +802,7 @@ class ModelWrapper:
         out = (root_embs, root_c_embs)
         model_def = Model(graph_def, out, name="graph_def_training")
 
-        return model, model_def, node_and_def_emb
+        return model, model_def, node_and_def_emb, model_step1, model_step2, inner_spec
 
     def save_model_checkpoint(self, checkpoint_dir: Path):
         model_weights_path = checkpoint_dir / "model_weights.h5"
@@ -798,6 +844,18 @@ class ModelWrapper:
 
         return pred_fn
 
+    def get_predict_fn_step1(self):
+        @tf.function(input_signature=(self.input_spec.states,))
+        def fn(batch):
+            return self.model_step1(batch)
+        return fn
+
+    def get_predict_fn_step2(self):
+        @tf.function(input_signature=(self.inner_spec,))
+        def fn(batch):
+            return self.model_step2(batch)
+        return fn
+
     def get_set_def_fn(self):
         @tf.function(input_signature=(self.def_input_spec,))
         def set_def_fn(batch: GraphDefTensor):
@@ -811,3 +869,4 @@ class ModelWrapper:
             )
 
         return set_def_fn
+
