@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from typing import List
 import numpy as np
 
+from graph2tac.loader.data_server import graph_as
+
 # TODO(jrute): This code is unique to the model in model.py,
 # and it now depends on the dataset constants saved with that model.
 # So we might as well move it there alongside np_to_tensor.
@@ -67,7 +69,12 @@ def make_flat_def_batch_np(batch: list) -> FlatDefBatchNP:
     """
     assert len(batch) > 0
     batch_size = len(batch)
-    nodes_c, edges, root_nums = zip(*batch)
+    # nodes_c, edges, root_nums = zip(*batch)
+    graphs, root_nums = zip(*batch)
+    nodes_c, edges = zip(* map(lambda x: graph_as("tf2", x), graphs))
+
+
+
     roots = [np.arange(rn) for rn in root_nums]
 
     n_lens = [len(x) for x in nodes_c]

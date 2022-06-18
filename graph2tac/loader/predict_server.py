@@ -370,9 +370,12 @@ def main_loop(reader, sock, predict, debug_dir, session_idx=0,
                     eval_node_labels, edges, edge_labels, edges_offset, global_visited, _, _, _, _ = res
 
                     train_node_labels = map_eval_label_to_train_label[eval_node_labels]
-                    edges_grouped_by_label = np.split(edges, edges_offset)
+                    # edges_grouped_by_label = np.split(edges, edges_offset)
 
-                    cluster_state = (train_node_labels, edges_grouped_by_label, len(def_cluster))
+                    cluster_graph = train_node_labels, edges, edge_labels, edges_offset
+
+                    # cluster_state = (train_node_labels, edges_grouped_by_label, len(def_cluster))
+                    cluster_state = (cluster_graph, len(def_cluster))
 
                     predict.compute_new_definitions([cluster_state])
             t1 = time.time()
@@ -439,12 +442,16 @@ def main_loop(reader, sock, predict, debug_dir, session_idx=0,
             # online_state = (train_node_labels, edges_grouped_by_label, this_encoded_root, this_encoded_context)
 
             # for tf-gnn format:
-            online_state = (train_node_labels, edges[:,0], edges[:,1], edge_labels, this_encoded_root, this_encoded_context)
+            # online_state = (train_node_labels, edges[:,0], edges[:,1], edge_labels, this_encoded_root, this_encoded_context)
+            online_graph = eval_node_labels, edges, edge_labels, edges_offset
 
-            log_verbose("online_state", online_state)
+
+
+            log_verbose("online_state", online_graph)
 
             online_actions, online_confidences = predict.ranked_predictions(
-                online_state,
+                (online_graph, this_encoded_root, this_encoded_context),
+                # online_state,
                 # available_global=available_global,
                 tactic_expand_bound=tactic_expand_bound,
                 total_expand_bound=total_expand_bound,
@@ -538,6 +545,10 @@ def main():
                         default=None,
                         help='checkpoint directory of the model')
 
+    parser.add_argument('--arch', type=str,
+                        default='tf2',
+                        help='the model architecture tfgnn or tf2 (current default is tf2)')
+
     parser.add_argument('--test', type=str,
                         default=None,
                         help='run test of loader on a given dataset')
@@ -612,6 +623,8 @@ def main():
 
 
 
+
+
     args = parser.parse_args()
 
     if args.debug_dir is not None:
@@ -655,11 +668,16 @@ def main():
         tf.get_logger().setLevel(int(tf_log_levels[args.log_level]))
         tf.config.run_functions_eagerly(args.tf_eager)
         log_info("importing Predict class..")
-        # from graph2tac.tf2.predict import Predict
-        from graph2tac.tfgnn.predict import Predict
+        if args.arch == 'tf2':
+            from graph2tac.tf2.predict import Predict
+            predict = Predict(Path(args.model).expanduser().absolute())
+        elif args.arch == 'tfgnn':
+            from graph2tac.tfgnn.predict import Predict
+            predict = Predict(Path(args.model).expanduser().absolute())
+        else:
+            Exception(f'the provided model architecture {args.arch} is not supported')
 
         log_info(f"initializing predict network from {Path(args.model).expanduser().absolute()}")
-        predict = Predict(Path(args.model).expanduser().absolute())
 
     if not args.tcp:
         log_normal("starting stdin server")
@@ -673,7 +691,7 @@ def main():
                   search_expand_bound=args.search_expand_bound,
                   update_all_definitions=args.update_all_definitions,
                   update_new_definitions=args.update_new_definitions,
-                  progress_bar=args.progress_bar
+                  progress_bar=args.progress_bar,
         )
     else:
         log_normal("starting tcp/ip server on port", args.port)
@@ -697,7 +715,7 @@ def main():
                           search_expand_bound=args.search_expand_bound,
                           update_all_definitions=args.update_all_definitions,
                           update_new_definitions=args.update_new_definitions,
-                          progress_bar=args.progress_bar
+                          progress_bar=args.progress_bar,
                 )
 
                 session_idx += 1
