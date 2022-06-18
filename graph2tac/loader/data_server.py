@@ -60,8 +60,9 @@ class GraphConstants:
 @dataclass
 class DataPoint:
     proof_step_idx: int
-    state: tuple[np.ndarray]
-    state_tf_gnn: tuple[np.ndarray]
+    graph: tuple[np.ndarray]
+    context: np.ndarray
+    root: int
     action: tuple[np.ndarray]
     state_text: bytes
     action_base_text: bytes
@@ -79,6 +80,25 @@ class DefIndexTable:
     idx_to_name: list
     idx_to_hash: list
     idx_in_spine: list[bool]
+
+
+def graph_as(model: str, graph):
+    """
+    input: the graph as loader returns it
+    output: the graph in a format that model consumes where the model is "tf2" or "tfgnn"
+
+    """
+    nodes, edges, edge_labels, edges_offset = graph
+
+    if model == "tf_gnn":
+        return (nodes, edges[:, 0], edges[:, 1], edge_labels)
+    if model == "tf2":
+        edges_grouped_by_label = np.split(edges, edges_offset)
+        return (nodes, edges_grouped_by_label)
+
+    raise Exception(f"currently supported graph format is for models tf2 or tfgnn, but received {model}")
+
+
 
 
 def find_bin_files(data_dir: str):
@@ -373,8 +393,9 @@ class Data2():
 
         # TEXT ANNOTATION TO BE IMPLEMENTED
         return DataPoint(data_point_idx,
-                         state=(nodes, edges_grouped_by_label, root, context),
-                         state_tf_gnn=(nodes, edges[:,0], edges[:,1], edge_labels, root, context),
+                         graph = (nodes, edges, edge_labels, edges_offset),
+                         context = context,
+                         root = root,
                          action=(tactic_index, args),
                          state_text=state_text,
                          action_base_text=action_base_text,
@@ -407,12 +428,10 @@ class Data2():
         return self.select_data_points(split_fun=lambda x: def_hash_split(x, self.__split, self.__split_random_seed), label=2)
 
 
-
-    def step_state(self, data_point_idx: int, tf_gnn=False):
-        if tf_gnn:
-            return self.get_proof_step(data_point_idx, skip_text=True).state_tf_gnn
-        else:
-            return self.get_proof_step(data_point_idx, skip_text=True).state
+    # REFACTOR CLIENTS
+    def step_state(self, data_point_idx: int):
+        proof_step = self.get_proof_step(data_point_idx, skip_text=True)
+        return (proof_step.graph, proof_step.root, proof_step.context)
 
     def step_state_text(self, data_point_idx: int):
         return self.get_proof_step(data_point_idx).state_text
@@ -424,7 +443,7 @@ class Data2():
     def step_label(self, data_point_idx):
         return self.get_proof_step(data_point_idx, skip_text=True).action
 
-    def def_cluster_subgraph(self, cluster_idx, tf_gnn=False, max_arg_size=None):
+    def def_cluster_subgraph(self, cluster_idx,  max_arg_size=None):
         if max_arg_size is None:
             max_arg_size = self.__max_subgraph_size
 
@@ -432,14 +451,10 @@ class Data2():
 
         res = get_subgraph_online(self.__c_data_online, self.__def_idx_to_node[def_cluster], self.__bfs_option, max_arg_size, False)
 
-        nodes, edges, edge_labels, edges_offset, global_visited, _, _, _, _ = res
-        edges_grouped_by_label = np.split(edges, edges_offset)
+        nodes, edges, edge_labels, edges_offset, _ , _, _, _, _ = res
 
-        if tf_gnn:
-            return (nodes, edges[:, 0], edges[:, 1], edge_labels, len(def_cluster))
-        else:
-            return (nodes, edges_grouped_by_label, len(def_cluster))
-
+        graph = nodes, edges, edge_labels, edges_offset
+        return (graph, len(def_cluster))
 
 
 
@@ -512,24 +527,19 @@ class DataServer:
 
 
         self.__cluster_subgraphs = None
-        self.__cluster_subgraphs_tf_gnn = None
 
     def data_point(self, proof_step_idx):
         return self.__online_data.get_proof_step(proof_step_idx)
 
 
 
-    def data_train(self, shuffled=False, tf_gnn=False, as_text=False):
+    def data_train(self, shuffled=False,  as_text=False):
         """
         returns a stream of training data, optionally shuffled
         with the default format (state, action) where
 
-        state = (node_labels, edges_grouped_by_label, root, context)
+        state = (graph, root, context)
         action = (tactic_id, argument_list_of_context_indices, mask of argument list)
-
-        with option tf_gnn
-        instead of edges_grouped_by_label you get edges in the format
-        (sources, targets, classes)
 
         with option as_text
         returns state as a state_text (python bytes)
@@ -550,13 +560,13 @@ class DataServer:
                             lambda x: x)
         else:
             return Iterator(shuffled_copy,
-                            functools.partial(data.step_state, tf_gnn=tf_gnn),
+                            functools.partial(data.step_state),
                             functools.partial(data.step_label),
                             lambda x: x)
 
 
 
-    def data_valid(self, tf_gnn=False, as_text=False):
+    def data_valid(self, as_text=False):
         """
         returns a stream of validation data in the same format as  data_train
         see doc_string for data_train for the format
@@ -571,13 +581,13 @@ class DataServer:
                             lambda x: x)
         else:
             return Iterator(data.data_valid(),
-                            functools.partial(data.step_state, tf_gnn=tf_gnn),
+                            functools.partial(data.step_state),
                             functools.partial(data.step_label),
                             lambda x: x)
 
 
 
-    def def_cluster_subgraph(self, cluster_idx, tf_gnn):
+    def def_cluster_subgraph(self, cluster_idx):
         """
         returns a definition cluster with cluster_idx
         in the same format as def_class_subgraph (see docstring there)
@@ -585,11 +595,10 @@ class DataServer:
         but also an integer K that denotes the number of definitions in this cluster
         the entry points to the definition nodes are the first K in the list of returned nodes
         """
-        data = self.__online_data
-        return data.def_cluster_subgraph(cluster_idx, tf_gnn=tf_gnn)
+        return self.__online_data.def_cluster_subgraph(cluster_idx)
 
 
-    def def_cluster_subgraphs(self, tf_gnn):
+    def def_cluster_subgraphs(self):
         """
         returns a list of subgraphs for definition clusters
         in the same format as def_class_subgraph (see docstring there)
@@ -599,18 +608,11 @@ class DataServer:
 
         """
         print(f"LOADING | requested {self.graph_constants().cluster_subgraphs_num}")
-        if tf_gnn:
-            if self.__cluster_subgraphs_tf_gnn is None:
-                self.__cluster_subgraphs_tf_gnn = []
-                for idx in tqdm.tqdm(range(self.graph_constants().cluster_subgraphs_num)):
-                    self.__cluster_subgraphs_tf_gnn.append(self.def_cluster_subgraph(idx, tf_gnn))
-            return self.__cluster_subgraphs_tf_gnn
-        else:
-            if self.__cluster_subgraphs is None:
-                self.__cluster_subgraphs = []
-                for idx in tqdm.tqdm(range(self.graph_constants().cluster_subgraphs_num)):
-                    self.__cluster_subgraphs.append(self.def_cluster_subgraph(idx, tf_gnn))
-            return self.__cluster_subgraphs
+        if self.__cluster_subgraphs is None:
+            self.__cluster_subgraphs = []
+            for idx in tqdm.tqdm(range(self.graph_constants().cluster_subgraphs_num)):
+                self.__cluster_subgraphs.append(self.def_cluster_subgraph(idx))
+        return self.__cluster_subgraphs
 
 
     def graph_constants(self):
