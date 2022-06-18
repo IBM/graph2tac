@@ -51,15 +51,25 @@ BASE_NAMES, EDGE_CONFLATIONS = get_graph_constants_online()
 
 def log_debug(*args):
     if logging.DEBUG >= LOG_LEVEL:
-        print("PYTHON DEBUG: ", *args)
+        print("PYTHON DEBUG: ", *args, flush=True, file=sys.stderr)
 
 def log_verbose(*args):
     if (logging.DEBUG + logging.INFO) // 2 >= LOG_LEVEL:
-        print("PYTHON VERBOSE: ", *args)
+        print("PYTHON VERBOSE: ", flush=True)
 
 def log_info(*args):
     if logging.INFO >= LOG_LEVEL:
-        print("PYTHON INFO: ", *args)
+        print("PYTHON INFO: ", *args, flush=True)
+
+def log_critical(*args):
+    if logging.CRITICAL >= LOG_LEVEL:
+        print("PYTHON CRITICAL: ", *args, flush=True, file=sys.stderr)
+
+def log_normal(*args):
+    if logging.CRITICAL >= LOG_LEVEL:
+        print("PYTHON NORMAL: ", *args, flush=True)
+
+
 
 
 def debug_record(msg, fname: str):
@@ -211,7 +221,15 @@ def main_loop(reader, sock, predict, debug_dir, session_idx=0,
               total_expand_bound=2048,
               search_expand_bound=8,
               update_all_definitions=False,
-              update_new_definitions=False):
+              update_new_definitions=False,
+              progress_bar=False):
+
+    if debug_dir is not None:
+        debug_dir_session = os.path.join(debug_dir, f"session_{session_idx}")
+        os.makedirs(debug_dir_session, exist_ok=True)
+    else:
+        debug_dir_session = None
+
 
     evaluation_tactic_hash_to_numargs = dict()
 
@@ -232,6 +250,11 @@ def main_loop(reader, sock, predict, debug_dir, session_idx=0,
     decorated_reader = tqdm.tqdm(reader) if with_meter else reader
 
 
+    msg_idx = -1
+    total_data_online_size = 0
+    build_network_time = None
+    update_def_time = None
+    n_def_clusters_updated = None
 
     for msg in decorated_reader:
         msg_type = msg.which()
@@ -251,8 +274,16 @@ def main_loop(reader, sock, predict, debug_dir, session_idx=0,
 
 
         elif msg_type == "initialize":
+            if (context_cnt >= 0):
+                log_normal(f'theorem {context_cnt} had {msg_idx} '
+                           f'messages received of total size (unpacked) {total_data_online_size} bytes, '
+                           f'with network compiled in {build_network_time:.6f} s, ',
+                           f'with {n_def_clusters_updated} def clusters updated in {update_def_time:.6f} s')
+
+
             context_cnt += 1
-            log_info(f'session {session_idx} theorem {context_cnt} initialization begin ...')
+
+            log_normal(f'session {session_idx} theorem {context_cnt} started.')
 
             wrap_debug_record(debug_dir, msg, context_cnt)
 
@@ -283,6 +314,7 @@ def main_loop(reader, sock, predict, debug_dir, session_idx=0,
                                                 local_to_global,
                                                 "request.initialize",
                                                 )
+            total_data_online_size = len(msg_data)
 
             log_info(f"c_data_online references {n_msg_recorded} msg")
 
@@ -324,11 +356,15 @@ def main_loop(reader, sock, predict, debug_dir, session_idx=0,
 
             predict.initialize(global_context)
             t1 = time.time()
-            log_info(f"Building network model completed in {t1-t0:.6f} seconds")
+            build_network_time = t1-t0
+            log_info(f"Building network model completed in {build_network_time:.6f} seconds")
 
             log_info(f"Updating  definition clusters...")
 
-            for def_cluster in tqdm.tqdm(def_clusters_for_update):
+
+            decorated_iterator = tqdm.tqdm(def_clusters_for_update) if progress_bar else def_clusters_for_update
+            t0 = time.time()
+            for def_cluster in decorated_iterator:
                     res = get_subgraph_online(c_data_online, def_idx_to_node[def_cluster], bfs_option, max_subgraph_size, False)
                     eval_node_labels, edges, edge_labels, edges_offset, global_visited, _, _, _, _ = res
 
@@ -338,7 +374,9 @@ def main_loop(reader, sock, predict, debug_dir, session_idx=0,
                     cluster_state = (train_node_labels, edges_grouped_by_label, len(def_cluster))
 
                     predict.compute_new_definitions([cluster_state])
-
+            t1 = time.time()
+            n_def_clusters_updated = len(def_clusters_for_update)
+            update_def_time = t1 - t0
 
             tacs, tac_numargs = process_initialize(sock, msg)
             evaluation_tactic_hash_to_numargs = {k:v for k,v in zip(tacs, tac_numargs)}
@@ -375,7 +413,10 @@ def main_loop(reader, sock, predict, debug_dir, session_idx=0,
                                                 local_to_global,
                                                 "request.predict",
                                                 )
+            total_data_online_size += len(msg_data)
+
             log_info(f"online_data stores {n_msg_recorded} graphs")
+
 
 
             roots = np.array( [(msg_idx, msg.predict.state.root)], dtype=np.uint32)
@@ -432,6 +473,14 @@ def main_loop(reader, sock, predict, debug_dir, session_idx=0,
         else:
             raise Exception("Capnp protocol error in prediction_loop: "
                             "msg type is not 'predict', 'synchronize', or 'initialize'")
+
+
+    log_normal(f'theorem {context_cnt} had {msg_idx} '
+               f'messages received of total size (unpacked) {total_data_online_size} bytes, '
+               f'with network compiled in {build_network_time:.6f} s, ',
+               f'with {n_def_clusters_updated} def clusters updated in {update_def_time:.6f} s')
+
+
 
 
 def test_record(data_dir):
@@ -543,6 +592,12 @@ def main():
                         action='store_true',
                         help=("call newtwork update embedding on cluster containit all definitions (overwrites update new definitions)"))
 
+    parser.add_argument('--progress_bar',
+                        default=False,
+                        action='store_true',
+                        help=("show the progress bar of update definition clusters"))
+
+
     parser.add_argument('--tf_eager',
                         default=False,
                         action='store_true',
@@ -599,42 +654,43 @@ def main():
         predict = Predict(Path(args.model).expanduser().absolute())
 
     if not args.tcp:
-        log_info("starting stdin server")
+        log_normal("starting stdin server")
         sock = socket.socket(fileno=sys.stdin.fileno())
         reader = graph_api_capnp.PredictionProtocol.Request.read_multiple_packed(sock, traversal_limit_in_words=2**64-1)
         main_loop(reader, sock, predict, args.debug_dir,
+                  session_idx=0,
                   with_meter=args.with_meter,
                   tactic_expand_bound=args.tactic_expand_bound,
                   total_expand_bound=args.total_expand_bound,
                   search_expand_bound=args.search_expand_bound,
-                  update_all_definitions=args.update_all_definitions)
+                  update_all_definitions=args.update_all_definitions,
+                  update_new_definitions=args.update_new_definitions,
+                  progress_bar=args.progress_bar
+        )
     else:
-        log_info("starting tcp/ip server on port", args.port)
+        log_normal("starting tcp/ip server on port", args.port)
         server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         server_sock.bind((args.host, args.port))
         try:
             server_sock.listen(1)
-            log_info("tcp/ip server is listening on", args.port)
+            log_normal("tcp/ip server is listening on", args.port)
             session_idx = 0
             while True:
                 sock, remote_addr = server_sock.accept()
-                log_info("coq client connected ", remote_addr)
+                log_normal("coq client connected ", remote_addr)
                 reader = graph_api_capnp.PredictionProtocol.Request.read_multiple_packed(sock, traversal_limit_in_words=2**64-1)
-                if args.debug_dir is not None:
-                    debug_dir_session = os.path.join(args.debug_dir, f"session_{session_idx}")
-                    os.makedirs(debug_dir_session, exist_ok=True)
-                else:
-                    debug_dir_session = None
                 main_loop(reader, sock, predict,
-                          debug_dir_session,
+                          args.debug_dir,
                           session_idx,
                           with_meter=args.with_meter,
                           tactic_expand_bound=args.tactic_expand_bound,
                           total_expand_bound=args.total_expand_bound,
                           search_expand_bound=args.search_expand_bound,
                           update_all_definitions=args.update_all_definitions,
-                          update_new_definitions=args.update_new_definitions)
+                          update_new_definitions=args.update_new_definitions,
+                          progress_bar=args.progress_bar
+                )
 
                 session_idx += 1
         finally:
