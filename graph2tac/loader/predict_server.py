@@ -331,7 +331,8 @@ def main_loop(reader, sock, predict, debug_dir, session_idx=0,
             map_eval_label_to_train_label = np.array(eval_label_to_train_label, dtype=np.intp)
 
             global_context = map_eval_label_to_train_label[len(BASE_NAMES):].astype(np.int32)
-            available_global = np.arange(0, len(global_context), 1, dtype=np.uint64)
+            # available_global = np.arange(0, len(global_context), 1, dtype=np.uint64)
+
             log_verbose(f"online global_context (indexed from 0): {global_context}")
 
 
@@ -433,17 +434,22 @@ def main_loop(reader, sock, predict, debug_dir, session_idx=0,
             this_encoded_root, this_encoded_context, this_context = load_msg_online(msg_data, global_visited, msg_idx)
             log_verbose("this encoded root", this_encoded_root)
             log_verbose("this encoded context", this_encoded_context)
-            online_state = (train_node_labels, edges_grouped_by_label, this_encoded_root, this_encoded_context)
+            # for tf2 format
 
+            # online_state = (train_node_labels, edges_grouped_by_label, this_encoded_root, this_encoded_context)
+
+            # for tf-gnn format:
+            online_state = (train_node_labels, edges[:,0], edges[:,1], edge_labels, this_encoded_root, this_encoded_context)
 
             log_verbose("online_state", online_state)
 
             online_actions, online_confidences = predict.ranked_predictions(
                 online_state,
-                allowed_model_tactics,
-                available_global=available_global,
+                # available_global=available_global,
                 tactic_expand_bound=tactic_expand_bound,
-                total_expand_bound=total_expand_bound)
+                total_expand_bound=total_expand_bound,
+                allowed_model_tactics=allowed_model_tactics,
+            )
 
 
             t0 = time.time()
@@ -649,7 +655,9 @@ def main():
         tf.get_logger().setLevel(int(tf_log_levels[args.log_level]))
         tf.config.run_functions_eagerly(args.tf_eager)
         log_info("importing Predict class..")
-        from graph2tac.tf2.predict import Predict
+        # from graph2tac.tf2.predict import Predict
+        from graph2tac.tfgnn.predict import Predict
+
         log_info(f"initializing predict network from {Path(args.model).expanduser().absolute()}")
         predict = Predict(Path(args.model).expanduser().absolute())
 
