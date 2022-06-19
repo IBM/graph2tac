@@ -12,8 +12,17 @@ import tqdm
 
 import numpy as np
 
+import hashlib
+
+def my_hash(x: bytes):
+    m = hashlib.sha256()
+    m.update(x)
+    return m.hexdigest()
+
+
 def hash_nparray(array: np.array):
-    return hash(memoryview(array).tobytes())
+    x = memoryview(array).tobytes()
+    return my_hash(x)
 
 def action_encode(action, global_context):
     tactic_idx, args = action
@@ -44,7 +53,9 @@ class Train:
     def train(self):
         for state, action, idx in tqdm.tqdm(self._data_server.data_train()):
             graph, root, context = state
-            state_hash = hash(tuple(hash_nparray(x) for x in (*graph, context)))
+            #state_hash = hash(tuple(hash_nparray(x) for x in (*graph, context)))
+            state_hash = my_hash(''.join(hash_nparray(x) for x in graph).encode())
+            
             train_action = self._data.get(state_hash, [])
             train_action.append(action_encode(action, self._global_context))
             self._data[state_hash] = train_action
@@ -96,8 +107,13 @@ class Predict:
 
     def ranked_predictions(self, state: tuple, allowed_model_tactics: list, available_global=None, tactic_expand_bound=20, total_expand_bound=1000000):
         graph, root, context = state
-        state_hash = hash(tuple(hash_nparray(x) for x in (*graph, context)))
+        # state_hash = hash(tuple(hash_nparray(x) for x in (*graph, context)))
+        state_hash = my_hash(''.join(hash_nparray(x) for x in graph).encode())
         predictions = self._data.get(state_hash, [])
+        if len(predictions) > 0:
+            print("hash FOUND")
+        else:
+            print("hash NOT FOUND")
         decoded_predictions = []
         for prediction in predictions:
             tactic_idx, args = prediction

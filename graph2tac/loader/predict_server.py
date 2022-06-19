@@ -206,16 +206,16 @@ def process_alignment_request(al_msg_data, train_node_label_to_name, train_node_
                                           al_def_idx_to_name,
                                           al_eval_label_to_train_label,
                                           len(train_node_label_to_name))
-    log_info("checkAlignment unaligned nodes: ", unaligned_nodes)
+    log_verbose("checkAlignment unaligned nodes: ", unaligned_nodes)
 
     unaligned_tactics = list(sorted(set(evaluation_tactic_hash_to_numargs.items())
                                     - set(network_tactic_hash_to_numargs)))
-    log_info("checkAlignment unaligned tactics: ", unaligned_tactics)
+    log_verbose("checkAlignment unaligned tactics: ", unaligned_tactics)
 
 
 def main_loop(reader, sock, predict, debug_dir, session_idx=0,
               bfs_option=True,
-              max_subgraph_size=512,
+              max_subgraph_size=1024,
               with_meter=False,
               tactic_expand_bound=8,
               total_expand_bound=2048,
@@ -300,7 +300,7 @@ def main_loop(reader, sock, predict, debug_dir, session_idx=0,
                                                   def_idx_to_name,
                                                   eval_label_to_train_label,
                                                   len(train_node_label_to_name))
-            log_info("intialization unaligned nodes", unaligned_nodes)
+            log_verbose("intialization unaligned nodes", unaligned_nodes)
 
             c_data_online = build_data_online_from_buf(def_idx_to_node,
                                                        network_tactic_index_to_hash,
