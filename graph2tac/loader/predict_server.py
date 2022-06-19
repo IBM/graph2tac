@@ -176,18 +176,22 @@ def wrap_debug_record(debug_dir, msg, context_cnt):
         fname = os.path.join(debug_dir, f'msg_init.{context_cnt}.bin')
         debug_record(msg, fname=fname)
 
+def train_names_in_cluster(def_scc_cluster, eval_label_to_train_label, train_node_label_to_name):
+    result = []
+    for eval_def_idx in def_scc_cluster:
+            eval_label = len(BASE_NAMES) + eval_def_idx.item()
+            train_label = eval_label_to_train_label[eval_label]
+            train_name = train_node_label_to_name[train_label] if train_label < len(train_node_label_to_name) else b".MISSING"
+            result.append(train_name.decode())
+    return result
+
 
 def log_clusters_verbose(def_scc_clusters, eval_label_to_train_label, train_node_label_to_name):
     for i, cluster in enumerate(def_scc_clusters):
-        result = ""
-        for eval_def_idx in cluster:
-
-            eval_label = len(BASE_NAMES) + eval_def_idx.item()
-            train_label = eval_label_to_train_label[eval_label]
-            train_name = train_node_label_to_name[train_label] if train_label < len(train_node_label_to_name) else ".MISSING"
-            result += f" {train_name}"
-
-        log_verbose(f"cluster {i}: {result}")
+        x = train_names_in_cluster(cluster, eval_label_to_train_label, train_node_label_to_name)
+        print(x)
+        string_of_cluster_names = " ".join(x)
+        log_verbose(f"cluster {i}: {string_of_cluster_names}")
 
 
 
@@ -366,18 +370,22 @@ def main_loop(reader, sock, predict, debug_dir, session_idx=0,
             decorated_iterator = tqdm.tqdm(def_clusters_for_update) if progress_bar else def_clusters_for_update
             t0 = time.time()
             for def_cluster in decorated_iterator:
-                    res = get_subgraph_online(c_data_online, def_idx_to_node[def_cluster], bfs_option, max_subgraph_size, False)
-                    eval_node_labels, edges, edge_labels, edges_offset, global_visited, _, _, _, _ = res
+                cluster_names = [def_idx_to_name[def_idx] for def_idx in def_cluster]
+                print(cluster_names)
 
-                    train_node_labels = map_eval_label_to_train_label[eval_node_labels]
-                    # edges_grouped_by_label = np.split(edges, edges_offset)
+                res = get_subgraph_online(c_data_online, def_idx_to_node[def_cluster], bfs_option, max_subgraph_size, False)
+                eval_node_labels, edges, edge_labels, edges_offset, global_visited, _, _, _, _ = res
 
-                    cluster_graph = train_node_labels, edges, edge_labels, edges_offset
+                train_node_labels = map_eval_label_to_train_label[eval_node_labels]
+                # edges_grouped_by_label = np.split(edges, edges_offset)
 
-                    # cluster_state = (train_node_labels, edges_grouped_by_label, len(def_cluster))
-                    cluster_state = (cluster_graph, len(def_cluster))
+                cluster_graph = train_node_labels, edges, edge_labels, edges_offset
 
-                    predict.compute_new_definitions([cluster_state])
+                # cluster_state = (train_node_labels, edges_grouped_by_label, len(def_cluster))
+                cluster_state = (cluster_graph, len(def_cluster))
+                print(cluster_state)
+                breakpoint()
+                predict.compute_new_definitions([cluster_state])
             t1 = time.time()
             n_def_clusters_updated = len(def_clusters_for_update)
             update_def_time = t1 - t0

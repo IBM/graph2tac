@@ -1521,7 +1521,9 @@ static PyObject *c_get_subgraph_online(PyObject *self, PyObject *args) {
 	uint32_t min_edge_idx = UINT32_MAX;
 	uint32_t max_edge_idx = 0;
 
-	for (const auto & [source, source_sub]: (*global_visited)) {
+	for (c_NodeIndex source_sub = 0; source_sub < sub_to_glob.size(); ++source_sub) {
+	    c_GlobalNode source = sub_to_glob.at(source_sub);
+//	for (const auto & [source, source_sub]: (*global_visited)) {
 	    auto node = p_data_online->global_nodes.at(source.file_idx)[source.node_idx];
 	    if (std::find(global_deps.begin(), global_deps.end(), source) == global_deps.end()) {
 		auto edge_idx_begin = node.getChildrenIndex();

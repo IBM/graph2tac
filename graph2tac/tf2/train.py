@@ -783,7 +783,7 @@ class TrainingLoop:
         global_context_size = len(self.dataset_consts.global_context)
         steps = 0
 
-        data_gd = self.data_server.def_cluster_subgraphs(tf_gnn=False)
+        data_gd = self.data_server.def_cluster_subgraphs()
         batches_gd = Repeat(data_gd, shuffled=self._shuffle_def)
         batches_gd = Batches(batches_gd, self.batch_size)
 
