@@ -241,14 +241,17 @@ class Dataset:
         # applying symmetrization
         edge_label_num = self._graph_constants.edge_label_num
         if self.symmetrization == UNDIRECTED:
-            dataset = dataset.map(lambda graph_tensor: self._symmetrize(graph_tensor, edge_label_num, True))
+            dataset = dataset.map(lambda graph_tensor: self._symmetrize(graph_tensor, edge_label_num, True),
+                                  num_parallel_calls=tf.data.AUTOTUNE)
         elif self.symmetrization == BIDIRECTIONAL:
-            dataset = dataset.map(lambda graph_tensor: self._symmetrize(graph_tensor, edge_label_num, False))
+            dataset = dataset.map(lambda graph_tensor: self._symmetrize(graph_tensor, edge_label_num, False),
+                                  num_parallel_calls=tf.data.AUTOTUNE)
             edge_label_num *= 2
 
         # introducing self edges
         if self.add_self_edges:
-            dataset = dataset.map(lambda graph_tensor: self._add_self_edges(graph_tensor, edge_label_num))
+            dataset = dataset.map(lambda graph_tensor: self._add_self_edges(graph_tensor, edge_label_num),
+                                  num_parallel_calls=tf.data.AUTOTUNE)
 
         # shuffling
         if shuffle:
@@ -449,7 +452,8 @@ class TFRecordDataset(Dataset):
         dataset = tf.data.TFRecordDataset(filenames=[str(tfrecord_filepath.absolute())])
 
         # parse it into GraphTensor objects
-        dataset = dataset.map(lambda graph_tensor: tfgnn.parse_single_example(graph_spec, graph_tensor))
+        dataset = dataset.map(lambda graph_tensor: tfgnn.parse_single_example(graph_spec, graph_tensor),
+                              num_parallel_calls=tf.data.AUTOTUNE)
 
         return dataset
 
