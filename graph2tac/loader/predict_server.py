@@ -252,9 +252,9 @@ def main_loop(reader, sock, predict, debug_dir, session_idx=0,
 
     msg_idx = -1
     total_data_online_size = 0
-    build_network_time = None
-    update_def_time = None
-    n_def_clusters_updated = None
+    build_network_time = 0
+    update_def_time = 0
+    n_def_clusters_updated = 0
 
     for msg in decorated_reader:
         msg_type = msg.which()
