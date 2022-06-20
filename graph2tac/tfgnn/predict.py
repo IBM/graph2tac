@@ -95,7 +95,7 @@ class PredictOutput:
         """
         Computes the total probability captured by all the predictions for this proof-state.
         """
-        return sum(np.exp(prediction.value) for prediction in self.predictions)
+        return sum(np.exp(pred.value) for pred in self.predictions)
 
     def sort(self) -> None:
         """
@@ -108,7 +108,7 @@ class PredictOutput:
         Converts all predictions to numpy format for interaction with Vasily's evaluation framework.
         """
         self.sort()
-        return [pred.numpy() for pred in self.predictions], np.array([pred.value for pred in self.predictions])
+        return [pred.numpy() for pred in self.predictions], np.array([np.exp(pred.value) for pred in self.predictions])
 
     def _evaluate(self, tactic_id: int, local_arguments: tf.Tensor, global_arguments: tf.Tensor):
         return any(pred.evaluate(tactic_id, local_arguments, global_arguments) for pred in self.predictions)
@@ -117,7 +117,7 @@ class PredictOutput:
         """
         Evaluate an action in tuple format.
         """
-        (_, _, _, _, _, context_node_ids) = self.state
+        (loader_graph, root, context_node_ids) = self.state
         local_context_length = tf.shape(context_node_ids, out_type=tf.int64)[0]
 
         tactic_id, arguments_array = action
@@ -242,16 +242,20 @@ class Predict:
 
     def initialize(self, global_context: Optional[List[int]] = None):
         if global_context is not None:
+            # update the global context
             self._graph_constants.global_context = tf.constant(global_context, dtype=tf.int32)
+
+            # extend the embedding table if necessary
             new_node_label_num = max(global_context)+1
             if new_node_label_num > self._graph_constants.node_label_num:
                 self.prediction_task.graph_embedding = self._extend_graph_embedding(self.prediction_task.graph_embedding, new_node_label_num)
 
-                self.prediction_task.global_arguments_logits = LogitsFromEmbeddings(
-                    embedding_matrix=self.prediction_task.graph_embedding._node_embedding.embeddings,
-                    valid_indices=tf.constant(self._graph_constants.global_context, dtype=tf.int32),
-                    name=GlobalArgumentPrediction.GLOBAL_ARGUMENTS_LOGITS
-                )
+            # update the global arguments logits head (always necessary, because the local context may shrink!)
+            self.prediction_task.global_arguments_logits = LogitsFromEmbeddings(
+                embedding_matrix=self.prediction_task.graph_embedding._node_embedding.embeddings,
+                valid_indices=tf.constant(self._graph_constants.global_context, dtype=tf.int32),
+                name=GlobalArgumentPrediction.GLOBAL_ARGUMENTS_LOGITS
+            )
 
     def compute_new_definitions(self, new_cluster_subgraphs: List[Tuple]) -> None:
         definition_graph = self._make_definition_batch(new_cluster_subgraphs)
