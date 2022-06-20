@@ -436,19 +436,20 @@ std::vector<c_FileIndex> build_dependencies(
 }
 
 
-
+/*
 std::vector<c_GlobalNode> build_context(
     c_FileIndex file_idx,
     const ::capnp::List<::uint32_t, ::capnp::Kind::PRIMITIVE>::Reader *context_obj) {
-    /*
-      reads capnp context and returns it as STL vector
-     */
+    //
+    //  reads capnp context and returns it as STL vector
+    //
     std::vector<c_GlobalNode> context;
     for (const auto &ctxt_node_idx : *context_obj) {
 	context.emplace_back(c_GlobalNode{file_idx, ctxt_node_idx});
     }
     return context;
 }
+*/
 
 
 
@@ -680,7 +681,7 @@ static PyObject * c_encode_prediction_online(PyObject *self, PyObject *args) {
 	std::vector<double> confidences = PyArray_AsVector_double(pynp_confidences);
 	std::vector<c_NodeIndex> local_context = PyArray_AsVector_uint32_t(pynp_local_context);
 	std::vector<std::string> def_names = PyListBytes_AsVectorString(py_defnames);
-	log_info("received predictions of size " + std::to_string(predictions.size()));
+	log_verbose("received predictions of size " + std::to_string(predictions.size()));
 	std::vector<PyObject *> np_predictions_encoded;
 	std::vector<std::vector<std::pair<uint32_t, uint32_t>>> predictions_encoded;
 
