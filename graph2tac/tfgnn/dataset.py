@@ -7,7 +7,7 @@ import tensorflow_gnn as tfgnn
 from pathlib import Path
 from math import ceil
 
-from graph2tac.loader.data_server import DataServer, GraphConstants
+from graph2tac.loader.data_server import DataServer, GraphConstants, graph_as
 from graph2tac.tfgnn.graph_schema import proofstate_graph_spec, definition_graph_spec
 
 
@@ -550,7 +550,14 @@ class DataLoaderDataset(Dataset):
         @return: a GraphTensor object that is compatible with the `basic_proofstate_graph_spec` in `graph_schema.py`
         """
         (state, action, graph_id) = proofstate_data
-        (node_labels, sources, targets, edge_labels, root, context_node_ids) = state
+        loader_graph, root, context_node_ids = state
+        node_labels, sources, targets, edge_labels = graph_as("tf_gnn", loader_graph)
+
+        # deprecate:
+        # (node_labels, sources, targets, edge_labels, root, context_node_ids) = state
+
+        # code review: why root is not used // Vasily?
+
 
         bare_graph_tensor = cls._make_bare_graph_tensor(node_labels, sources, targets, edge_labels)
         context_node_ids = tf.cast(context_node_ids, dtype=tf.int64)
@@ -579,7 +586,9 @@ class DataLoaderDataset(Dataset):
         @param definition_data: a definition in tuple-form, as returned by the data server
         @return: a GraphTensor object that is compatible with the `definition_graph_spec` in `graph_schema.py`
         """
-        node_labels, sources, targets, edge_labels, num_definitions = definition_data
+        loader_graph, num_definitions = definition_data
+        node_labels, sources, targets, edge_labels = graph_as("tf_gnn", loader_graph)
+        # node_labels, sources, targets, edge_labels, num_definitions = definition_data   # deprecated, please remove
 
         bare_graph_tensor = cls._make_bare_graph_tensor(node_labels, sources, targets, edge_labels)
 
