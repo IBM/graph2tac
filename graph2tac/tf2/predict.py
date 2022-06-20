@@ -163,7 +163,8 @@ class Predict:
         model_input = np_to_tensor(make_flat_batch_np(batch, len(self.dataset_consts.global_context),
                                                       self.dataset_consts.tactic_max_arg_num))
         _, arg_nums, arg_logits = self.pred_fn(model_input)
-        cxt_len = len(state[3])  # this is how many local context elements there are
+        _, _, context = state
+        cxt_len = len(context)  # this is how many local context elements there are
         arg_cnt = sum(arg_nums)
         local_context_arg_cnt = arg_cnt * cxt_len  # how many logits there are for local context elements in all arguments
         global_context_start = local_context_arg_cnt + arg_cnt
@@ -191,20 +192,17 @@ class Predict:
 
         The probabilities for all potential actions sum up to 1.0 by the way tf.nn.softmax is normalized.
 
+        state = (graph, root, context)
         """
-        context_len = len(state[3])
+        _, _, context = state
+
+        context_len = len(context)
         global_context = np.arange(len(self.dataset_consts.global_context), dtype = np.uint32)
         if available_global is not None:
             if len(available_global) > 0 and (available_global >= len(self.dataset_consts.global_context)).any():
                 print("Warning: ignoring new definitions!")
                 available_global = available_global[available_global < len(self.dataset_consts.global_context)]
             global_context = global_context[available_global]
-        if (state[0] >= self.dataset_consts.node_label_num).any():
-            # let's deprecate this unless we have a bug in a pipeline?
-            assert False, "this branch shouldn't be executed after support of new definitions"
-            nodes_c = state[0]
-            mask = (nodes_c >= self.dataset_consts.node_label_num)
-            nodes_c[mask] = self.dataset_consts.node_label_num-1
         top_tactic_ids, tactic_logits, arg_nums, arg_logits = self.predict_tactic_arg_logits(state, tactic_expand_bound, allowed_model_tactics, available_global)
         tactic_probs  = tf.nn.softmax(tactic_logits).numpy()
         result_idx = []

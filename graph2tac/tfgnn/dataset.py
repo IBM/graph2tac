@@ -1,4 +1,4 @@
-from typing import Tuple, Dict, Iterable, Optional, Any, Callable
+from typing import Tuple, Dict, Optional, Any, Callable
 
 import argparse
 import yaml
@@ -7,7 +7,7 @@ import tensorflow_gnn as tfgnn
 from pathlib import Path
 from math import ceil
 
-from graph2tac.loader.data_server import DataServer, GraphConstants
+from graph2tac.loader.data_server import DataServer, GraphConstants, graph_as
 from graph2tac.tfgnn.graph_schema import proofstate_graph_spec, definition_graph_spec
 
 
@@ -484,12 +484,14 @@ class DataLoaderDataset(Dataset):
 
     # tf.TensorSpec for the data coming from the loader
     node_labels_spec = tf.TensorSpec(shape=(None,), dtype=tf.int64, name='node_labels')
-    sources_spec = tf.TensorSpec(shape=(None,), dtype=tf.int32, name='sources')
-    targets_spec = tf.TensorSpec(shape=(None,), dtype=tf.int32, name='targets')
+    edges_spec = tf.TensorSpec(shape=(None,2), dtype=tf.int32, name='edges')
     edge_labels_spec = tf.TensorSpec(shape=(None,), dtype=tf.int64, name='edge_labels')
+    edges_offset_spec = tf.TensorSpec(shape=(None,), dtype=tf.int32, name='edges_offset')
+    loader_graph_spec = (node_labels_spec, edges_spec, edge_labels_spec, edges_offset_spec)
+
     root_spec = tf.TensorSpec(shape=(), dtype=tf.int64, name='root')
     context_node_ids_spec = tf.TensorSpec(shape=(None,), dtype=tf.int64, name='context_node_ids')
-    state_spec = (node_labels_spec, sources_spec, targets_spec, edge_labels_spec, root_spec, context_node_ids_spec)
+    state_spec = (loader_graph_spec, root_spec, context_node_ids_spec)
 
     tactic_id_spec = tf.TensorSpec(shape=(), dtype=tf.int64, name='tactic_id')
     arguments_array_spec = tf.TensorSpec(shape=(None, 2), dtype=tf.int64, name='arguments_array')
@@ -500,7 +502,7 @@ class DataLoaderDataset(Dataset):
     num_definitions_spec = tf.TensorSpec(shape=(), dtype=tf.int64, name='num_definitions')
 
     proofstate_data_spec = (state_spec, action_spec, graph_id_spec)
-    definition_data_spec = (node_labels_spec, sources_spec, targets_spec, edge_labels_spec, num_definitions_spec)
+    definition_data_spec = (loader_graph_spec, num_definitions_spec)
 
     def __init__(self, data_dir: Path, **kwargs):
         """
@@ -580,7 +582,8 @@ class DataLoaderDataset(Dataset):
         @param graph_id: the id of the graph
         @return: a GraphTensor object that is compatible with the `proofstate_graph_spec` in `graph_schema.py`
         """
-        (node_labels, sources, targets, edge_labels, root, context_node_ids) = state
+        loader_graph, root, context_node_ids = state
+        node_labels, sources, targets, edge_labels = graph_as("tf_gnn", loader_graph)
 
         bare_graph_tensor = cls._make_bare_graph_tensor(node_labels, sources, targets, edge_labels)
 
@@ -603,22 +606,18 @@ class DataLoaderDataset(Dataset):
 
     @classmethod
     def _make_definition_graph_tensor(cls,
-                                      node_labels: tf.Tensor,
-                                      sources: tf.Tensor,
-                                      targets: tf.Tensor,
-                                      edge_labels: tf.Tensor,
+                                      loader_graph: Tuple,
                                       num_definitions: tf.Tensor
                                       ) -> tfgnn.GraphTensor:
         """
         Converts the data loader's definition cluster representation into a TF-GNN compatible GraphTensor.
 
-        @param node_labels: tf.Tensor of node labels (dtype=tf.int64)
-        @param sources: tf.Tensor of edge sources (dtype=tf.int32)
-        @param targets: tf.Tensor of edge targets (dtype=tf.int32)
-        @param edge_labels: tf.Tensor of edge labels (dtype=tf.int64)
+        @param loader_graph: Tuple of tf.Tensor objects encoding the graph in the loader's format
         @param num_definitions: tf.Tensor for the number of labels being defined (dtype=tf.int64)
         @return: a GraphTensor object that is compatible with the `definition_graph_spec` in `graph_schema.py`
         """
+        node_labels, sources, targets, edge_labels = graph_as("tf_gnn", loader_graph)
+
         bare_graph_tensor = cls._make_bare_graph_tensor(node_labels, sources, targets, edge_labels)
 
         context = tfgnn.Context.from_fields(features={'num_definitions': tf.expand_dims(num_definitions, axis=0)})
@@ -628,17 +627,17 @@ class DataLoaderDataset(Dataset):
                                              context=context)
 
     def _train_proofstates(self) -> tf.data.Dataset:
-        dataset = tf.data.Dataset.from_generator(lambda: self.data_server.data_train(tf_gnn=True),
+        dataset = tf.data.Dataset.from_generator(lambda: self.data_server.data_train(),
                                                  output_signature=self.proofstate_data_spec)
         return dataset.map(self._make_proofstate_graph_tensor, num_parallel_calls=tf.data.AUTOTUNE)
 
     def _valid_proofstates(self) -> tf.data.Dataset:
-        dataset = tf.data.Dataset.from_generator(lambda: self.data_server.data_valid(tf_gnn=True),
+        dataset = tf.data.Dataset.from_generator(lambda: self.data_server.data_valid(),
                                                  output_signature=self.proofstate_data_spec)
         return dataset.map(self._make_proofstate_graph_tensor, num_parallel_calls=tf.data.AUTOTUNE)
 
     def _definitions(self) -> tf.data.Dataset:
-        dataset = tf.data.Dataset.from_generator(lambda: self.data_server.def_cluster_subgraphs(tf_gnn=True),
+        dataset = tf.data.Dataset.from_generator(lambda: self.data_server.def_cluster_subgraphs(),
                                                  output_signature=self.definition_data_spec)
         return dataset.map(self._make_definition_graph_tensor, num_parallel_calls=tf.data.AUTOTUNE)
 

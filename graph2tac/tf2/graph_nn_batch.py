@@ -4,6 +4,7 @@ the classes in these module probably should be packaged together with
 GraphToLogits class in graph_nn
 """
 
+from graph2tac.loader.data_server import graph_as
 
 from dataclasses import dataclass
 from typing import List
@@ -115,7 +116,11 @@ def make_flat_batch_np(batch: list, global_context_size: int, max_arg_num: int) 
     # states, actions, data_point_id = zip(*batch)
     # then you can call DataServer.data_point(data_point_id) for debug information
 
-    nodes_c, edges, roots, context = zip(*states)
+    # nodes_c, edges, roots, context = zip(*states)
+    graphs, roots, context = zip(*states)
+    nodes_c, edges = zip(* map(lambda x: graph_as("tf2", x), graphs))
+
+
     tactic_labels, args_np_raw = zip(*actions)
 
     args_and_mask_np = [build_padded_arguments_and_mask(a, max_arg_num, len(context)) for a in args_np_raw]

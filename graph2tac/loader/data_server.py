@@ -21,7 +21,6 @@ from graph2tac.loader.helpers import get_all_fnames
 import tqdm
 from graph2tac.common import uuid
 
-FILE_MULTIPLIER = np.array([2**32], dtype=np.uint64)
 
 from graph2tac.loader.clib.loader import (
     capnp_unpack,
@@ -45,7 +44,6 @@ from graph2tac.loader.clib.loader import (
 @dataclass
 class GraphConstants:
     tactic_num: int
-    # tactic_max_arg_num: int
     edge_label_num: int
     base_node_label_num: int
     node_label_num: int
@@ -62,8 +60,9 @@ class GraphConstants:
 @dataclass
 class DataPoint:
     proof_step_idx: int
-    state: tuple[np.ndarray]
-    state_tf_gnn: tuple[np.ndarray]
+    graph: tuple[np.ndarray]
+    context: np.ndarray
+    root: int
     action: tuple[np.ndarray]
     state_text: bytes
     action_base_text: bytes
@@ -81,6 +80,25 @@ class DefIndexTable:
     idx_to_name: list
     idx_to_hash: list
     idx_in_spine: list[bool]
+
+
+def graph_as(model: str, graph):
+    """
+    input: the graph as loader returns it
+    output: the graph in a format that model consumes where the model is "tf2" or "tfgnn"
+
+    """
+    nodes, edges, edge_labels, edges_offset = graph
+
+    if model == "tf_gnn":
+        return (nodes, edges[:, 0], edges[:, 1], edge_labels)
+    if model == "tf2":
+        edges_grouped_by_label = np.split(edges, edges_offset)
+        return (nodes, edges_grouped_by_label)
+
+    raise Exception(f"currently supported graph format is for models tf2 or tfgnn, but received {model}")
+
+
 
 
 def find_bin_files(data_dir: str):
@@ -123,15 +141,16 @@ def get_global_def_table(buf_list, message_type: str, restrict_to_spine=False):
 def local_to_global_file_idx(data_dir: Path, fnames: list[Path]):
     return get_local_to_global_file_idx(os.fsencode(data_dir), list(map(os.fsencode,fnames)))
 
+
 def get_global_nodes_in_spine(buf_list, message_type):
     global_nodes_in_spine = set()
     global_def_table_spine = get_global_def_table(buf_list, message_type, restrict_to_spine=True)
     for file_idx, file_table in enumerate(global_def_table_spine):
         for node_idx, def_hash, def_name in zip(*file_table):
-            global_nodes_in_spine.add((file_idx * FILE_MULTIPLIER +  node_idx).item())
+            global_nodes_in_spine.add((file_idx,node_idx))
     return global_nodes_in_spine
 
-def build_def_index(global_def_table, global_nodes_in_spine: set[int]) -> DefIndexTable:
+def build_def_index(global_def_table, global_nodes_in_spine: set[tuple[int,int]]) -> DefIndexTable:
     def_idx_to_global_node = []
     def_idx_to_name = []
     def_idx_to_hash = []
@@ -140,7 +159,7 @@ def build_def_index(global_def_table, global_nodes_in_spine: set[int]) -> DefInd
 
     for file_idx, (node_indexes, def_hashes, def_names) in enumerate(global_def_table):
         for node_idx, def_hash, def_name in zip(node_indexes, def_hashes, def_names):
-            global_node_id = (file_idx * FILE_MULTIPLIER + node_idx).item()
+            global_node_id = (file_idx, node_idx)
             global_node_to_def_idx[global_node_id] = len(def_idx_to_global_node)
             def_idx_to_global_node.append(global_node_id)
             def_idx_to_name.append(def_name)
@@ -152,11 +171,12 @@ def build_def_index(global_def_table, global_nodes_in_spine: set[int]) -> DefInd
 
 
 def def_hash_of_tactic_point(def_index_table, tactic_point):
-    def_idx = def_index_table.global_node_to_idx[(tactic_point[2]*FILE_MULTIPLIER + tactic_point[3]).item()]
+    def_idx = def_index_table.global_node_to_idx[(tactic_point[2].item(), tactic_point[3].item())]
+
     return def_index_table.idx_to_hash[def_idx]
 
 def def_name_of_tactic_point(def_index_table, tactic_point):
-    def_idx = def_index_table.global_node_to_idx[(tactic_point[2]*FILE_MULTIPLIER + tactic_point[3]).item()]
+    def_idx = def_index_table.global_node_to_idx[(tactic_point[2].item(), tactic_point[3].item())]
     return def_index_table.idx_to_name[def_idx]
 
 def def_hash_split(x, prob, seed):
@@ -217,7 +237,7 @@ class Data2():
 
         self.__def_index_table = build_def_index(self.__global_def_table, global_nodes_in_spine)
 
-        self.__def_idx_to_node = np.array(self.__def_index_table.idx_to_global_node, dtype=np.uint64)
+        self.__def_idx_to_node = np.array(self.__def_index_table.idx_to_global_node, dtype=np.uint32)
         print(f"LOADING | definitions: {len(self.__def_idx_to_node)} ")
 
 
@@ -247,10 +267,6 @@ class Data2():
         data_error_report = get_tactic_hash_num_args_collision(self.__tactical_data, self.__fnames)
         if data_error_report:
             raise Exception(f"the data contains tactic_hash num_args collisions, for example \n" + "\n".join(data_error_report))
-        ############################################################################################################
-        ####### if you want  tactic indices chronological, consider the following code                          ####
-        ####### tactics_args = tactical_data[np.sort(np.unique(tactical_data[:,0], return_index=True)[1]),:2]   ####
-        ############################################################################################################
 
         tactic_hashes = np.unique(self.__tactical_data[:,0])
         tactic_indexes = np.arange(len(tactic_hashes), dtype=np.uint32)
@@ -317,13 +333,6 @@ class Data2():
         tactic_index_to_hash = idx_thash_narg_tdataidx[:,1]
         tactic_index_to_numargs = idx_thash_narg_tdataidx[:,2]
 
-        # DEPRECATE
-        #if len(tactic_index_to_numargs) > 0:
-        #    tactic_max_arg_num = np.max(tactic_index_to_numargs).item()
-        #else:
-        #    tactic_max_arg_num = 0
-        # self.__tactic_max_arg_num = tactic_max_arg_num       # we should move out the mutable state of max_arg_num to the clients
-
         tactic_index_to_string = list(self.get_proof_step_text(tdataidx)[1] for tdataidx in idx_thash_narg_tdataidx[:,3])
 
         base_node_label_names, edge_label_num = get_graph_constants_online();
@@ -339,7 +348,6 @@ class Data2():
         else:
             node_label_num = 0
         return GraphConstants(tactic_num=tactic_num,
-                              # tactic_max_arg_num=tactic_max_arg_num,  #DEPRECATE
                               edge_label_num=edge_label_num,
                               base_node_label_num=base_node_label_num,
                               node_label_num=node_label_num,
@@ -363,26 +371,18 @@ class Data2():
 
 
     def get_proof_step(self, data_point_idx,
-                       # tactic_max_arg_num=None,  #DEPRECATE
                        skip_text=False):
-        # if tactic_max_arg_num is None:
-        #    assert self.__tactic_max_arg_num is not None   #DEPRECATE
-        # max_arg_size = self.__tactic_max_arg_num
         tactic_point = self.__tactical_data[data_point_idx]
         tactic_hash, num_args, file_idx, def_node_idx, proof_step_idx, outcome_idx, state_root_node, def_hash = tactic_point
         res = get_subgraph_online(
-            self.__c_data_online, file_idx*FILE_MULTIPLIER + state_root_node, self.__bfs_option, self.__max_subgraph_size, False)
+            self.__c_data_online,
+            np.array([(file_idx.item(), state_root_node.item())], dtype=np.uint32),
+            self.__bfs_option, self.__max_subgraph_size, False)
         nodes, edges, edge_labels, edges_offset, global_visited, _, _, _, _ = res
         edges_grouped_by_label = np.split(edges, edges_offset)
 
         context, root, tactic_index, args = get_proof_step_online(self.__c_data_online, tactic_point[2:6], global_visited)
 
-        # REFACTOR and move out the following 3 lines to network files
-        # tail_args = np.tile(np.array([[0,len(context)]]), (max_arg_size-len(args),1))
-        # a = np.full((len(args),), True)
-        # b = np.full((max_arg_size - len(args),), False)
-        # mirek_mask = np.concatenate([a,b])
-        # mirek_args = np.concatenate([args, tail_args], axis=0)
 
         def_name = def_name_of_tactic_point(self.__def_index_table, tactic_point)
 
@@ -393,8 +393,9 @@ class Data2():
 
         # TEXT ANNOTATION TO BE IMPLEMENTED
         return DataPoint(data_point_idx,
-                         state=(nodes, edges_grouped_by_label, root, context),
-                         state_tf_gnn=(nodes, edges[:,0], edges[:,1], edge_labels, root, context),
+                         graph = (nodes, edges, edge_labels, edges_offset),
+                         context = context,
+                         root = root,
                          action=(tactic_index, args),
                          state_text=state_text,
                          action_base_text=action_base_text,
@@ -427,12 +428,10 @@ class Data2():
         return self.select_data_points(split_fun=lambda x: def_hash_split(x, self.__split, self.__split_random_seed), label=2)
 
 
-
-    def step_state(self, data_point_idx: int, tf_gnn=False):
-        if tf_gnn:
-            return self.get_proof_step(data_point_idx, skip_text=True).state_tf_gnn
-        else:
-            return self.get_proof_step(data_point_idx, skip_text=True).state
+    # REFACTOR CLIENTS
+    def step_state(self, data_point_idx: int):
+        proof_step = self.get_proof_step(data_point_idx, skip_text=True)
+        return (proof_step.graph, proof_step.root, proof_step.context)
 
     def step_state_text(self, data_point_idx: int):
         return self.get_proof_step(data_point_idx).state_text
@@ -444,7 +443,7 @@ class Data2():
     def step_label(self, data_point_idx):
         return self.get_proof_step(data_point_idx, skip_text=True).action
 
-    def def_cluster_subgraph(self, cluster_idx, tf_gnn=False, max_arg_size=None):
+    def def_cluster_subgraph(self, cluster_idx,  max_arg_size=None):
         if max_arg_size is None:
             max_arg_size = self.__max_subgraph_size
 
@@ -452,14 +451,10 @@ class Data2():
 
         res = get_subgraph_online(self.__c_data_online, self.__def_idx_to_node[def_cluster], self.__bfs_option, max_arg_size, False)
 
-        nodes, edges, edge_labels, edges_offset, global_visited, _, _, _, _ = res
-        edges_grouped_by_label = np.split(edges, edges_offset)
+        nodes, edges, edge_labels, edges_offset, _ , _, _, _, _ = res
 
-        if tf_gnn:
-            return (nodes, edges[:, 0], edges[:, 1], edge_labels, len(def_cluster))
-        else:
-            return (nodes, edges_grouped_by_label, len(def_cluster))
-
+        graph = nodes, edges, edge_labels, edges_offset
+        return (graph, len(def_cluster))
 
 
 
@@ -532,24 +527,19 @@ class DataServer:
 
 
         self.__cluster_subgraphs = None
-        self.__cluster_subgraphs_tf_gnn = None
 
     def data_point(self, proof_step_idx):
         return self.__online_data.get_proof_step(proof_step_idx)
 
 
 
-    def data_train(self, shuffled=False, tf_gnn=False, as_text=False):
+    def data_train(self, shuffled=False,  as_text=False):
         """
         returns a stream of training data, optionally shuffled
         with the default format (state, action) where
 
-        state = (node_labels, edges_grouped_by_label, root, context)
+        state = (graph, root, context)
         action = (tactic_id, argument_list_of_context_indices, mask of argument list)
-
-        with option tf_gnn
-        instead of edges_grouped_by_label you get edges in the format
-        (sources, targets, classes)
 
         with option as_text
         returns state as a state_text (python bytes)
@@ -570,13 +560,13 @@ class DataServer:
                             lambda x: x)
         else:
             return Iterator(shuffled_copy,
-                            functools.partial(data.step_state, tf_gnn=tf_gnn),
+                            functools.partial(data.step_state),
                             functools.partial(data.step_label),
                             lambda x: x)
 
 
 
-    def data_valid(self, tf_gnn=False, as_text=False):
+    def data_valid(self, as_text=False):
         """
         returns a stream of validation data in the same format as  data_train
         see doc_string for data_train for the format
@@ -591,13 +581,13 @@ class DataServer:
                             lambda x: x)
         else:
             return Iterator(data.data_valid(),
-                            functools.partial(data.step_state, tf_gnn=tf_gnn),
+                            functools.partial(data.step_state),
                             functools.partial(data.step_label),
                             lambda x: x)
 
 
 
-    def def_cluster_subgraph(self, cluster_idx, tf_gnn):
+    def def_cluster_subgraph(self, cluster_idx):
         """
         returns a definition cluster with cluster_idx
         in the same format as def_class_subgraph (see docstring there)
@@ -605,11 +595,10 @@ class DataServer:
         but also an integer K that denotes the number of definitions in this cluster
         the entry points to the definition nodes are the first K in the list of returned nodes
         """
-        data = self.__online_data
-        return data.def_cluster_subgraph(cluster_idx, tf_gnn=tf_gnn)
+        return self.__online_data.def_cluster_subgraph(cluster_idx)
 
 
-    def def_cluster_subgraphs(self, tf_gnn):
+    def def_cluster_subgraphs(self):
         """
         returns a list of subgraphs for definition clusters
         in the same format as def_class_subgraph (see docstring there)
@@ -619,18 +608,11 @@ class DataServer:
 
         """
         print(f"LOADING | requested {self.graph_constants().cluster_subgraphs_num}")
-        if tf_gnn:
-            if self.__cluster_subgraphs_tf_gnn is None:
-                self.__cluster_subgraphs_tf_gnn = []
-                for idx in tqdm.tqdm(range(self.graph_constants().cluster_subgraphs_num)):
-                    self.__cluster_subgraphs_tf_gnn.append(self.def_cluster_subgraph(idx, tf_gnn))
-            return self.__cluster_subgraphs_tf_gnn
-        else:
-            if self.__cluster_subgraphs is None:
-                self.__cluster_subgraphs = []
-                for idx in tqdm.tqdm(range(self.graph_constants().cluster_subgraphs_num)):
-                    self.__cluster_subgraphs.append(self.def_cluster_subgraph(idx, tf_gnn))
-            return self.__cluster_subgraphs
+        if self.__cluster_subgraphs is None:
+            self.__cluster_subgraphs = []
+            for idx in tqdm.tqdm(range(self.graph_constants().cluster_subgraphs_num)):
+                self.__cluster_subgraphs.append(self.def_cluster_subgraph(idx))
+        return self.__cluster_subgraphs
 
 
     def graph_constants(self):

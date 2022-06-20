@@ -108,22 +108,6 @@ void log_level(
 }
 
 
-void log_level(const std::vector<c_FileGraph>& graph,
-		 const int msg_level) {
-    size_t counter_nodes {0};
-    size_t counter_edges {0};
-    for (const auto& file_graph: graph) {
-	counter_nodes += file_graph.nodes.size();
-	for (const auto& link: file_graph.links) {
-	    counter_edges += link.size();
-	}
-    }
-    log_level("total nodes " + std::to_string(counter_nodes), msg_level);
-    log_level("total edges " + std::to_string(counter_edges), msg_level);
-}
-
-
-
 
 template <typename T1, typename T2>
 void log_level(std::map<T1, T2> map_object,
@@ -204,6 +188,7 @@ FILE *fopen_safe(const std::string &fname, const std::string &mode) {
     FILE *pFile = fopen(fname.c_str(), mode.c_str());
     if (pFile == nullptr) {
 	log_critical("error opening file " + fname);
+	throw std::runtime_error("error opening file " + fname);
     }
     return pFile;
 }
@@ -223,24 +208,18 @@ public:
 	auto filed = fileno(file);
 
 	file_size  = std::filesystem::file_size(fname);
-	//log_debug("file_size is " + std::to_string(file_size));
-	//log_debug("mmaping the file " + fname);
 	ptr = (char *) mmap(NULL, file_size, PROT_READ, MAP_PRIVATE, filed, 0);
-	//log_debug("mmap call returned " + fname);
 
 	if (ptr == MAP_FAILED) {
-	    throw std::runtime_error("mapping of " + fname + " of size " + std::to_string(file_size) + " failed");
 	    log_critical("mapping of " + fname + " of size " + std::to_string(file_size) + " failed");
+	    throw std::runtime_error("mapping of " + fname + " of size " + std::to_string(file_size) + " failed");
 	}
 	auto array_ptr = kj::ArrayPtr<const capnp::word>( reinterpret_cast<capnp::word*>(ptr),
 							  file_size / sizeof(capnp::word));
 	msg = new capnp::FlatArrayMessageReader(array_ptr,  capnp::ReaderOptions{SIZE_MAX});
-	//log_debug("finished constructor of MMapReader " + fname);
     }
     ~MMapFileMessageReader() {
-	//log_debug("started destructor of MMapReader " + fname);
 	auto err = munmap((void *) ptr, file_size);
-	//log_debug("munamp finished " + fname);
 	if (err != 0) {
 	    log_critical("unmapping of " + fname + " of size " + std::to_string(file_size) + " failed in the destructor of MMapFileMessageReader");
 	}
@@ -308,6 +287,14 @@ public:
 std::vector<std::vector<size_t>> get_tasks(
     unsigned int num_proc,
     const std::vector<std::string> &fnames) {
+    /* this function is convenient to split
+     a list of files into num_proc buckets
+     by sorting file sizes in decreasing order
+     and then placing next file to the minimum total
+     size bucket
+
+     currently is not used but may be suitable if go on multithreaded mode
+    */
 
     std::vector<std::pair<size_t, size_t>> f_sizes;
     for (size_t file_idx = 0; file_idx < fnames.size(); ++file_idx) {
@@ -335,54 +322,26 @@ std::vector<std::vector<size_t>> get_tasks(
 
 
 
-std::vector<c_NodeIndex> get_labels_over_hashes(
-    const std::unordered_map<c_NodeHash, c_NodeLabel> &encode_table,
-    const std::vector<c_NodeHash> &node_labels,
-    const std::vector<c_NodeLabel> &eval_label_to_train_label) {
-
-    std::vector<c_NodeIndex> labels_over_hashes(node_labels.size());
-
-    if (eval_label_to_train_label.size() == 0) {
-    std::transform(node_labels.begin(),   node_labels.end(),
-		   labels_over_hashes.begin(),
-		   [&encode_table](auto label) {
-		       return encode_table.at(label);
-		   });
-    } else {
-    std::transform(node_labels.begin(),   node_labels.end(),
-		   labels_over_hashes.begin(),
-		   [&encode_table, &eval_label_to_train_label](auto label) {
-		       return eval_label_to_train_label.at(encode_table.at(label));
-		   });
-
-    }
-    return labels_over_hashes;
-}
-
-
 
 class FileTable {
+    /*
+      This class handles indexes a list of filenames and provides
+      forward and reverse map
+     */
     const std::vector<std::string> _fnames;
     const std::string data_dir;
     std::unordered_map<std::string, c_FileIndex> i_fnames;
 
 private:
     std::string convert(const std::string dep_fname) const {
-	std::string new_dep_fname = dep_fname;
-
-	//if (dep_fname.size() > 4 &&
-	//    dep_fname.substr(dep_fname.size() - 4, 4) == ".bin") {
-	//    new_dep_fname = dep_fname.substr(0, dep_fname.size() - 4) + ".binx";
-	//}
-
+	// take care of absoluted dependencies
 	std::string result;
-	if (new_dep_fname.size() > 0 && new_dep_fname[0] == '/') {
-	    result = new_dep_fname;
+	if (dep_fname.size() > 0 && dep_fname[0] == '/') {
+	    result = dep_fname;
 	} else {
-	    result = data_dir + "/" + new_dep_fname;
+	    result = data_dir + "/" + dep_fname;
 	}
-	log_debug("original dep name " + dep_fname);
-	log_debug("converted file name " + result);
+	log_debug("original dep name " + dep_fname + " converted to " + result);
 	return result;
     }
 
@@ -396,12 +355,14 @@ public:
 	    log_debug("index " + std::to_string(i) + " file " + _fnames[i]);
 	}
 	if (i_fnames.size() != _fnames.size()) {
-	    std::cerr << "WARNING: repeating filenames, there are  "
-		      << i_fnames.size() << " unique names in the provided list of "
-		      << _fnames.size() << " names" << std::endl;
+	    log_critical("error indexing file list: duplicate names detected");
+	    throw std::runtime_error("error indexing file list: duplicate names detected");
 	}
     }
     c_FileIndex index(const std::string fname) const {
+	/*
+	  maps fname to index
+	 */
 	auto converted_name = FileTable::convert(fname);
 	if (i_fnames.find(converted_name) == i_fnames.end()) {
 	    log_critical("WARNING! " + converted_name + " not found");
@@ -412,6 +373,9 @@ public:
     }
 
     std::string fname(const c_FileIndex file_idx) const {
+	/*
+	  maps index to fname
+	 */
 	return _fnames.at(file_idx);
     }
     std::vector<std::string> fnames() const {
@@ -427,26 +391,28 @@ public:
 
 
 const c_ConflateLabels build_edge_conflate_map() {
-    const auto edge_labels = capnp::Schema::from<EdgeClassification>();
-    const size_t edge_labels_size = edge_labels.getEnumerants().size();
-    std::vector<size_t> conflate_map(edge_labels_size, static_cast<size_t>(-1));
+    // conflation map: Edge Classifications  --> Edge Labels
 
-    size_t conf_idx = 0;
+    const auto edge_classes = capnp::Schema::from<EdgeClassification>();
+    const size_t edge_classes_size = edge_classes.getEnumerants().size();
+    std::vector<size_t> conflate_map(edge_classes_size, static_cast<size_t>(-1));
+
+    size_t edge_label = 0;
 
     for (const auto& e: *CONFLATABLE_EDGES) {
 	const auto group = e.getConflatable();
 	for (const auto &x : group) {
-	  conflate_map[static_cast<size_t>(x)] = conf_idx;
+	  conflate_map[static_cast<size_t>(x)] = edge_label;
 	}
-	++conf_idx;
+	++edge_label;
     }
 
-    for (size_t edge_idx = 0; edge_idx < edge_labels_size; ++edge_idx) {
-	if (conflate_map[edge_idx] == static_cast<size_t>(-1)) {
-	conflate_map[edge_idx] = conf_idx++;
+    for (size_t edge_class = 0; edge_class < edge_classes_size; ++edge_class) {
+	if (conflate_map[edge_class] == static_cast<size_t>(-1)) {
+	conflate_map[edge_class] = edge_label++;
       }
     }
-    return c_ConflateLabels {conflate_map, conf_idx};
+    return c_ConflateLabels {conflate_map, edge_label};
 }
 
 
@@ -455,24 +421,12 @@ const c_ConflateLabels build_edge_conflate_map() {
 /* --------------------------------------------------------------------- */
 
 
-void encode_hashes(const  std::map<c_NodeHash, c_GlobalNode> &hash_to_node,
-		   std::unordered_map<c_NodeHash, c_NodeLabel> &hash_to_node_label,
-		   std::vector<c_NodeHash> &node_label_to_hash) {
-    for (const auto & [hash, node]: hash_to_node) {
-	if (hash_to_node_label.find(hash) == hash_to_node_label.end()) {
-	    hash_to_node_label[hash] = node_label_to_hash.size();
-	    node_label_to_hash.emplace_back(hash);
-	}
-    }
-
-}
-
-
-
-
 std::vector<c_FileIndex> build_dependencies(
     const ::capnp::List<::capnp::Text, ::capnp::Kind::BLOB>::Reader  *dependencies,
     const FileTable & file_table) {
+    /*
+      dep_local_to_global[file_i] is the vector of absolute file indices referenced by file_i
+     */
 
     std::vector<c_FileIndex> dep_local_to_global;
     for (auto const &fname: *dependencies) {
@@ -483,58 +437,12 @@ std::vector<c_FileIndex> build_dependencies(
 
 
 
-
-void check_adjacency(
-    const std::vector<c_FileGraph> &global_graph) {
-
-    log_info("pass check_adjacency: checking adjacency list counts... ");
-
-    size_t total_edges = 0;
-    size_t total_nodes = 0;
-    for (size_t file_idx = 0; file_idx < global_graph.size(); ++file_idx) {
-	total_nodes += global_graph[file_idx].links.size();
-	for (size_t node = 0; node < global_graph[file_idx].links.size(); ++node) {
-	    total_edges += global_graph[file_idx].links[node].size();
-	}
-    }
-
-    log_info("nodes " + std::to_string(total_nodes));
-    log_info("edges " + std::to_string(total_edges));
-}
-
-void check_cross_edges(
-    std::vector<c_FileGraph> &global_graph,
-    bool debug_option) {
-
-    log_info("pass check_cross_edges: cross edges count by edge type, target type: ");
-
-    std::map<std::pair<c_EdgeLabel, c_NodePrimitive>, int> counter_cross_edges;
-
-    for (size_t file_idx = 0; file_idx < global_graph.size(); ++file_idx) {
-	for (size_t source = 0; source < global_graph[file_idx].links.size();
-	     ++source) {
-	    for (auto const &edge : global_graph[file_idx].links[source]) {
-		if (edge.target.file_idx != c_FileIndex(file_idx)) {
-		    auto target_c =
-			global_graph[edge.target.file_idx].nodes[edge.target.node_idx].label;
-		    counter_cross_edges[std::make_pair(edge.sort, target_c)] += 1;
-		}
-	    }
-	}
-    }
-
-    if (debug_option) {
-	for (auto [k, v] : counter_cross_edges) {
-	    log_debug(std::to_string(k.first) + " " + std::to_string(k.second) + " " +
-		  std::to_string(v));
-	}
-    }
-}
-
-
 std::vector<c_GlobalNode> build_context(
     c_FileIndex file_idx,
     const ::capnp::List<::uint32_t, ::capnp::Kind::PRIMITIVE>::Reader *context_obj) {
+    /*
+      reads capnp context and returns it as STL vector
+     */
     std::vector<c_GlobalNode> context;
     for (const auto &ctxt_node_idx : *context_obj) {
 	context.emplace_back(c_GlobalNode{file_idx, ctxt_node_idx});
@@ -547,6 +455,10 @@ std::vector<c_GlobalNode> build_context(
 std::vector<c_GlobalNode> build_tactic_args(
     const ::capnp::List<Argument, capnp::Kind::STRUCT>::Reader tactic_args_obj,
     const std::vector<c_FileIndex> &dep_local_to_global) {
+    /*
+      reads capnp Argument and returns vector of GlobalNode as arguments
+      use sentinels for not found nodes
+     */
     std::vector<c_GlobalNode> tactic_args;
     for (const auto &obj_arg : tactic_args_obj) {
 	if (obj_arg.which() == Argument::UNRESOLVABLE) {
@@ -573,98 +485,6 @@ std::vector<c_GlobalNode> build_tactic_args(
 }
 
 
-
-
-
-
-c_ProofStep build_proof_step_v9(
-    c_NodeHash def_hash,
-    c_NodeHash def_hash_for_split,
-    c_StepIndex step_idx,
-    const Tactic::Reader &tactic,
-    const Outcome::Reader &outcome,
-    const std::vector<c_FileIndex> &dep_local_to_global
-    ) {
-    auto state = outcome.getBefore();
-    auto local_root_idx = state.getRoot();
-    auto context_obj = state.getContext();
-    auto context = build_context(dep_local_to_global[0], &context_obj);
-    auto state_text = state.getText();
-    auto tactic_hash = tactic.getIdent();
-    auto tactic_args_obj = outcome.getTacticArguments();
-    auto tactic_args = build_tactic_args(tactic_args_obj,
-					 dep_local_to_global);
-    auto tactic_text = tactic.getText();
-    auto tactic_base_text = tactic.getBaseText();
-    auto tactic_interm_text = tactic.getIntermText();
-    return c_ProofStep{c_GlobalNode{dep_local_to_global[0], local_root_idx},
-	    def_hash,
-		step_idx,
-		std::move(context),
-		tactic_hash,
-		std::move(tactic_args),
-		std::move(state_text),
-		std::move(tactic_text),
-		std::move(tactic_base_text),
-		std::move(tactic_interm_text),
-		def_hash_for_split
-		};
-}
-
-
-
-
-void get_flatten_proof_steps_index(
-    const std::vector<std::vector<c_ProofStep>> &global_proof_steps,
-    std::vector<std::pair<size_t, size_t>> &flatten_proof_steps_index) {
-
-    for (size_t file_idx = 0; file_idx < global_proof_steps.size(); ++file_idx) {
-	for (size_t file_step_idx = 0;
-	     file_step_idx < global_proof_steps[file_idx].size(); ++file_step_idx) {
-	    flatten_proof_steps_index.emplace_back(std::make_pair(file_idx, file_step_idx));
-	}
-    }
-}
-
-typedef std::unordered_map<c_GlobalNode, unsigned long long> DistanceMap;
-
-DistanceMap forward_closure_distance(
-    const std::vector<c_FileGraph>&  global_graph,
-    const c_GlobalNode source,
-    const c_NodePrimitive stop_label,
-    const c_EdgeLabel stop_edge_label) {
-
-    // forward closure with bfs and distance; don't go beyond stop_label
-
-    std::queue<c_GlobalNode> q;
-    DistanceMap visited;
-
-    visited[source] = 0;
-    q.push(source);
-
-    while (q.size() != 0) {
-	auto node = q.front();	q.pop();
-	for (auto edge: global_graph[node.file_idx].links[node.node_idx]) {
-	    if (edge.sort != stop_edge_label) {
-		auto other = edge.target;
-		auto other_label = global_graph[other.file_idx].nodes[other.node_idx].label;
-
-		if (visited.find(other) == visited.end()) {
-		    visited[other] = visited[node] + 1;
-		    if (other_label != stop_label) {
-			q.push(other);
-		    }
-		}
-	    }
-	}
-    }
-    return visited;
-}
-
-
-
-
-
 std::pair<std::vector<c_GlobalNode>, std::unordered_map<c_GlobalNode, size_t>*> mmaped_forward_closure(
     const std::vector<Graph::Reader>& graphs,
     const std::vector<c_GlobalNode> & roots,
@@ -675,20 +495,46 @@ std::pair<std::vector<c_GlobalNode>, std::unordered_map<c_GlobalNode, size_t>*> 
     const std::unordered_map<c_GlobalNode, c_NodeIndex>& def_node_to_idx,
     const std::vector<::capnp::List<::Graph::Node, ::capnp::Kind::STRUCT>::Reader>& global_nodes,
     const std::vector<::capnp::List<::Graph::EdgeTarget, ::capnp::Kind::STRUCT>::Reader>& global_edges)
+    /*
+      the core sampling function from the collection of graphs
+      represented by vector of capnp global node graph readers
+      with pre-dereferenced graph.nodes readers and graph.edges readers (speedup!)
+
+      roots is the list of entry points to instantiate forward closure
+
+      stop_edge_label specifies the label of edge that is not allowed to travel
+      (could generalize) to a set of such edge labels
+
+      bfs is the boolean flag for BFS expansion if true otherwise DFS expansion
+
+      rel_file_idx is the adjacency list of file dependencies as file indices
+
+      def_node_to_idx is an index of all special nodes on which to stop expansion
+      this set of special nodes is currently the set of definition nodes
+      but we can change that
+
+    */
 {
+    // this will contains the list of nodes on which expansion will be stopped
     std::vector<c_GlobalNode> shallow_deps;
 
+    // deque to server bfs or dfs expansion
     std::deque<c_GlobalNode> q;
-    // std::unordered_map<c_GlobalNode, size_t>* visited;
+
+    // to record the order in which nodes have been visited maintain the
+    // hash map from visited node to its time of visit
     auto visited = new std::unordered_map<c_GlobalNode, size_t>;
 
+    size_t visit_time = 0;
 
-    size_t counter = 0;
     for (const auto& root: roots) {
-	(*visited)[root] = counter++;
+	(*visited)[root] = visit_time++;
 	q.push_back(root);
     }
 
+    // standard bfs/dfs expansion using the hash map visited
+    // do not travel on stop_edge_label
+    // do not expand past the nodes from the list of def_node_to_idx (but include them to visited and to shallow deps)
     while (q.size() != 0 && visited->size() < max_subgraph_size) {
 	c_GlobalNode node_ptr;
 	if (bfs) {
@@ -709,7 +555,7 @@ std::pair<std::vector<c_GlobalNode>, std::unordered_map<c_GlobalNode, size_t>*> 
 		c_GlobalNode other {rel_file_idx.at(node_ptr.file_idx).at(target.getDepIndex()), target.getNodeIndex()};
 
 		if (visited->find(other) == visited->end()) {
-		    (*visited)[other] = counter++;
+		    (*visited)[other] = visit_time++;
 		    //if (global_nodes.at(other.file_idx)[other.node_idx].getLabel().which() != Graph::Node::Label::DEFINITION ) {
 		    if (def_node_to_idx.find(other) == def_node_to_idx.end()) {
 			q.push_back(other);
@@ -730,59 +576,16 @@ std::pair<std::vector<c_GlobalNode>, std::unordered_map<c_GlobalNode, size_t>*> 
     return std::make_pair(shallow_deps,  visited);
 }
 
-std::unordered_map<c_GlobalNode, size_t> forward_closure(
-    const std::vector<c_FileGraph>&  global_graph,
-    const std::vector<c_GlobalNode>& sources,
-    const c_NodePrimitive stop_node_label,
-    const c_EdgeLabel stop_edge_label,
-    const bool bfs,
-    const size_t max_subgraph_size) {
-
-    // forward closure with bfs and distance;
-    // do not expand after stop_node_label
-    // do not traverse stop_edge_label
-    // do not expand beyond max_subgraph_size
-
-    std::deque<c_GlobalNode> q;
-    std::unordered_map<c_GlobalNode, size_t> visited;
-
-    size_t counter = 0;
-    for (const auto& source: sources) {
-	visited[source] = counter++;
-	q.push_back(source);
-    }
-
-    while (q.size() != 0 && visited.size() < max_subgraph_size) {
-	c_GlobalNode node;
-	if (bfs) {
-	    node = q.front(); q.pop_front();
-	} else {
-	    node = q.back(); q.pop_back();
-	}
-	for (auto edge: global_graph[node.file_idx].links[node.node_idx]) {
-	    if (edge.sort != stop_edge_label) {
-		auto other = edge.target;
-		auto other_label = global_graph[other.file_idx].nodes[other.node_idx].label;
-
-		if (visited.find(other) == visited.end()) {
-		    visited[other] = counter++;
-		    if (other_label != stop_node_label) {
-			q.push_back(other);
-		    }
-		}
-	    }
-	    if (visited.size() == max_subgraph_size) {
-		break;
-	    }
-	}
-    }
-    return visited;
-}
 
 std::tuple< std::vector<c_NodeIndex>, std::vector<c_EdgeLabel>,
 	    std::vector<std::array<c_NodeIndex, 2>>>
 compute_offsets(const std::vector<std::vector<std::array<c_NodeIndex, 2>>>&
-		edges_split_by_label) {
+		edges_split_by_label)
+/*
+  this is a helper function to sort edges into buckets by their labels,
+  return concatenated (flattened) list of edges, and return offsets where labels start
+*/
+{
     std::vector<c_NodeIndex> edges_label_offsets;
     std::vector<c_EdgeLabel> edges_label_flat;
     std::vector<std::array<c_NodeIndex, 2>> edges_split_flat;
@@ -805,264 +608,15 @@ compute_offsets(const std::vector<std::vector<std::array<c_NodeIndex, 2>>>&
 }
 
 
-c_Tactics build_index_tactic_hashes(
-    const std::vector<std::vector<c_ProofStep>> &proof_steps) {
-
-    c_Tactics tactics;
-
-    tactics.max_tactic_args_size = 0;
-    for (const auto & file_proof_steps: proof_steps) {
-
-	for (const auto & proof_step: file_proof_steps) {
-	    tactics.hash_to_numargs[proof_step.tactic_hash] = proof_step.tactic_args.size();
-	    tactics.max_tactic_args_size = std::max(tactics.max_tactic_args_size, proof_step.tactic_args.size());
-	    tactics.hash_to_string[proof_step.tactic_hash] = proof_step.tactic_base_text;
-	}
-    }
-    c_TacticIndex tactic_idx = 0;
-    for (const auto& [tactic_hash, num_args]: tactics.hash_to_numargs) {
-	tactics.index_to_hash.emplace_back(tactic_hash);
-	tactics.hash_to_index[tactic_hash] = tactic_idx++;
-    }
-    return tactics;
-}
-
-
-void init_hash_to_node_label(
-    std::unordered_map<c_NodeHash, c_NodeLabel> &hash_to_node_label,
-    std::vector<c_NodeHash> &node_label_to_hash,
-    std::map<c_NodeHash, std::string> &hash_to_name) {
-
-    c_NodeLabel label = 0;
-
-    auto basic_classes = capnp::Schema::from<Graph::Node::Label>().getFields();
-
-    while (label < basic_classes.size()) {
-	hash_to_node_label[label] = label;
-	node_label_to_hash.emplace_back(label);
-	hash_to_name[label] = basic_classes[label].getProto().getName();
-	label++;
-    }
-}
-
-
-
-c_FileGraph read_graph(const Graph::Reader * graph,
-		       const std::vector<c_FileIndex> & dep_local_to_global,
-		       const c_FileIndex file_idx,
-		       const bool ignore_def_hash) {
-    const auto nodes = graph->getNodes();
-    c_FileGraph file_graph;
-
-    // get nodes and tactical definitions
-    for (c_NodeIndex node_idx = 0; node_idx < nodes.size(); ++node_idx) {
-	auto node_reader = nodes[node_idx];
-	c_NodePrimitive label = static_cast<c_NodePrimitive>(node_reader.getLabel().which());
-	c_ChildrenBegin children_begin = node_reader.getChildrenIndex();
-	c_ChildrenCount children_count = node_reader.getChildrenCount();
-
-	file_graph.nodes.emplace_back(c_Node {label, children_count, children_begin });
-
-	if (label == NodeLabelDefinition) {
-
-	    file_graph.def_node_to_idx[node_idx] = file_graph.defs.size();
-	    log_debug("read graph file " + std::to_string(file_idx) + " def_node_to_idx inserting "  + std::to_string(node_idx));
-	    uint64_t def_hash;
-	    if (ignore_def_hash) {
-		def_hash = base_node_label_num  +  uint64_of_node(c_GlobalNode{file_idx, node_idx});
-	    } else {
-		def_hash = node_reader.getLabel().getDefinition().getHash();
-	    }
-	    uint64_t def_hash_for_split = node_reader.getLabel().getDefinition().getHash();
-	    auto def_name = node_reader.getLabel().getDefinition().getName();
-
-	    std::vector<c_ProofStep> proof_steps;
-	    auto def = node_reader.getLabel().getDefinition();
-
-
-	    if (def.which() == Definition::TACTICAL_CONSTANT) {
-		auto def_proof = def.getTacticalConstant();
-		for (const auto &step_obj: def_proof) {
-		    auto tactic = step_obj.getTactic();
-		    if (tactic.isKnown()) {
-			for (const auto &outcome: step_obj.getOutcomes()) {
-			    proof_steps.emplace_back(build_proof_step_v9(
-							 def_hash,
-							 def_hash_for_split,
-							 proof_steps.size(),
-							 tactic.getKnown(),
-							 outcome,
-							 dep_local_to_global
-							 ));
-			}
-		    }
-		}
-	    }
-
-
-	    file_graph.defs.emplace_back(
-		c_Def {node_idx, def_hash, def_name, std::move(proof_steps)});
-
-
-	}
-    }
-
-    // get edges
-
-    auto edges = graph->getEdges();
-    file_graph.links = std::vector<std::vector<c_Link>> (file_graph.nodes.size());
-
-    for (size_t node_idx = 0; node_idx < file_graph.links.size(); ++node_idx) {
-	c_Node node {file_graph.nodes[node_idx]};
-	for (size_t edge_idx = node.children_begin;
-	     edge_idx < node.children_begin + node.children_count && edge_idx < edges.size();
-	     ++edge_idx) {
-	    Graph::EdgeTarget::Reader edge = edges[edge_idx];
-	    c_EdgeLabel e_sort = static_cast<c_EdgeLabel>(edge.getLabel());
-	    auto target = edge.getTarget();
-	    c_FileIndex depIndex = target.getDepIndex();
-	    c_NodeIndex target_node_idx = target.getNodeIndex();
-
-	    if (dep_local_to_global.at(depIndex) != __MISSING_FILE) {
-		file_graph.links[node_idx].emplace_back(c_Link{e_sort, {
-			    dep_local_to_global[depIndex], target_node_idx}});
-	    } else {
-		    log_critical("ERROR: file index " + std::to_string(dep_local_to_global[0]) + " points to missing file " +
-				 std::to_string(depIndex) + " " + std::to_string(target_node_idx) + " ");
-	    }
-	}
-    }
-
-    return file_graph;
-
-}
-
-
-std::vector<c_FileGraph> pass_graphs(
-    unsigned int num_proc,
-    const std::vector<std::vector<size_t>>& tasks,
-    const FileTable& file_table,
-    const bool ignore_def_hash) {
-
-
-    std::vector<c_FileGraph> file_graphs(file_table.fnames().size());
-
-
-    auto process_task = [&file_table, &file_graphs, &ignore_def_hash](const std::vector<size_t> &task) {
-		       for (const auto file_idx: task) {
-			   FileMessageReader pf(file_table.fname(file_idx));
-			   const auto dataset  = pf.msg.getRoot<Dataset>();
-			   const auto graph = dataset.getGraph();
-			   const auto dependencies = dataset.getDependencies();
-			   const auto dep_local_to_global = build_dependencies(&dependencies, file_table);
-
-			   file_graphs[file_idx] = read_graph(&graph, dep_local_to_global, file_idx, ignore_def_hash);
-
-			   //for (const auto &node_idx: dataset.getDefinitions()) {
-			   //    definitions.insert(node_idx);
-			   //}
-
-			   std::set<c_NodeIndex> definitions;
-			   auto node_idx = dataset.getRepresentative();
-			   const auto nodes = graph.getNodes();
-			   const auto nodes_size = nodes.size();
-			   while (node_idx < nodes_size) {
-			       definitions.insert(node_idx);
-			       log_debug("file " + std::to_string(file_idx) + " inserting definition " + std::to_string(node_idx));
-			       auto other_idx = nodes[node_idx].getLabel().getDefinition().getPrevious();
-			       if (other_idx == node_idx) {
-				   break;
-			       }
-			       node_idx = other_idx;
-			   }
-
-			   file_graphs[file_idx].definitions = definitions;
-
-		       }
-		   };
-
-    std::vector<std::thread> my_threads(num_proc);
-
-   for (unsigned int i = 0; i < num_proc; ++i) {
-	my_threads[i] = std::thread {process_task, tasks[i]};
-    }
-
-    for (unsigned int i = 0; i < num_proc; ++i) {
-	my_threads[i].join();
-    }
-    return file_graphs;
-}
-
-
-
-void update_def_table(
-    const std::vector<c_FileGraph> &global_graph,
-    const std::vector<std::vector<size_t>> tasks,
-    c_DefTable &def_table) {
-
-    for (const auto& task: tasks) {
-	for (c_FileIndex file_idx: task) {
-	    for (c_DefIndex def_idx = 0; def_idx < global_graph[file_idx].defs.size(); ++def_idx) {
-		c_NodeIndex node_idx = global_graph[file_idx].defs[def_idx].node;
-		log_debug("inspecting def at node_idx " + std::to_string(node_idx));
-		if (global_graph[file_idx].definitions.find(node_idx) !=
-		    global_graph[file_idx].definitions.end()) {
-		    log_debug("def node is in definitions " + std::to_string(node_idx));
-		    c_GlobalNode global_node {file_idx, global_graph[file_idx].defs[def_idx].node};
-
-		    c_NodeHash def_hash = global_graph[file_idx].defs[def_idx].hash;
-		    if (def_table.hash_to_node.find(def_hash) ==
-			def_table.hash_to_node.end()) {
-			log_debug("inserting new definition with hash " + std::to_string(def_hash) +
-		      + " with name " + global_graph[file_idx].defs[def_idx].name);
-		    }
-
-		    def_table.hash_to_node[def_hash] = global_node;
-		    def_table.hash_to_name[def_hash] = global_graph[file_idx].defs[def_idx].name;
-		    def_table.node_to_hash[global_node] = def_hash;
-		}
-	    }
-	}
-    }
-
-    def_table.available_def_hashes.clear();
-    for (const auto & [hash, node]: def_table.hash_to_node) {
-	def_table.available_def_hashes.emplace_back(hash);
-    }
-
-   encode_hashes(def_table.hash_to_node, def_table.hash_to_node_label, def_table.node_label_to_hash);
-   def_table.available_def_classes = get_labels_over_hashes(def_table.hash_to_node_label, def_table.available_def_hashes, std::vector<c_NodeLabel> {});
-   log_debug("now we have " + std::to_string(def_table.available_def_classes.size()));
-}
-
-std::vector<std::vector<c_ProofStep>> make_global_proof_steps(
-    const std::vector<c_FileGraph> &global_graph,
-    const std::vector<std::vector<size_t>> &tasks) {
-
-    std::vector<std::vector<c_ProofStep>> global_proof_steps(global_graph.size());
-
-
-    for (const auto& task: tasks) {
-	for (c_FileIndex file_idx: task) {
-		// we try to collect proof steps in V9 from all definitions
-		// we don't care if those definitions are tactical or not
-		// if those definitions don't have proof steps they have empty set of proof_steps
-	    for (const c_NodeIndex node_idx: global_graph[file_idx].definitions) {
-		//log_debug("node_idx is " + std::to_string(node_idx));
-		size_t def_idx = global_graph[file_idx].def_node_to_idx.at(node_idx);
-		global_proof_steps[file_idx].insert(global_proof_steps[file_idx].end(),
-						global_graph[file_idx].defs[def_idx].proof_steps.begin(),
-						global_graph[file_idx].defs[def_idx].proof_steps.end());
-	    }
-	}
-    }
-    return global_proof_steps;
-}
-
 
 void send_response(const std::vector<std::vector<std::pair<uint32_t,uint32_t>>>& predictions,
 		   const std::vector<double>& confidences,
-		   const int fd) {
+		   const int fd)
+/*
+   builds capnp message from list of predictions and list of confidences and sends it to file descriptor fd
+*/
+
+{
     ::capnp::MallocMessageBuilder message;
     auto response = message.initRoot<PredictionProtocol::Response>();
     auto capnp_prediction = response.initPrediction(predictions.size());
@@ -1070,17 +624,18 @@ void send_response(const std::vector<std::vector<std::pair<uint32_t,uint32_t>>>&
 	const auto &prediction = predictions.at(pred_idx);
 	auto tactic = capnp_prediction[pred_idx].initTactic();
 	capnp_prediction[pred_idx].setConfidence(confidences.at(pred_idx));
+	// tactic
 	if (prediction.size() > 0) {
 	    uint32_t hi = prediction.at(0).first;
 	    uint32_t lo = prediction.at(0).second;
 	    tactic.setIdent(uint64_t(hi) << 32 | uint64_t(lo));
 	} else {
-	    log_critical("ERROR: prediction is empty");
+	    log_critical("error:  prediction has zero size, but the hash of tactic hash must be present ");
+	    throw std::runtime_error("error:  prediction has zero size, but the hash of tactic hash must be present ");
 	}
+	// arguments
 	if (prediction.size() > 1) {
-
 	     auto arguments = capnp_prediction[pred_idx].initArguments(prediction.size() - 1);
-
 	    for (size_t arg_idx = 1; arg_idx < prediction.size(); ++arg_idx) {
 		auto term = arguments[arg_idx - 1].initTerm();
 		term.setDepIndex(prediction.at(arg_idx).first);
@@ -1088,9 +643,7 @@ void send_response(const std::vector<std::vector<std::pair<uint32_t,uint32_t>>>&
 	    }
 	}
     }
-    log_debug("writing message to fd " + std::to_string(fd));
     writePackedMessageToFd(fd, message);
-    log_debug("writing message to fd finished");
 }
 
 
@@ -1098,25 +651,35 @@ static PyObject * c_encode_prediction_online(PyObject *self, PyObject *args) {
     PyObject * caps_data_online;
     PyListObject * pylist_actions;
     PyArrayObject * pynp_confidences;
-    PyArrayObject * pynp_context;
+    PyArrayObject * pynp_local_context;
     int fd;
-    PyObject * pylist_names;
+    PyObject * py_defnames;
+    /*
+      pylist_actions: list of predictions
+
+      each prediction has format of numpy vector of shape=(n,2), of dtype=np.uint32 with the content like
+
+      [(tac_hash, tac_hash), (1, global_arg), (0,local_arg), (1, global_arg)
+
+      where local_arg is index into the local context and global_arg is index into the global context
+    */
+
 
     if (!PyArg_ParseTuple(args, "O!O!O!O!iO!",
 			  &PyCapsule_Type, &caps_data_online,
 			  &PyList_Type, &pylist_actions,
 			  &PyArray_Type, &pynp_confidences,
-			  &PyArray_Type, &pynp_context,
+			  &PyArray_Type, &pynp_local_context,
 			  &fd,
-			  &PyList_Type, &pylist_names)) {
+			  &PyList_Type, &py_defnames)) {
 	return NULL;
     }
     try {
 	c_DataOnline * p_data_online = static_cast<c_DataOnline*>(PyCapsule_GetPointer(caps_data_online, __data_online_capsule_name));
 	std::vector<std::vector<std::pair<uint32_t, uint32_t>>> predictions = PyList2dArray_AsVectorVector_uint32_pair((PyObject*)pylist_actions);
 	std::vector<double> confidences = PyArray_AsVector_double(pynp_confidences);
-	std::vector<c_NodeIndex> context = PyArray_AsVector_uint32_t(pynp_context);
-	std::vector<std::string> def_names = PyListBytes_AsVectorString(pylist_names);
+	std::vector<c_NodeIndex> local_context = PyArray_AsVector_uint32_t(pynp_local_context);
+	std::vector<std::string> def_names = PyListBytes_AsVectorString(py_defnames);
 	log_info("received predictions of size " + std::to_string(predictions.size()));
 	std::vector<PyObject *> np_predictions_encoded;
 	std::vector<std::vector<std::pair<uint32_t, uint32_t>>> predictions_encoded;
@@ -1132,18 +695,19 @@ static PyObject * c_encode_prediction_online(PyObject *self, PyObject *args) {
 	    for (size_t arg_idx = 1; arg_idx < prediction.size(); ++arg_idx) {
 		auto pred_arg = prediction.at(arg_idx);
 		if (pred_arg.first == 0) {
-		    // local
-		    if (pred_arg.second < context.size()) {
+		    // local arg
+		    if (pred_arg.second < local_context.size()) {
 			prediction_encoded.emplace_back(
-			    std::pair<uint32_t, uint32_t>{0, context.at(pred_arg.second)});
+			    std::pair<uint32_t, uint32_t>{0, local_context.at(pred_arg.second)});
 		    } else {
-			log_critical("error: local context of size " + std::to_string(context.size()) + " is: ");
-			log_critical(context);
+			log_critical("error: local context of size " + std::to_string(local_context.size()) + " is: ");
+			log_critical(local_context);
 			log_critical("network prediction is (0," + std::to_string(pred_arg.second));
-			throw std::logic_error("local argument predicted by network is not in range(len(context))");
+			throw std::logic_error("local argument predicted by network is not in range(len(local_context))");
 		    }
 		} else if (pred_arg.first == 1) {
-		    // global
+		    // global arg
+		    // we send back the actual global node of the definition in position idx of the context
 		    const auto& eval_global_context = p_data_online->def_idx_to_node;
 		    if (pred_arg.second < p_data_online->def_idx_to_node.size()) {
 			log_debug("arg idx " + std::to_string(arg_idx - 1) + ", def idx " + std::to_string(pred_arg.second) +  "def name " + def_names.at(pred_arg.second));
@@ -1164,6 +728,9 @@ static PyObject * c_encode_prediction_online(PyObject *self, PyObject *args) {
 	    predictions_encoded.emplace_back(prediction_encoded);
 	    np_predictions_encoded.emplace_back(numpy_ndarray2d(prediction_encoded));
 	}
+	//
+	// TODO: refactor out send_response to be independent function called from Python
+	// using the PyList_FromVector(np_predictions_encoded) that we return
 	send_response(predictions_encoded, confidences, fd);
 
 	return Py_BuildValue("N",
@@ -1181,7 +748,9 @@ static PyObject * c_encode_prediction_online(PyObject *self, PyObject *args) {
 
 std::map<c_FileIndex, std::vector<c_FileIndex>> get_local_to_global_file_idx(    const std::string &data_dir,
 										 const std::vector<std::string> &fnames) {
-
+    /*
+      build the adjacency list of dependencies for the list of files
+     */
     std::map<c_FileIndex, std::vector<c_FileIndex>> global_dep_links {};
 
     FileTable file_table (fnames, data_dir);
@@ -1202,7 +771,6 @@ std::map<c_FileIndex, std::vector<c_FileIndex>> get_local_to_global_file_idx(   
 }
 
 
-
 /*-------------------------PYTHON API ----------------------------------- */
 
 
@@ -1211,6 +779,9 @@ static PyObject *c_get_file_dep(PyObject *self, PyObject *args) {
     if (!PyArg_ParseTuple(args, "S", &bytesObj_0)) {
 	return NULL;
     }
+    /*
+      given a filename in os.fsencode (bytes in python) return the list of filenames referenced by this file
+     */
     try {
 	auto fname = PyBytes_AsSTDString(bytesObj_0);
 
@@ -1227,9 +798,8 @@ static PyObject *c_get_file_dep(PyObject *self, PyObject *args) {
 
 
     }
-    catch (const std::invalid_argument &ia) {
-	log_critical("exception caught");
-	log_critical(ia.what());
+    catch (const std::exception &ia) {
+	log_critical("exception in loader.cpp c_get_file_dep: " + std::string(ia.what()));
 	PyErr_SetString(PyExc_TypeError, ia.what());
 	return NULL;
     }
@@ -1238,6 +808,10 @@ static PyObject *c_get_file_dep(PyObject *self, PyObject *args) {
 
 static PyObject *get_def(const Graph::Reader & graph,
 			 std::vector<c_NodeIndex> & def_nodes) {
+    /*
+      return hashes and names of list of definitions described by local node index in def_nodes
+      in a given capnp Graph reader graph
+     */
 
     std::sort(def_nodes.begin(), def_nodes.end());
 
@@ -1265,19 +839,26 @@ static PyObject *get_def(const Graph::Reader & graph,
 
 static PyObject *get_msg_def(capnp::FlatArrayMessageReader *msg,
 			     const std::string message_type, int restrict_to_spine) {
+    /*
+      this is a wrapper to describe definitions contained in capnp message
+      of type Dataset / PredictionProtocol::Request() / PredictionProtocol::checkAlignment
+     */
+
+    /* if boolean option restrict_to_spine then do not open sections using the traversing back mechanism
+       from the representative index
+    */
 
     std::vector<c_NodeIndex> def_nodes;
     const auto graph = (message_type == "dataset" ? msg->getRoot<Dataset>().getGraph() : (message_type == "request.initialize" ? msg->getRoot<PredictionProtocol::Request>().getInitialize().getGraph() : msg->getRoot<PredictionProtocol::Request>().getCheckAlignment().getGraph()));
     const auto definitions = (message_type == "dataset" ? msg->getRoot<Dataset>().getDefinitions() : (message_type == "request.initialize" ? msg->getRoot<PredictionProtocol::Request>().getInitialize().getDefinitions() :  msg->getRoot<PredictionProtocol::Request>().getInitialize().getDefinitions()));
 
     if (!restrict_to_spine) {
-	log_info("reading the definitions from message type " + message_type);
 	for (const auto &node_idx: definitions) {
 	    def_nodes.emplace_back(node_idx);
 	}
     } else {
 	if (message_type != "dataset") {
-	    throw std::invalid_argument("you have called get definitions with the message type that is not dataset");
+	    throw std::invalid_argument("restrict to spine is allowed only in dataset message type(otherwise represenative node doesn't exist)");
 	}
 	auto node_idx = msg->getRoot<Dataset>().getRepresentative();
 	auto nodes = graph.getNodes();
@@ -1285,11 +866,7 @@ static PyObject *get_msg_def(capnp::FlatArrayMessageReader *msg,
 	while (node_idx < nodes_size) {
 	    def_nodes.emplace_back(node_idx);
 	    auto other_idx = nodes[node_idx].getLabel().getDefinition().getPrevious();
-	    if (other_idx == node_idx) {
-		break;
-	    } else {
-		node_idx = other_idx;
-	    }
+	    node_idx = other_idx;
 	}
     }
     return get_def(graph, def_nodes);
@@ -1300,6 +877,10 @@ static PyObject *c_get_buf_def(PyObject *self, PyObject *args) {
     PyObject *buf_object;
     char * c_message_type;
     int restrict_to_spine {false};
+    /*
+      get definitions from an unpacked capnp message provided in byte buffer (python memory view object)
+      the memory view (or mmap) gives us the physical pointer to the buffer and no copy is necessary !
+     */
 
     if (!PyArg_ParseTuple(args, "Osp",
 			  &buf_object, &c_message_type, &restrict_to_spine)) {
@@ -1318,8 +899,9 @@ static PyObject *c_get_buf_def(PyObject *self, PyObject *args) {
 	auto result = get_msg_def(&msg, message_type, restrict_to_spine);
 	PyBuffer_Release(&view);
 	return result;
-    }  catch (const std::invalid_argument &ia) {
-	log_critical(ia.what());
+    }
+    catch (const std::exception &ia) {
+	log_critical("exception in loader.cpp c_get_buf_def: " + std::string(ia.what()));
 	PyErr_SetString(PyExc_TypeError, ia.what());
 	return NULL;
     }
@@ -1328,20 +910,16 @@ static PyObject *c_get_buf_def(PyObject *self, PyObject *args) {
 
 
 
-
-
-
-
 static PyObject *c_get_local_to_global_file_idx(PyObject *self, PyObject *args) {
-    PyObject *bytesObj_0;
-    PyObject *listObj;
+    PyObject *py_datadir_bytes;
+    PyObject *py_fnames_list_bytes;
 
-    if (!PyArg_ParseTuple(args, "SO!", &bytesObj_0,  &PyList_Type,  &listObj)) {
+    if (!PyArg_ParseTuple(args, "SO!", &py_datadir_bytes,  &PyList_Type,  &py_fnames_list_bytes)) {
 	return NULL;
     }
     try {
-	auto data_dir = PyBytes_AsSTDString(bytesObj_0);
-	auto fnames = PyListBytes_AsVectorString(listObj);
+	auto data_dir = PyBytes_AsSTDString(py_datadir_bytes);
+	auto fnames = PyListBytes_AsVectorString(py_fnames_list_bytes);
 	log_info("processing " + std::to_string(fnames.size()) + " files");
 	std::map<c_FileIndex, std::vector<c_FileIndex>> global_dep_links = get_local_to_global_file_idx(data_dir, fnames);
 
@@ -1352,9 +930,8 @@ static PyObject *c_get_local_to_global_file_idx(PyObject *self, PyObject *args) 
 
 	return PyList_FromVector(temp_result);
     }
-    catch (const std::invalid_argument &ia) {
-	log_critical("exception caught");
-	log_critical(ia.what());
+    catch (const std::exception &ia) {
+	log_critical("exception in loader.cpp c_get_local_to_global_file_idx: " + std::string(ia.what()));
 	PyErr_SetString(PyExc_TypeError, ia.what());
 	return NULL;
     }
@@ -1362,14 +939,21 @@ static PyObject *c_get_local_to_global_file_idx(PyObject *self, PyObject *args) 
 
 
 
-
 static PyObject *c_get_scc_components(PyObject *self, PyObject *args) {
-    PyObject *listObj;
-    if (!PyArg_ParseTuple(args, "O!", &PyList_Type,  &listObj)) {
+    // computes strongly connected components from provided
+    // adjacency list representation of directed graph
+    // at k-th position this list contains 1d np.array of dtype=np.uint64
+    // listing the target node indices from the source k
+
+    // returns a list of cluster of nodes topologically ordered
+    // (the nodes with no children are first)
+    PyObject *py_adjacency_list;
+
+    if (!PyArg_ParseTuple(args, "O!", &PyList_Type,  &py_adjacency_list)) {
 	return NULL;
     }
     try {
-	auto vectored_links = PyListArray_AsVectorVector_uint64_t(listObj);
+	auto vectored_links = PyListArray_AsVectorVector_uint64_t(py_adjacency_list);
 	std::map<uint64_t, std::vector<uint64_t>> mapped_links;
 	for (uint64_t idx = 0; idx < vectored_links.size(); ++idx) {
 	    mapped_links[idx] = vectored_links[idx];
@@ -1387,9 +971,9 @@ static PyObject *c_get_scc_components(PyObject *self, PyObject *args) {
 	}
 	return Py_BuildValue("N",PyList_FromVector(vect_component_to_nodes_numpy));
 
-    } catch (const std::invalid_argument &ia) {
-	log_critical("exception caught");
-	log_critical(ia.what());
+    }
+    catch (const std::exception &ia) {
+	log_critical("exception in loader.cpp c_get_local_to_global_file_idx: " + std::string(ia.what()));
 	PyErr_SetString(PyExc_TypeError, ia.what());
 	return NULL;
     }
@@ -1742,11 +1326,11 @@ static PyObject * c_data_online_extend(PyObject *self, PyObject *args) {
 
 
 static PyObject * c_build_data_online_from_buf(PyObject *self, PyObject *args) {
-    PyArrayObject * p_PyArray_def_idx_to_node;
+    PyArrayObject * p_PyArray_def_idx_to_node_32x2;
     PyArrayObject * p_PyArray_tactic_hashes;
     PyArrayObject * p_PyArray_tactic_indexes;
     if (!PyArg_ParseTuple(args, "O!O!O!",
-			  &PyArray_Type,  &p_PyArray_def_idx_to_node,
+			  &PyArray_Type,  &p_PyArray_def_idx_to_node_32x2,
 			  &PyArray_Type, &p_PyArray_tactic_hashes,
 			  &PyArray_Type, &p_PyArray_tactic_indexes)) {
 	return NULL;
@@ -1770,9 +1354,9 @@ static PyObject * c_build_data_online_from_buf(PyObject *self, PyObject *args) {
 	}
 
 	// DEF INDEX
-	auto def_idx_to_node_uint64_t = PyArray_AsVector_uint64_t(p_PyArray_def_idx_to_node);
-	for (const auto &x: def_idx_to_node_uint64_t) {
-	    c_GlobalNode node = node_of_uint64(x);
+	auto def_idx_to_node_uint32x2 = Py2dArray_AsVector_uint32_pair(p_PyArray_def_idx_to_node_32x2);
+	for (const auto &x: def_idx_to_node_uint32x2) {
+	    c_GlobalNode node {x.first, x.second};
 	    p_data_online->def_node_to_idx[node] = p_data_online->def_idx_to_node.size();
 	    p_data_online->def_idx_to_node.emplace_back(node);
 	}
@@ -1851,13 +1435,13 @@ static PyObject *c_get_def_deps_online(PyObject *self, PyObject *args) {
 
 static PyObject *c_get_subgraph_online(PyObject *self, PyObject *args) {
     PyObject *capsObj;
-    PyArrayObject *p_roots_uint64;
+    PyArrayObject *p_roots_uint32x2;
     int bfs_option {false};
     uint64_t max_subgraph_size;
     int with_node_counter {false};
 
     if (!PyArg_ParseTuple(args, "O!O!pKp", &PyCapsule_Type, &capsObj,
-			  &PyArray_Type, &p_roots_uint64,
+			  &PyArray_Type, &p_roots_uint32x2,
 			  &bfs_option, &max_subgraph_size, &with_node_counter)) {
 	return NULL;
     }
@@ -1878,8 +1462,8 @@ static PyObject *c_get_subgraph_online(PyObject *self, PyObject *args) {
 
 	std::vector<c_NodeIndex> local_roots;
 	std::vector<c_GlobalNode> roots;
-	for (const auto &e:  PyArray_AsVector_uint64_t(p_roots_uint64)) {
-	    auto this_node = node_of_uint64(e);
+	for (const auto &e:  Py2dArray_AsVector_uint32_pair(p_roots_uint32x2)) {
+	    auto this_node = c_GlobalNode {e.first, e.second};
 	    if (roots.size() > 0) {
 		if (roots.back().file_idx != this_node.file_idx) {
 		    throw std::invalid_argument(
@@ -2416,25 +2000,9 @@ static struct PyModuleDef graphmodule = {
 /* ---------------------------------------------------------------- */
 
 
-bool test() {
-
-    if (!test_uint64_of_node()) {
-	log_critical("uint64 test conversion failed");
-	return false;
-    }
-    return true;
-}
-
 PyMODINIT_FUNC PyInit_loader(void) {
 
     import_array();
-
-    if (!test()) {
-	PyErr_SetString(
-	    PyExc_AssertionError,
-	    "c-extension unit tests failed, report the bug and the conditions to reproduce");
-	return NULL;
-    }
 
     return PyModule_Create(&graphmodule);
 }

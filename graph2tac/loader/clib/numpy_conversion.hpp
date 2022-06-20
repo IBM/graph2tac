@@ -52,16 +52,6 @@ numpy_ndarray1d(const std::vector<T> &a) {
 
 
 
-static PyObject *
-numpy_ndarray1d_uint64_of_node(const std::vector<c_GlobalNode> &a) {
-  std::vector<uint64_t> temp(a.size());
-  for (size_t idx = 0; idx < a.size(); ++idx) {
-    temp[idx] = uint64_of_node(a[idx]);
-  }
-  return numpy_ndarray1d(temp);
-}
-
-
 
 template <typename T, size_t N>
 static PyObject *

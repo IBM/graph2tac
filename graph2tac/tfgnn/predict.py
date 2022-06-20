@@ -312,8 +312,9 @@ class Predict:
             return np.array([[]], dtype=np.uint32), np.array([0], dtype=np.float32)
 
         logits = tf.math.log_softmax(logits).numpy()
-        power = 1.0 + float(num_arguments)
-        expand_bound = int(total_expand_bound ** (1 / power))
+
+        expand_bound = int(total_expand_bound**(1/num_arguments))
+
         sorted_indices = np.argsort(-logits).astype(dtype=np.uint32)
         restricted_indices = sorted_indices[:, :expand_bound]
         arg_combinations = cartesian_product(*restricted_indices)
