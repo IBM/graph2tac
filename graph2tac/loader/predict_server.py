@@ -225,7 +225,6 @@ def process_alignment_request(
 
     unaligned_tactics = list(sorted(set(evaluation_tactic_hash_to_numargs.items())
                                     - set(network_tactic_hash_to_numargs.items())))
-    breakpoint()
     log_verbose("checkAlignment unaligned tactics: ", unaligned_tactics)
     return unaligned_tactics, unaligned_nodes
 
