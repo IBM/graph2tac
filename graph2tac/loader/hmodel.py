@@ -170,7 +170,6 @@ class Predict:
             pass
         else:
             print("STATE NOT NOT FOUND")
-            breakpoint()
         decoded_predictions = []
         for prediction in predictions:
             tactic_idx, args = prediction
@@ -182,12 +181,14 @@ class Predict:
                 args_decoded = np.array(args_decoded, dtype=np.uint32).reshape((len(args_decoded), 2))
 
             print(annotation, self._graph_constants.tactic_index_to_string[tactic_idx].decode(), "index into context:", args_decoded, end="")
-
             if tactic_idx in allowed_model_tactics:
-                decoded_predictions.append(np.concatenate([np.array([(tactic_idx, tactic_idx)], dtype=np.uint32), args_decoded]))
-                print(": tactic allowed")
+                if args_decoded is not None:
+                    decoded_predictions.append(np.concatenate([np.array([(tactic_idx, tactic_idx)], dtype=np.uint32), args_decoded]))
+                else:
+                    print(": arg not allowed")
             else:
-                print(": tactic not allowed :(((")
+                print(": tactic not allowed")
+
 
         # print("predictions", decoded_predictions)
         return decoded_predictions, np.ones(len(decoded_predictions))/len(decoded_predictions)

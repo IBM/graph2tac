@@ -54,6 +54,7 @@ class GraphConstants:
     global_context: np.ndarray
     label_to_names: list[str]
     label_in_spine: list[bool]
+    max_subgraph_size: int
 
 
 
@@ -357,7 +358,8 @@ class Data2():
                               tactic_index_to_hash=tactic_index_to_hash,
                               global_context=global_context,
                               label_to_names=label_to_names,
-                              label_in_spine=label_in_spine)
+                              label_in_spine=label_in_spine,
+                              max_subgraph_size=self.__max_subgraph_size)
 
 
     def def_name_of_tactic_point(self, data_point_idx):
@@ -492,14 +494,11 @@ class DataServer:
     """
     def __init__(self,
                  data_dir: Path,
-                 work_dir: Path = Path('.'),
+                 max_subgraph_size,
                  split: tuple[int] = (8, 1, 1),
                  cross_valid_fold: int = 0,
                  bfs_option = True,
-                 max_subgraph_size: int = 20000,
                  split_random_seed = 0,
-                 num_proc = None,
-                 ignore_def_hash: bool = True,
                  restrict_to_spine: bool = False,
     ):
         """
