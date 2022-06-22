@@ -56,7 +56,7 @@ def args_decode(args,
     for arg in args:
         value = (arg[0], inverse_map[arg[0]].get(arg[1], -1))
         if value[1] == -1:
-            print("args", args, "inverse_map", inverse_map)
+            #print("args", args, "inverse_map", inverse_map)
             return None
         res.append(value)
     return res
@@ -157,7 +157,7 @@ class Predict:
 
 
 
-    def ranked_predictions(self, state: tuple, allowed_model_tactics: list, available_global=None, tactic_expand_bound=20, total_expand_bound=1000000, annotation=""):
+    def ranked_predictions(self, state: tuple, allowed_model_tactics: list, available_global=None, tactic_expand_bound=20, total_expand_bound=1000000, annotation="", debug=False):
         graph, root, context = state
         state_hash = my_hash_of(state, self._with_context)
         inverse_local_context = dict()
@@ -169,7 +169,8 @@ class Predict:
         if len(predictions) > 0:
             pass
         else:
-            print("STATE NOT NOT FOUND")
+            if debug:
+                print("HMODEL | STATE NOT NOT FOUND")
         decoded_predictions = []
         for prediction in predictions:
             tactic_idx, args = prediction
@@ -179,18 +180,20 @@ class Predict:
                                        inverse_global_label=self._label_to_idx)
             if args_decoded is not None:
                 args_decoded = np.array(args_decoded, dtype=np.uint32).reshape((len(args_decoded), 2))
-
-            print(annotation, self._graph_constants.tactic_index_to_string[tactic_idx].decode(), "index into context:", args_decoded, end="")
+            if debug:
+                print("HMODEL ", annotation, self._graph_constants.tactic_index_to_string[tactic_idx].decode(), "index into context:", args_decoded, end="")
             if tactic_idx in allowed_model_tactics:
                 if args_decoded is not None:
                     decoded_predictions.append(np.concatenate([np.array([(tactic_idx, tactic_idx)], dtype=np.uint32), args_decoded]))
                 else:
-                    print(": arg not allowed")
+                    if debug:
+                        print(": arg not allowed")
             else:
-                print(": tactic not allowed")
+                if debug:
+                    print(": tactic not allowed")
 
-
-        # print("predictions", decoded_predictions)
+        if debug:
+            print("predictions", decoded_predictions)
         return decoded_predictions, np.ones(len(decoded_predictions))/len(decoded_predictions)
 
 def main():

@@ -189,7 +189,7 @@ def train_names_in_cluster(def_scc_cluster, eval_label_to_train_label, train_nod
 def log_clusters_verbose(def_scc_clusters, eval_label_to_train_label, train_node_label_to_name):
     for i, cluster in enumerate(def_scc_clusters):
         x = train_names_in_cluster(cluster, eval_label_to_train_label, train_node_label_to_name)
-        print(x)
+        log_verbose(x)
         string_of_cluster_names = " ".join(x)
         log_verbose(f"cluster {i}: {string_of_cluster_names}")
 
@@ -456,16 +456,17 @@ def main_loop(reader, sock, predict, debug_dir, session_idx=0,
             train_node_labels = map_eval_label_to_train_label[eval_node_labels]
             edges_grouped_by_label = np.split(edges, edges_offset)
             this_encoded_root, this_encoded_context, this_context = load_msg_online(msg_data, global_visited, msg_idx)
-            print("this encoded root", this_encoded_root)
-            print("this encoded context", this_encoded_context)
-            print("this context", this_context)
 
-            print("state from python:", msg.predict.state)
-            print("root children from python:")
+            log_debug("this encoded root", this_encoded_root)
+            log_debug("this encoded context", this_encoded_context)
+            log_debug("this context", this_context)
+
+            log_debug("state from python:", msg.predict.state)
+            log_debug("root children from python:")
             child_start = msg.predict.graph.nodes[msg.predict.state.root].childrenIndex
             child_stop  = child_start + msg.predict.graph.nodes[msg.predict.state.root].childrenCount
             for edge_idx in range(child_start, child_stop):
-                print("root 0 child", msg.predict.graph.edges[edge_idx])
+                log_debug("root 0 child", msg.predict.graph.edges[edge_idx])
 
 
 
@@ -491,7 +492,8 @@ def main_loop(reader, sock, predict, debug_dir, session_idx=0,
                 tactic_expand_bound=tactic_expand_bound,
                 total_expand_bound=total_expand_bound,
                 allowed_model_tactics=allowed_model_tactics,
-                annotation = msg_idx - 1
+                annotation = msg_idx - 1,
+                debug = (LOG_LEVEL <= logging.INFO)
             )
 
 
