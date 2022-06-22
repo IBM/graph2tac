@@ -194,7 +194,26 @@ class Predict:
 
         if debug:
             print("predictions", decoded_predictions)
-        return decoded_predictions, np.ones(len(decoded_predictions))/len(decoded_predictions)
+        collapsed_pred = dict()
+        collapsed_val = dict()
+        for d_prediction in decoded_predictions:
+            pred_hash = hash_nparray(d_prediction)
+            collapsed_val[pred_hash] = collapsed_val.get(pred_hash,0) + 1 / len(decoded_predictions)
+            collapsed_pred[pred_hash] = d_prediction
+
+
+        result = []
+        for pred_hash in collapsed_pred.keys():
+            result.append((collapsed_pred[pred_hash], collapsed_val[pred_hash]))
+
+        sorted_result = sorted(result, key = lambda x: -x[1])
+        result_pred = []
+        result_val = []
+        for (pred, val) in sorted_result:
+            result_pred.append(pred)
+            result_val.append(val)
+
+        return result_pred, result_val
 
 def main():
     parser = argparse.ArgumentParser()
