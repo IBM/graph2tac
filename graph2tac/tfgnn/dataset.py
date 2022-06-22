@@ -63,19 +63,19 @@ class Dataset:
         """
         Returns the training proof-state dataset.
         """
-        return self._preprocess(self._train_proofstates(), shuffle=shuffle)
+        return self._preprocess(self._train_proofstates(), shuffle=shuffle).cache()
 
     def valid_proofstates(self, shuffle: bool = True) -> tf.data.Dataset:
         """
         Returns the validation proof-state dataset.
         """
-        return self._preprocess(self._valid_proofstates(), shuffle=shuffle)
+        return self._preprocess(self._valid_proofstates(), shuffle=shuffle).cache()
 
     def definitions(self, shuffle: bool = True) -> tf.data.Dataset:
         """
         Returns the definition dataset.
         """
-        return self._preprocess(self._definitions(), shuffle=shuffle)
+        return self._preprocess(self._definitions(), shuffle=shuffle).cache()
 
     def graph_constants(self) -> GraphConstants:
         """
