@@ -69,6 +69,7 @@ class Trainer:
         self.log_dir = log_dir
         self.max_to_keep = max_to_keep
         self.keep_checkpoint_every_n_hours = keep_checkpoint_every_n_hours
+        self.qsaving = qsaving
 
         self.trained_epochs = tf.Variable(initial_value=0, trainable=False)
         self.checkpoint = tf.train.Checkpoint(prediction_task=prediction_task.checkpoint,
@@ -159,7 +160,7 @@ class Trainer:
                                                     checkpoint_path,
                                                     max_to_keep=self.max_to_keep,
                                                     keep_checkpoint_every_n_hours=self.keep_checkpoint_every_n_hours,
-                                                    qsaving = qsaving)
+                                                    qsaving = self.qsaving)
             try:
                 checkpoint_restored = checkpoint_manager.restore_or_initialize()
             except tf.errors.NotFoundError as error:

@@ -599,13 +599,13 @@ class DataLoaderDataset(Dataset):
                                              context=context)
 
     def _train_proofstate_generator(self) -> Iterable[tfgnn.GraphTensor]:
-        return map(self._make_proofstate_graph_tensor, self.data_server.data_train(tf_gnn=True))
+        return map(self._make_proofstate_graph_tensor, self.data_server.data_train())
 
     def _valid_proofstate_generator(self) -> Iterable[tfgnn.GraphTensor]:
-        return map(self._make_proofstate_graph_tensor, self.data_server.data_valid(tf_gnn=True))
+        return map(self._make_proofstate_graph_tensor, self.data_server.data_valid())
 
     def _definition_cluster_generator(self) -> Iterable[tfgnn.GraphTensor]:
-        return map(self._make_definition_graph_tensor, self.data_server.def_cluster_subgraphs(tf_gnn=True))
+        return map(self._make_definition_graph_tensor, self.data_server.def_cluster_subgraphs())
 
     def _train_proofstates(self) -> tf.data.Dataset:
         return tf.data.Dataset.from_generator(self._train_proofstate_generator,
