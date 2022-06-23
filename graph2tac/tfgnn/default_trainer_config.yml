@@ -12,3 +12,4 @@ l2_regularization_coefficient: 1.0e-05
 definition_loss_coefficient: 1.0
 max_to_keep: 1
 keep_checkpoint_every_n_hours: null
+qsaving: null

@@ -10,7 +10,7 @@ from pathlib import Path
 from graph2tac.tfgnn.dataset import Dataset, DataLoaderDataset, TFRecordDataset
 from graph2tac.tfgnn.tasks import PredictionTask, DefinitionTask, DefinitionMeanSquaredError
 from graph2tac.tfgnn.graph_schema import definition_graph_spec, batch_graph_spec
-
+from graph2tac.tfgnn.q_checkpoint_manager import QCheckpointManager
 
 class Trainer:
     """
@@ -30,7 +30,8 @@ class Trainer:
                  l2_regularization_coefficient: Optional[float] = None,
                  log_dir: Optional[Path] = None,
                  max_to_keep: int = 1,
-                 keep_checkpoint_every_n_hours: Optional[int] = None):
+                 keep_checkpoint_every_n_hours: Optional[int] = None,
+                 qsaving: Optional[float] = None):
         """
         @param dataset:
         @param batch_size:
@@ -43,6 +44,7 @@ class Trainer:
         @param log_dir:
         @param max_to_keep:
         @param keep_checkpoint_every_n_hours:
+        @param qsaving:
         """
         # dataset
         self.dataset = dataset
@@ -153,10 +155,11 @@ class Trainer:
 
             # checkpointing callback
             checkpoint_path = self.log_dir / 'ckpt'
-            checkpoint_manager = tf.train.CheckpointManager(self.checkpoint,
-                                                            checkpoint_path,
-                                                            max_to_keep=self.max_to_keep,
-                                                            keep_checkpoint_every_n_hours=self.keep_checkpoint_every_n_hours)
+            checkpoint_manager = QCheckpointManager(self.checkpoint,
+                                                    checkpoint_path,
+                                                    max_to_keep=self.max_to_keep,
+                                                    keep_checkpoint_every_n_hours=self.keep_checkpoint_every_n_hours,
+                                                    qsaving = qsaving)
             try:
                 checkpoint_restored = checkpoint_manager.restore_or_initialize()
             except tf.errors.NotFoundError as error:
