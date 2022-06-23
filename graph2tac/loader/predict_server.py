@@ -36,6 +36,7 @@ LOG_LEVEL = logging.INFO
 from graph2tac.loader.clib.loader import (
     get_scc_components,
     data_online_extend,
+    data_online_resize,
     get_def_deps_online,
     get_subgraph_online,
     load_msg_online,
@@ -431,20 +432,19 @@ def main_loop(reader, sock, predict, debug_dir, session_idx=0,
 
             msg_data = msg.as_builder().to_bytes()
 
-            local_to_global = [np.array([msg_idx, 0], dtype=np.uint32)]
-            n_msg_recorded = data_online_extend(c_data_online,
+            data_online_resize(c_data_online, 1);
+            local_to_global = [np.array([1, 0], dtype=np.uint32)]
+
+            num_messages_stored = data_online_extend(c_data_online,
                                                 [msg_data],
                                                 [b'.proof_state_graph'],
                                                 local_to_global,
                                                 "request.predict",
                                                 )
             total_data_online_size += len(msg_data)
-
-            log_info(f"online_data stores {n_msg_recorded} graphs")
-
-
-
-            roots = np.array( [(msg_idx, msg.predict.state.root)], dtype=np.uint32)
+            log_info(f"num_messages_stored {num_messages_stored}")
+            data_msg_idx = num_messages_stored - 1
+            roots = np.array( [(data_msg_idx, msg.predict.state.root)], dtype=np.uint32)
 
             res = get_subgraph_online(c_data_online,
                                       roots,
@@ -455,7 +455,7 @@ def main_loop(reader, sock, predict, debug_dir, session_idx=0,
 
             train_node_labels = map_eval_label_to_train_label[eval_node_labels]
             edges_grouped_by_label = np.split(edges, edges_offset)
-            this_encoded_root, this_encoded_context, this_context = load_msg_online(msg_data, global_visited, msg_idx)
+            this_encoded_root, this_encoded_context, this_context = load_msg_online(msg_data, global_visited, data_msg_idx)
 
             log_debug("this encoded root", this_encoded_root)
             log_debug("this encoded context", this_encoded_context)
@@ -468,16 +468,6 @@ def main_loop(reader, sock, predict, debug_dir, session_idx=0,
             for edge_idx in range(child_start, child_stop):
                 log_debug("root 0 child", msg.predict.graph.edges[edge_idx])
 
-
-
-
-            # for tf2 format
-
-            # online_state = (train_node_labels, edges_grouped_by_label, this_encoded_root, this_encoded_context)
-
-            # for tf-gnn format:
-            # online_state = (train_node_labels, edges[:,0], edges[:,1], edge_labels, this_encoded_root, this_encoded_context)
-            # online_graph = eval_node_labels, edges, edge_labels, edges_offset
             online_graph = train_node_labels, edges, edge_labels, edges_offset
 
 
@@ -487,8 +477,6 @@ def main_loop(reader, sock, predict, debug_dir, session_idx=0,
 
             online_actions, online_confidences = predict.ranked_predictions(
                 (online_graph, this_encoded_root, this_encoded_context),
-                # online_state,
-                # available_global=available_global,
                 tactic_expand_bound=tactic_expand_bound,
                 total_expand_bound=total_expand_bound,
                 allowed_model_tactics=allowed_model_tactics,
