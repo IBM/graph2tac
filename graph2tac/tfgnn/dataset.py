@@ -626,6 +626,16 @@ class DataLoaderDataset(Dataset):
                                              edge_sets=bare_graph_tensor.edge_sets,
                                              context=context)
 
+
+    def _train_proofstate_generator(self) -> Iterable[tfgnn.GraphTensor]:
+        return map(self._make_proofstate_graph_tensor, self.data_server.data_train())
+
+    def _valid_proofstate_generator(self) -> Iterable[tfgnn.GraphTensor]:
+        return map(self._make_proofstate_graph_tensor, self.data_server.data_valid())
+
+    def _definition_cluster_generator(self) -> Iterable[tfgnn.GraphTensor]:
+        return map(self._make_definition_graph_tensor, self.data_server.def_cluster_subgraphs())
+
     def _train_proofstates(self) -> tf.data.Dataset:
         dataset = tf.data.Dataset.from_generator(lambda: self.data_server.data_train(),
                                                  output_signature=self.proofstate_data_spec)
