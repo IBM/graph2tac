@@ -1,5 +1,6 @@
-from tensorflow.python.lib.io import file_io
 import numpy as np
+import tensorflow as tf
+from tensorflow.python.lib.io import file_io
 
 def _delete_file_if_exists(filespec):
     """Deletes files matching `filespec`."""
