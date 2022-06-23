@@ -305,7 +305,7 @@ def main_loop(reader, sock, predict, debug_dir, session_idx=0,
 
             context_cnt += 1
 
-            log_normal(f'session {session_idx} theorem {context_cnt} started.')
+            log_normal(f'session {session_idx} theorem idx={context_cnt}, annotation={msg.initialize.logAnnotation} started.')
 
             wrap_debug_record(debug_dir, msg, context_cnt)
 

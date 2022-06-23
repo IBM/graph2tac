@@ -426,23 +426,24 @@ struct PredictionProtocol {
         tactics @0 :List(AbstractTactic);
         graph @1 :Graph;
         definitions @2 :List(NodeIndex);
+        logAnnotation @3 :Text;
       }
       predict :group {
         # Request a list of tactic predictions given the graph of a proof state.
-        graph @3 :Graph;
+        graph @4 :Graph;
         # The graph may reference definitions that were transmitted during the the `initialize` message.
         # This graph is designated using the `DepIndex` 1.
-        state @4 :ProofState;
+        state @5 :ProofState;
       }
-      synchronize @5 :UInt64;
+      synchronize @6 :UInt64;
       # Coq uses this message to synchronize the state of the protocol when exceptions have occurred.
       # The contract is that the given integer needs to be echo'd back verbatim.
       checkAlignment :group {
         # Request for the server to align the given tactics and definition to it's internal knowledge
         # and report back any tactics and definitions that were not found
-        tactics @6 :List(AbstractTactic);
-        graph @7 :Graph;
-        definitions @8 :List(NodeIndex);
+        tactics @7 :List(AbstractTactic);
+        graph @8 :Graph;
+        definitions @9 :List(NodeIndex);
       }
     }
   }
