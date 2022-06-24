@@ -95,7 +95,7 @@ class PredictOutput:
         """
         Computes the total probability captured by all the predictions for this proof-state.
         """
-        return sum(np.exp(prediction.value) for prediction in self.predictions)
+        return sum(np.exp(pred.value) for pred in self.predictions)
 
     def sort(self) -> None:
         """
@@ -108,7 +108,7 @@ class PredictOutput:
         Converts all predictions to numpy format for interaction with Vasily's evaluation framework.
         """
         self.sort()
-        return [pred.numpy() for pred in self.predictions], np.array([pred.value for pred in self.predictions])
+        return [pred.numpy() for pred in self.predictions], np.array([np.exp(pred.value) for pred in self.predictions])
 
     def _evaluate(self, tactic_id: int, local_arguments: tf.Tensor, global_arguments: tf.Tensor):
         return any(pred.evaluate(tactic_id, local_arguments, global_arguments) for pred in self.predictions)
@@ -117,8 +117,13 @@ class PredictOutput:
         """
         Evaluate an action in tuple format.
         """
-        (_, _, _, _, _, context_node_ids) = self.state
-        action = DataLoaderDataset._action_to_arguments(action, len(context_node_ids))
+        (loader_graph, root, context_node_ids) = self.state
+        local_context_length = tf.shape(context_node_ids, out_type=tf.int64)[0]
+
+        tactic_id, arguments_array = action
+        tactic_id = tf.cast(tactic_id, dtype=tf.int64)
+        arguments_array = tf.cast(arguments_array, dtype=tf.int64)
+        action = DataLoaderDataset._action_to_arguments((tactic_id, arguments_array), local_context_length)
         return self._evaluate(*action)
 
 
@@ -237,19 +242,23 @@ class Predict:
 
     def initialize(self, global_context: Optional[List[int]] = None):
         if global_context is not None:
+            # update the global context
             self._graph_constants.global_context = tf.constant(global_context, dtype=tf.int32)
+
+            # extend the embedding table if necessary
             new_node_label_num = max(global_context)+1
             if new_node_label_num > self._graph_constants.node_label_num:
                 self.prediction_task.graph_embedding = self._extend_graph_embedding(self.prediction_task.graph_embedding, new_node_label_num)
 
-                self.prediction_task.global_arguments_logits = LogitsFromEmbeddings(
-                    embedding_matrix=self.prediction_task.graph_embedding._node_embedding.embeddings,
-                    valid_indices=tf.constant(self._graph_constants.global_context, dtype=tf.int32),
-                    name=GlobalArgumentPrediction.GLOBAL_ARGUMENTS_LOGITS
-                )
+            # update the global arguments logits head (always necessary, because the local context may shrink!)
+            self.prediction_task.global_arguments_logits = LogitsFromEmbeddings(
+                embedding_matrix=self.prediction_task.graph_embedding._node_embedding.embeddings,
+                valid_indices=tf.constant(self._graph_constants.global_context, dtype=tf.int32),
+                name=GlobalArgumentPrediction.GLOBAL_ARGUMENTS_LOGITS
+            )
 
     def compute_new_definitions(self, new_cluster_subgraphs: List[Tuple]) -> None:
-        definition_graph = self._make_definition_dataset(new_cluster_subgraphs).batch(len(new_cluster_subgraphs)).get_single_element()
+        definition_graph = self._make_definition_batch(new_cluster_subgraphs)
 
         masked_definition_graph = Trainer._mask_defined_labels(definition_graph)
         scalar_definition_graph = masked_definition_graph.merge_batch_to_components()
@@ -265,17 +274,11 @@ class Predict:
         old_embeddings = (1 - update_mask) * self.prediction_task.graph_embedding._node_embedding.embeddings
         self.prediction_task.graph_embedding._node_embedding.set_weights([new_embeddings + old_embeddings])
 
-    def _make_dummy_proofstate_graph_tensor(self, state: Tuple) -> tfgnn.GraphTensor:
-        """
-        Create a (dummy) proofstate graph from the given proof-state (the resulting graph tensor has fake labels).
-        """
-        # action = (tactic_id, argument_ids_in_context)
-        action = (self._dummy_tactic_id, np.zeros(shape=(0,2), dtype=np.uint32))
-
-        # proofstate_data = (state, action, graph_id)
-        proofstate_data = (state, action, None)
-
-        return DataLoaderDataset._make_proofstate_graph_tensor(proofstate_data=proofstate_data)
+    def _dummy_proofstate_data_generator(self, states: List[Tuple]):
+        for state in states:
+            action = (self._dummy_tactic_id, tf.zeros(shape=(0, 2), dtype=tf.int64))
+            graph_id = tf.constant(-1, dtype=tf.int64)
+            yield state, action, graph_id
 
     def _make_dummy_proofstate_dataset(self, states: List[Tuple]) -> tf.data.Dataset:
         """
@@ -284,24 +287,24 @@ class Predict:
         @param states: list of proof-states in tuple form (as returned by the data loader)
         @return: a `tf.data.Dataset` producing `GraphTensor` objects following the `proofstate_graph_spec` schema
         """
-        dataset = tf.data.Dataset.from_generator(lambda: map(self._make_dummy_proofstate_graph_tensor, states),
-                                                 output_signature=proofstate_graph_spec)
+        dataset = tf.data.Dataset.from_generator(lambda: self._dummy_proofstate_data_generator(states),
+                                                 output_signature=DataLoaderDataset.proofstate_data_spec)
+        dataset = dataset.map(DataLoaderDataset._make_proofstate_graph_tensor)
         dataset = self._preprocess(dataset, shuffle=False)
         return dataset
 
-    def _make_definition_dataset(self, new_cluster_subgraphs: List[Tuple]) -> tf.data.Dataset:
+    def _make_definition_batch(self, new_cluster_subgraphs: List[Tuple]) -> tfgnn.GraphTensor:
         """
         Create a dataset of definition graphs.
 
         @param new_cluster_subgraphs: list of definition clusters in tuple form (as returned by the data loader)
-        @return: a `tf.data.Dataset` producing `GraphTensor` objects following the `definition_graph_spec` schema
+        @return: a `GraphTensor` containing the definition clusters, following the `definition_graph_spec` schema
         """
-        dataset = tf.data.Dataset.from_generator(
-            lambda: map(DataLoaderDataset._make_definition_graph_tensor, new_cluster_subgraphs),
-            output_signature=definition_graph_spec)
-
+        dataset = tf.data.Dataset.from_generator(lambda: new_cluster_subgraphs,
+                                                 output_signature=DataLoaderDataset.definition_data_spec)
+        dataset = dataset.map(DataLoaderDataset._make_definition_graph_tensor)
         dataset = self._preprocess(dataset, shuffle=False)
-        return dataset
+        return dataset.batch(len(new_cluster_subgraphs)).get_single_element()
 
     @staticmethod
     def _logits_decoder(logits: tf.Tensor, total_expand_bound: int) -> Tuple[np.ndarray, np.ndarray]:
