@@ -1,4 +1,4 @@
-from typing import Tuple, Dict, Iterable, Optional, Any, Callable
+from typing import Tuple, Dict, Optional, Any, Callable
 
 import argparse
 import yaml
@@ -63,19 +63,19 @@ class Dataset:
         """
         Returns the training proof-state dataset.
         """
-        return self._preprocess(self._train_proofstates(), shuffle=shuffle)
+        return self._preprocess(self._train_proofstates(), shuffle=shuffle).cache()
 
     def valid_proofstates(self, shuffle: bool = True) -> tf.data.Dataset:
         """
         Returns the validation proof-state dataset.
         """
-        return self._preprocess(self._valid_proofstates(), shuffle=shuffle)
+        return self._preprocess(self._valid_proofstates(), shuffle=shuffle).cache()
 
     def definitions(self, shuffle: bool = True) -> tf.data.Dataset:
         """
         Returns the definition dataset.
         """
-        return self._preprocess(self._definitions(), shuffle=shuffle)
+        return self._preprocess(self._definitions(), shuffle=shuffle).cache()
 
     def graph_constants(self) -> GraphConstants:
         """
@@ -241,14 +241,17 @@ class Dataset:
         # applying symmetrization
         edge_label_num = self._graph_constants.edge_label_num
         if self.symmetrization == UNDIRECTED:
-            dataset = dataset.map(lambda graph_tensor: self._symmetrize(graph_tensor, edge_label_num, True))
+            dataset = dataset.map(lambda graph_tensor: self._symmetrize(graph_tensor, edge_label_num, True),
+                                  num_parallel_calls=tf.data.AUTOTUNE)
         elif self.symmetrization == BIDIRECTIONAL:
-            dataset = dataset.map(lambda graph_tensor: self._symmetrize(graph_tensor, edge_label_num, False))
+            dataset = dataset.map(lambda graph_tensor: self._symmetrize(graph_tensor, edge_label_num, False),
+                                  num_parallel_calls=tf.data.AUTOTUNE)
             edge_label_num *= 2
 
         # introducing self edges
         if self.add_self_edges:
-            dataset = dataset.map(lambda graph_tensor: self._add_self_edges(graph_tensor, edge_label_num))
+            dataset = dataset.map(lambda graph_tensor: self._add_self_edges(graph_tensor, edge_label_num),
+                                  num_parallel_calls=tf.data.AUTOTUNE)
 
         # shuffling
         if shuffle:
@@ -449,7 +452,8 @@ class TFRecordDataset(Dataset):
         dataset = tf.data.TFRecordDataset(filenames=[str(tfrecord_filepath.absolute())])
 
         # parse it into GraphTensor objects
-        dataset = dataset.map(lambda graph_tensor: tfgnn.parse_single_example(graph_spec, graph_tensor))
+        dataset = dataset.map(lambda graph_tensor: tfgnn.parse_single_example(graph_spec, graph_tensor),
+                              num_parallel_calls=tf.data.AUTOTUNE)
 
         return dataset
 
@@ -477,6 +481,29 @@ class DataLoaderDataset(Dataset):
     Subclass for TF-GNN datasets which are obtained directly from the loader (this is presumable slower
     than using pre-processed `TFRecordDataset`).
     """
+
+    # tf.TensorSpec for the data coming from the loader
+    node_labels_spec = tf.TensorSpec(shape=(None,), dtype=tf.int64, name='node_labels')
+    edges_spec = tf.TensorSpec(shape=(None,2), dtype=tf.int32, name='edges')
+    edge_labels_spec = tf.TensorSpec(shape=(None,), dtype=tf.int64, name='edge_labels')
+    edges_offset_spec = tf.TensorSpec(shape=(None,), dtype=tf.int32, name='edges_offset')
+    loader_graph_spec = (node_labels_spec, edges_spec, edge_labels_spec, edges_offset_spec)
+
+    root_spec = tf.TensorSpec(shape=(), dtype=tf.int64, name='root')
+    context_node_ids_spec = tf.TensorSpec(shape=(None,), dtype=tf.int64, name='context_node_ids')
+    state_spec = (loader_graph_spec, root_spec, context_node_ids_spec)
+
+    tactic_id_spec = tf.TensorSpec(shape=(), dtype=tf.int64, name='tactic_id')
+    arguments_array_spec = tf.TensorSpec(shape=(None, 2), dtype=tf.int64, name='arguments_array')
+    action_spec = (tactic_id_spec, arguments_array_spec)
+
+    graph_id_spec = tf.TensorSpec(shape=(), dtype=tf.int64, name='graph_id')
+
+    num_definitions_spec = tf.TensorSpec(shape=(), dtype=tf.int64, name='num_definitions')
+
+    proofstate_data_spec = (state_spec, action_spec, graph_id_spec)
+    definition_data_spec = (loader_graph_spec, num_definitions_spec)
+
     def __init__(self, data_dir: Path, **kwargs):
         """
         @param data_dir: the directory containing the data
@@ -505,32 +532,36 @@ class DataLoaderDataset(Dataset):
         return cls(data_dir=data_dir, **dataset_config)
 
     @staticmethod
-    def _make_bare_graph_tensor(node_labels, sources, targets, edge_labels) -> tfgnn.GraphTensor:
+    def _make_bare_graph_tensor(node_labels: tf.Tensor,
+                                sources: tf.Tensor,
+                                targets: tf.Tensor,
+                                edge_labels: tf.Tensor
+                                ) -> tfgnn.GraphTensor:
         """
         Converts the data loader's graph representation into a TF-GNN compatible GraphTensor.
 
-        @param node_labels: numpy array of node labels
-        @param sources: numpy array of edge sources
-        @param targets: numpy array of edge targets
-        @param edge_labels: numpy array of edge labels
+        @param node_labels: tf.Tensor of node labels (dtype=tf.int64)
+        @param sources: tf.Tensor of edge sources (dtype=tf.int32)
+        @param targets: tf.Tensor of edge targets (dtype=tf.int32)
+        @param edge_labels: tf.Tensor of edge labels (dtype=tf.int64)
         @return: a GraphTensor object that is compatible with the `bare_graph_spec` in `graph_schema.py`
         """
-        node_set = tfgnn.NodeSet.from_fields(features={'node_label': tf.cast(node_labels, dtype=tf.int64)},
+        node_set = tfgnn.NodeSet.from_fields(features={'node_label': node_labels},
                                              sizes=tf.shape(node_labels))
 
-        adjacency = tfgnn.Adjacency.from_indices(source=('node', tf.cast(sources, dtype=tf.int32)),
-                                                 target=('node', tf.cast(targets, dtype=tf.int32)))
+        adjacency = tfgnn.Adjacency.from_indices(source=('node', sources),
+                                                 target=('node', targets))
 
-        edge_set = tfgnn.EdgeSet.from_fields(features={'edge_label': tf.cast(edge_labels, dtype=tf.int64)},
+        edge_set = tfgnn.EdgeSet.from_fields(features={'edge_label': edge_labels},
                                              sizes=tf.shape(edge_labels),
                                              adjacency=adjacency)
 
         return tfgnn.GraphTensor.from_pieces(node_sets={'node': node_set}, edge_sets={'edge': edge_set})
 
     @staticmethod
-    def _action_to_arguments(action: Tuple, local_context_length: int) -> Tuple[int, tf.Tensor, tf.Tensor]:
+    def _action_to_arguments(action: Tuple, local_context_length: tf.Tensor) -> Tuple[int, tf.Tensor, tf.Tensor]:
         (tactic_id, arguments_array) = action
-        is_global_argument, argument_ids = tf.unstack(tf.cast(arguments_array, dtype=tf.int64), axis=-1)
+        is_global_argument, argument_ids = tf.unstack(arguments_array, axis=1)
 
         # there can still be local arguments that are None
         is_valid_local_argument = tf.where(is_global_argument == 0, argument_ids, int(1e9)) < local_context_length
@@ -542,30 +573,25 @@ class DataLoaderDataset(Dataset):
         return tactic_id, local_arguments, global_arguments
 
     @classmethod
-    def _make_proofstate_graph_tensor(cls, proofstate_data: Tuple) -> tfgnn.GraphTensor:
+    def _make_proofstate_graph_tensor(cls, state: Tuple, action: Tuple, graph_id: tf.Tensor) -> tfgnn.GraphTensor:
         """
         Converts the data loader's proof-state representation into a TF-GNN compatible GraphTensor.
 
-        @param proofstate_data: a proof state in tuple-form, as returned by the data server
-        @return: a GraphTensor object that is compatible with the `basic_proofstate_graph_spec` in `graph_schema.py`
+        @param state: the tuple containing tf.Tensor objects for the graph structure
+        @param action: the tuple containing tf.Tensor objects for the tactic and arguments
+        @param graph_id: the id of the graph
+        @return: a GraphTensor object that is compatible with the `proofstate_graph_spec` in `graph_schema.py`
         """
-        (state, action, graph_id) = proofstate_data
         loader_graph, root, context_node_ids = state
         node_labels, sources, targets, edge_labels = graph_as("tf_gnn", loader_graph)
 
-        # deprecate:
-        # (node_labels, sources, targets, edge_labels, root, context_node_ids) = state
-
-        # code review: why root is not used // Vasily?
-
-
         bare_graph_tensor = cls._make_bare_graph_tensor(node_labels, sources, targets, edge_labels)
-        context_node_ids = tf.cast(context_node_ids, dtype=tf.int64)
 
-        tactic_id, local_arguments, global_arguments = cls._action_to_arguments(action, len(context_node_ids))
+        local_context_length = tf.shape(context_node_ids, out_type=tf.int64)[0]
+        tactic_id, local_arguments, global_arguments = cls._action_to_arguments(action, local_context_length)
 
         context = tfgnn.Context.from_fields(features={
-            'tactic': tf.cast([tactic_id], dtype=tf.int64),
+            'tactic': tf.expand_dims(tactic_id, axis=0),
             'context_node_ids': tf.RaggedTensor.from_tensor(tensor=tf.expand_dims(context_node_ids, axis=0),
                                                             row_splits_dtype=tf.int32),
             'local_arguments': tf.RaggedTensor.from_tensor(tensor=tf.expand_dims(local_arguments, axis=0),
@@ -579,45 +605,41 @@ class DataLoaderDataset(Dataset):
                                              context=context)
 
     @classmethod
-    def _make_definition_graph_tensor(cls, definition_data: Tuple) -> tfgnn.GraphTensor:
+    def _make_definition_graph_tensor(cls,
+                                      loader_graph: Tuple,
+                                      num_definitions: tf.Tensor
+                                      ) -> tfgnn.GraphTensor:
         """
         Converts the data loader's definition cluster representation into a TF-GNN compatible GraphTensor.
 
-        @param definition_data: a definition in tuple-form, as returned by the data server
+        @param loader_graph: Tuple of tf.Tensor objects encoding the graph in the loader's format
+        @param num_definitions: tf.Tensor for the number of labels being defined (dtype=tf.int64)
         @return: a GraphTensor object that is compatible with the `definition_graph_spec` in `graph_schema.py`
         """
-        loader_graph, num_definitions = definition_data
         node_labels, sources, targets, edge_labels = graph_as("tf_gnn", loader_graph)
-        # node_labels, sources, targets, edge_labels, num_definitions = definition_data   # deprecated, please remove
 
         bare_graph_tensor = cls._make_bare_graph_tensor(node_labels, sources, targets, edge_labels)
 
-        context = tfgnn.Context.from_fields(features={'num_definitions': tf.cast([num_definitions], dtype=tf.int64)})
+        context = tfgnn.Context.from_fields(features={'num_definitions': tf.expand_dims(num_definitions, axis=0)})
 
         return tfgnn.GraphTensor.from_pieces(node_sets=bare_graph_tensor.node_sets,
                                              edge_sets=bare_graph_tensor.edge_sets,
                                              context=context)
 
-    def _train_proofstate_generator(self) -> Iterable[tfgnn.GraphTensor]:
-        return map(self._make_proofstate_graph_tensor, self.data_server.data_train(tf_gnn=True))
-
-    def _valid_proofstate_generator(self) -> Iterable[tfgnn.GraphTensor]:
-        return map(self._make_proofstate_graph_tensor, self.data_server.data_valid(tf_gnn=True))
-
-    def _definition_cluster_generator(self) -> Iterable[tfgnn.GraphTensor]:
-        return map(self._make_definition_graph_tensor, self.data_server.def_cluster_subgraphs(tf_gnn=True))
-
     def _train_proofstates(self) -> tf.data.Dataset:
-        return tf.data.Dataset.from_generator(self._train_proofstate_generator,
-                                              output_signature=proofstate_graph_spec)
+        dataset = tf.data.Dataset.from_generator(lambda: self.data_server.data_train(),
+                                                 output_signature=self.proofstate_data_spec)
+        return dataset.map(self._make_proofstate_graph_tensor, num_parallel_calls=tf.data.AUTOTUNE)
 
     def _valid_proofstates(self) -> tf.data.Dataset:
-        return tf.data.Dataset.from_generator(self._valid_proofstate_generator,
-                                              output_signature=proofstate_graph_spec)
+        dataset = tf.data.Dataset.from_generator(lambda: self.data_server.data_valid(),
+                                                 output_signature=self.proofstate_data_spec)
+        return dataset.map(self._make_proofstate_graph_tensor, num_parallel_calls=tf.data.AUTOTUNE)
 
     def _definitions(self) -> tf.data.Dataset:
-        return tf.data.Dataset.from_generator(self._definition_cluster_generator,
-                                              output_signature=definition_graph_spec)
+        dataset = tf.data.Dataset.from_generator(lambda: self.data_server.def_cluster_subgraphs(),
+                                                 output_signature=self.definition_data_spec)
+        return dataset.map(self._make_definition_graph_tensor, num_parallel_calls=tf.data.AUTOTUNE)
 
 
 def main():

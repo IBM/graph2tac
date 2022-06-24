@@ -558,13 +558,12 @@ class GlobalArgumentPrediction(PredictionTask):
                                                          tactic_embedding_size=self._tactic_embedding_size,
                                                          **arguments_head_config)
 
-        self.local_arguments_logits = tf.keras.layers.Lambda(lambda inputs: _local_arguments_logits(*inputs),
-                                                             name=self.LOCAL_ARGUMENTS_LOGITS)
-
         self.global_arguments_logits = LogitsFromEmbeddings(
             embedding_matrix=self.graph_embedding._node_embedding.embeddings,
-            valid_indices=tf.constant(self._graph_constants.global_context, dtype=tf.int32),
-            name=self.GLOBAL_ARGUMENTS_LOGITS)
+            valid_indices=tf.constant(self._graph_constants.global_context, dtype=tf.int32))
+
+        self.local_arguments_logits_output = tf.keras.layers.Lambda(lambda x: x, name=self.LOCAL_ARGUMENTS_LOGITS)
+        self.global_arguments_logits_output = tf.keras.layers.Lambda(lambda x: x, name=self.GLOBAL_ARGUMENTS_LOGITS)
 
         proofstate_graph = tf.keras.layers.Input(type_spec=batch_graph_spec(proofstate_graph_spec),
                                                  name='proofstate_graph')
@@ -580,9 +579,16 @@ class GlobalArgumentPrediction(PredictionTask):
         tactic = scalar_proofstate_graph.context['tactic']
         num_arguments = tf.gather(tf.constant(self._graph_constants.tactic_index_to_numargs, dtype=tf.int64), tactic)
         hidden_state_sequences = self.arguments_head((hidden_graph, self.tactic_embedding(tactic), num_arguments))
-        local_arguments_logits = self.local_arguments_logits((scalar_proofstate_graph, hidden_graph, hidden_state_sequences))
+        local_arguments_logits = _local_arguments_logits(scalar_proofstate_graph, hidden_graph, hidden_state_sequences)
 
         global_arguments_logits = self.global_arguments_logits(hidden_state_sequences.to_tensor())   # noqa
+
+        local_arguments_logits_norm = tf.reduce_sum(tf.exp(local_arguments_logits), axis=-1, keepdims=True)
+        global_arguments_logits_norm = tf.reduce_sum(tf.exp(global_arguments_logits), axis=-1, keepdims=True)
+        norm = -tf.math.log(local_arguments_logits_norm + global_arguments_logits_norm)
+
+        local_arguments_logits = self.local_arguments_logits_output(local_arguments_logits + norm)
+        global_arguments_logits = self.global_arguments_logits_output(global_arguments_logits + norm)
 
         return GlobalArgumentModel(inputs=proofstate_graph,
                                    outputs={self.TACTIC_LOGITS: tactic_logits,
