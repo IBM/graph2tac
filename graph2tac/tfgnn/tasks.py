@@ -86,6 +86,7 @@ class ArgumentSparseCategoricalCrossentropy(tf.keras.losses.Loss):
         """
         arguments_true, arguments_pred = arguments_filter(y_true, y_pred)
 
+        # TODO: this will fail in the unlikely event that the num_categories is zero
         return tf.nn.sparse_softmax_cross_entropy_with_logits(arguments_true, arguments_pred)
 
 
@@ -207,7 +208,6 @@ class PredictionTask:
     Additionally, they may override the following methods
         - loss_weights
         - callbacks
-        - batch_filter
 
     They can also implement any other methods that may be necessary (for prediction, see graph2tac.tfgnn. predict).
     """
@@ -348,10 +348,6 @@ class PredictionTask:
         """
         load_status = tf.train.Checkpoint(prediction_task=self.checkpoint).restore(save_path)
         load_status.expect_partial().assert_nontrivial_match().run_restore_ops()
-
-    @staticmethod
-    def batch_filter(inputs, outputs):
-        return True
 
 
 class TacticPrediction(PredictionTask):
@@ -503,10 +499,6 @@ class LocalArgumentPrediction(PredictionTask):
     def callbacks(self) -> List[tf.keras.callbacks.Callback]:
         return [MixedMetricsCallback()]
 
-    @staticmethod
-    def batch_filter(inputs, outputs):
-        return tf.shape(outputs[LocalArgumentPrediction.ARGUMENTS_LOGITS].flat_values)[0] > 0
-
 
 class GlobalArgumentPrediction(PredictionTask):
     LOCAL_ARGUMENTS_LOGITS = 'local_arguments_logits'
@@ -620,10 +612,6 @@ class GlobalArgumentPrediction(PredictionTask):
 
     def callbacks(self) -> List[tf.keras.callbacks.Callback]:
         return [MixedMetricsCallback()]
-
-    @staticmethod
-    def batch_filter(inputs, outputs):
-        return tf.shape(outputs[GlobalArgumentPrediction.LOCAL_ARGUMENTS_LOGITS].flat_values)[0] > 0
 
 
 class DefinitionTask(tf.keras.layers.Layer):
