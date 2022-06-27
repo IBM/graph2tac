@@ -1,4 +1,4 @@
-import numpy as np
+from math import floor
 import tensorflow as tf
 from tensorflow.python.lib.io import file_io
 
@@ -45,7 +45,7 @@ class QCheckpointManager(tf.train.CheckpointManager):
                     q = 1
                     while q < i: q *= self._qsaving
                     #print(i, np.floor(q))
-                    if i == np.floor(q):
+                    if i == floor(q):
                         continue
             _delete_file_if_exists(filename + ".index")
             _delete_file_if_exists(filename + ".data-?????-of-?????")
