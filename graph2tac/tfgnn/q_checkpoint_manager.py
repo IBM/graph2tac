@@ -36,15 +36,12 @@ class QCheckpointManager(tf.train.CheckpointManager):
                 continue
             if self._qsaving is not None:
                 try:
-                    #print(filename)
                     i = int(filename.split('-')[-1])
-                    #print(i)
                 except ValueError:
                     i = None
                 if i is not None:
                     q = 1
                     while q < i: q *= self._qsaving
-                    #print(i, np.floor(q))
                     if i == floor(q):
                         continue
             _delete_file_if_exists(filename + ".index")
