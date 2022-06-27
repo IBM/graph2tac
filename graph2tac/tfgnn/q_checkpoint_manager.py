@@ -33,7 +33,7 @@ class QCheckpointManager(tf.train.CheckpointManager):
                      >= self._last_preserved_timestamp)):
                 self._last_preserved_timestamp = timestamp
                 continue
-            if self._qsaving:
+            if self._qsaving is not None:
                 try:
                     #print(filename)
                     i = int(filename.split('-')[-1])
