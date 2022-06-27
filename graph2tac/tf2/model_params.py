@@ -32,6 +32,7 @@ class ModelDatasetConstants:
     node_label_to_name: list[str]
     node_label_in_spine: list[bool]
     global_context: list[int] # list of constants that can be predicted
+    max_subgraph_size: int
 
 @dataclass_json
 @dataclass

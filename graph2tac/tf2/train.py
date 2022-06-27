@@ -448,11 +448,10 @@ class TrainingLoop:
 
         self.data_server = DataServer(
             data_dir,
-            work_dir,
+            max_subgraph_size=params.data_params.max_subgraph_size,
             split=tuple(params.data_params.split),
             cross_valid_fold=params.data_params.cv_fold,
             bfs_option=params.data_params.bfs_option,
-            max_subgraph_size=params.data_params.max_subgraph_size,
             split_random_seed=params.data_params.split_seed,
             restrict_to_spine=params.data_params.restrict_to_spine
         )
@@ -480,7 +479,8 @@ class TrainingLoop:
             tactic_index_to_hash=graph_constants.tactic_index_to_hash.tolist(),
             node_label_to_name=graph_constants.label_to_names,
             node_label_in_spine=graph_constants.label_in_spine,
-            global_context=graph_constants.global_context.tolist()
+            global_context=graph_constants.global_context.tolist(),
+            max_subgraph_size=graph_constants.max_subgraph_size
         )
         # TODO(jrute): Move everything which depends on this (namely flat_batch_np)
         # into ModelWrapper and then we don't need to expose it.
