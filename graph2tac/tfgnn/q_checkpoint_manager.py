@@ -39,7 +39,7 @@ class QCheckpointManager(tf.train.CheckpointManager):
                     #print(filename)
                     i = int(filename.split('-')[-1])
                     #print(i)
-                except:
+                except ValueError:
                     i = None
                 if i is not None:
                     q = 1
