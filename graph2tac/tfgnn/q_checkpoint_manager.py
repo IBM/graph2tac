@@ -15,7 +15,8 @@ def _delete_file_if_exists(filespec):
 class QCheckpointManager(tf.train.CheckpointManager):
     def __init__(self, *args, qsaving = None, **kwargs):
         super().__init__(*args, **kwargs)
-        assert qsaving > 1
+        if qsaving is not None and qsaving <= 1:
+            raise ValueError(f'qsaving parameter should be greater than 1, but got {qsaving}')
         self._qsaving = qsaving
     def _sweep(self):
         """Deletes or preserves managed checkpoints."""
