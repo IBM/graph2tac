@@ -16,5 +16,6 @@ The python `graph2tac` package can be installed with `pip install` in a standard
 # entry-points
 
 - See `g2t-train --help` to train the model
+- See `g2t-train-tfgnn --help` to train the TF-GNN model
 - See `g2t-server --help` to launch the python server for evaluation
 
