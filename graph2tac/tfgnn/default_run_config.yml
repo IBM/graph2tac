@@ -1,0 +1,7 @@
+total_epochs: 25
+batch_size: 64
+split:
+- 9
+- 1
+split_random_seed: 0
+tf_seed: 0

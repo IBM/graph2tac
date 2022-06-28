@@ -9,8 +9,8 @@ from pathlib import Path
 
 from graph2tac.loader.data_server import GraphConstants
 from graph2tac.tf2.predict import cartesian_product
-from graph2tac.tfgnn.graph_schema import proofstate_graph_spec, definition_graph_spec, strip_graph
-from graph2tac.tfgnn.dataset import Dataset, DataLoaderDataset
+from graph2tac.tfgnn.graph_schema import strip_graph
+from graph2tac.tfgnn.dataset import Dataset, DataServerDataset
 from graph2tac.tfgnn.tasks import PredictionTask, GlobalArgumentPrediction, DefinitionTask, BASE_TACTIC_PREDICTION, LOCAL_ARGUMENT_PREDICTION, GLOBAL_ARGUMENT_PREDICTION, _local_arguments_logits
 from graph2tac.tfgnn.models import GraphEmbedding, LogitsFromEmbeddings
 from graph2tac.tfgnn.train import Trainer
@@ -123,7 +123,7 @@ class PredictOutput:
         tactic_id, arguments_array = action
         tactic_id = tf.cast(tactic_id, dtype=tf.int64)
         arguments_array = tf.cast(arguments_array, dtype=tf.int64)
-        action = DataLoaderDataset._action_to_arguments((tactic_id, arguments_array), local_context_length)
+        action = DataServerDataset._action_to_arguments((tactic_id, arguments_array), local_context_length)
         return self._evaluate(*action)
 
 
@@ -156,10 +156,16 @@ class Predict:
         with dataset_yaml_filepath.open('r') as yml_file:
             dataset = Dataset(**yaml.load(yml_file, Loader=yaml.SafeLoader))
         dataset._graph_constants = self._graph_constants
-
         self._preprocess = dataset._preprocess
-        self._dummy_tactic_id = tf.argmin(dataset._graph_constants.tactic_index_to_numargs)  # num_arguments == 0
-        self._tactic_logits_mask = tf.constant(dataset._graph_constants.tactic_index_to_numargs<NUMPY_NDIM_LIMIT)
+
+        # to build dummy proofstates we will need to use a tactic taking no arguments
+        self._dummy_tactic_id = tf.argmin(self._graph_constants.tactic_index_to_numargs)  # num_arguments == 0
+
+        # the decoding mechanism currently does not support tactics with more than NUMPY_NDIM_LIMIT
+        self._tactic_mask = tf.constant(self._graph_constants.tactic_index_to_numargs<NUMPY_NDIM_LIMIT)
+
+        # when the local context is empty and we can only use local arguments, we mask all tactics which take arguments
+        self._tactic_mask_no_arguments = tf.constant(self._graph_constants.tactic_index_to_numargs == 0)
 
         # create prediction task
         prediction_yaml_filepath = log_dir / 'config' / 'prediction.yaml'
@@ -288,9 +294,9 @@ class Predict:
         @return: a `tf.data.Dataset` producing `GraphTensor` objects following the `proofstate_graph_spec` schema
         """
         dataset = tf.data.Dataset.from_generator(lambda: self._dummy_proofstate_data_generator(states),
-                                                 output_signature=DataLoaderDataset.proofstate_data_spec)
-        dataset = dataset.map(DataLoaderDataset._make_proofstate_graph_tensor)
-        dataset = self._preprocess(dataset, shuffle=False)
+                                                 output_signature=DataServerDataset.proofstate_data_spec)
+        dataset = dataset.map(DataServerDataset._make_proofstate_graph_tensor)
+        dataset = dataset.apply(self._preprocess)
         return dataset
 
     def _make_definition_batch(self, new_cluster_subgraphs: List[Tuple]) -> tfgnn.GraphTensor:
@@ -301,9 +307,9 @@ class Predict:
         @return: a `GraphTensor` containing the definition clusters, following the `definition_graph_spec` schema
         """
         dataset = tf.data.Dataset.from_generator(lambda: new_cluster_subgraphs,
-                                                 output_signature=DataLoaderDataset.definition_data_spec)
-        dataset = dataset.map(DataLoaderDataset._make_definition_graph_tensor)
-        dataset = self._preprocess(dataset, shuffle=False)
+                                                 output_signature=DataServerDataset.definition_data_spec)
+        dataset = dataset.map(DataServerDataset._make_definition_graph_tensor)
+        dataset = self._preprocess(dataset)
         return dataset.batch(len(new_cluster_subgraphs)).get_single_element()
 
     @staticmethod
@@ -357,8 +363,9 @@ class Predict:
     def _top_k_tactics(self,
                        scalar_proofstate_graph: tfgnn.GraphTensor,
                        tactic_expand_bound: int,
-                       allowed_model_tactics: Optional[List[int]]
-                       ) -> Tuple[NamedTuple, tfgnn.GraphTensor]:
+                       mask_tactics_with_arguments: tf.Tensor,
+                       allowed_tactics
+                       ):
         """
         Returns the top `tactic_expand_bound` tactics for each of the proof-states in the input.
         This is the first stage of any  prediction process.
@@ -373,12 +380,16 @@ class Predict:
         tactic_logits = self.prediction_task.tactic_logits_from_embeddings(tactic_embedding, training=False)
 
         # mask and normalize the tactic logits
-        tactic_logits_mask = self._tactic_logits_mask
-        if allowed_model_tactics is not None:
-            tactic_num = tf.shape(tactic_logits)[-1]
-            tactic_logits_mask &= tf.reduce_any(tf.cast(tf.one_hot(allowed_model_tactics, tactic_num), tf.bool), axis=0)
-        tactic_expand_bound = min(tactic_expand_bound, tf.reduce_sum(tf.cast(tactic_logits_mask, tf.int32)))
-        tactic_logits = tf.math.log_softmax(tactic_logits + tf.math.log(tf.cast(tactic_logits_mask, tf.float32)), axis=-1)
+        tactic_mask = tf.where(tf.expand_dims(mask_tactics_with_arguments, axis=1),
+                               tf.expand_dims(self._tactic_mask_no_arguments, axis=0),
+                               tf.expand_dims(self._tactic_mask, axis=0))
+        if allowed_tactics is not None:
+            tactic_num = self._graph_constants.tactic_num
+            allowed_tactics_mask = tf.reduce_any(tf.cast(tf.one_hot(allowed_tactics, tactic_num), tf.bool), axis=0)
+            tactic_mask &= tf.expand_dims(allowed_tactics_mask, axis=0)
+
+        tactic_expand_bound = min(tactic_expand_bound, tf.reduce_sum(tf.cast(tactic_mask, tf.int32)))
+        tactic_logits = tf.math.log_softmax(tactic_logits + tf.math.log(tf.cast(tactic_mask, tf.float32)), axis=-1)
 
         # get the top tactic_expand_bound tactics, their logits and their number of arguments
         top_k = tf.math.top_k(tactic_logits, k=tactic_expand_bound)
@@ -393,9 +404,15 @@ class Predict:
         """
         Produces base tactic predictions with no arguments (for the base tactic prediction task).
         """
+
+        # in principle, we should never predict tactics which require arguments
+        # mask_tactics_with_arguments = tf.ones(shape=(scalar_proofstate_graph.num_components,), dtype=tf.bool)
+        mask_tactics_with_arguments = tf.zeros(shape=(scalar_proofstate_graph.num_components,), dtype=tf.bool)
+
         top_k, _ = self._top_k_tactics(scalar_proofstate_graph=scalar_proofstate_graph,
                                        tactic_expand_bound=tactic_expand_bound,
-                                       allowed_model_tactics=allowed_model_tactics)
+                                       mask_tactics_with_arguments=mask_tactics_with_arguments,
+                                       allowed_tactics=allowed_model_tactics)
 
         batch_predictions = []
         for top_k_tactics, top_k_logits in zip(top_k.indices, top_k.values):
@@ -416,13 +433,17 @@ class Predict:
         # get the batch size
         batch_size = scalar_proofstate_graph.num_components.numpy()
 
+        # get the local context node ids from the input graph
+        context_node_ids = scalar_proofstate_graph.context['context_node_ids']
+
+        # we should only use tactics with arguments when the local context is non-empty
+        mask_tactics_with_arguments = context_node_ids.row_lengths() == 0
+
         # get the top tactic_expand_bound tactics and input/output graphs
         top_k, hidden_graph = self._top_k_tactics(scalar_proofstate_graph=scalar_proofstate_graph,
                                                   tactic_expand_bound=tactic_expand_bound,
-                                                  allowed_model_tactics=allowed_model_tactics)
-
-        # get the local context node ids from the input graph
-        context_node_ids = scalar_proofstate_graph.context['context_node_ids']
+                                                  mask_tactics_with_arguments=mask_tactics_with_arguments,
+                                                  allowed_tactics=allowed_model_tactics)
 
         # get the number of arguments for each tactic (as with top_k elements, the shape is [batch_size, k])
         top_k_num_arguments = tf.gather(tf.constant(self.prediction_task._graph_constants.tactic_index_to_numargs, dtype=tf.int32), top_k.indices)
@@ -467,10 +488,14 @@ class Predict:
         # get the batch size
         batch_size = scalar_proofstate_graph.num_components.numpy()
 
+        # we always have the option to choose global arguments
+        mask_tactics_with_arguments = tf.zeros(shape=(scalar_proofstate_graph.num_components,), dtype=bool)
+
         # get the top tactic_expand_bound tactics and input/output graphs
         top_k, hidden_graph = self._top_k_tactics(scalar_proofstate_graph=scalar_proofstate_graph,
                                                   tactic_expand_bound=tactic_expand_bound,
-                                                  allowed_model_tactics=allowed_model_tactics)
+                                                  mask_tactics_with_arguments=mask_tactics_with_arguments,
+                                                  allowed_tactics=allowed_model_tactics)
 
         # get the local context node ids from the input graph
         context_node_ids = scalar_proofstate_graph.context['context_node_ids']

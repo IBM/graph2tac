@@ -73,6 +73,11 @@ def _local_arguments_logits(scalar_proofstate_graph: tfgnn.GraphTensor,
     return arguments_logits + tf.expand_dims(context_mask, axis=1)
 
 
+@tf.function
+def _local_arguments_pred(y_true: tf.Tensor, y_pred: tf.Tensor) -> tf.Tensor:
+    return tf.argmax(y_pred, axis=-1) if tf.shape(y_pred)[-1] > 0 else tf.zeros_like(y_true)
+
+
 class ArgumentSparseCategoricalCrossentropy(tf.keras.losses.Loss):
     """
     Used to compute the sparse categorical crossentropy loss for the argument predictions (either local or global).
@@ -86,8 +91,10 @@ class ArgumentSparseCategoricalCrossentropy(tf.keras.losses.Loss):
         """
         arguments_true, arguments_pred = arguments_filter(y_true, y_pred)
 
-        # TODO: this will fail in the unlikely event that the num_categories is zero
-        return tf.nn.sparse_softmax_cross_entropy_with_logits(arguments_true, arguments_pred)
+        if tf.shape(arguments_pred)[-1] == 0:
+            return tf.zeros_like(arguments_true, dtype=tf.float32)
+        else:
+            return tf.nn.sparse_softmax_cross_entropy_with_logits(arguments_true, arguments_pred)
 
 
 class ArgumentSparseCategoricalAccuracy(tf.keras.metrics.SparseCategoricalAccuracy):
@@ -96,7 +103,8 @@ class ArgumentSparseCategoricalAccuracy(tf.keras.metrics.SparseCategoricalAccura
     """
     def update_state(self, y_true, y_pred, sample_weight=None):
         arguments_true, arguments_pred = arguments_filter(y_true, y_pred)
-        super().update_state(arguments_true, arguments_pred, sample_weight)
+        if tf.shape(arguments_pred)[-1] > 0:
+            super().update_state(arguments_true, arguments_pred, sample_weight)
 
 
 class DefinitionMeanSquaredError(tf.keras.losses.MeanSquaredError):
@@ -142,12 +150,14 @@ class LocalArgumentModel(tf.keras.Model):
         arguments = y[LocalArgumentPrediction.ARGUMENTS_LOGITS]
         arguments_logits = y_pred[LocalArgumentPrediction.ARGUMENTS_LOGITS]
         arguments_true = tf.squeeze(arguments.to_tensor(default_value=0), axis=1)
-        arguments_pred = tf.argmax(arguments_logits, axis=-1)
+        arguments_pred = _local_arguments_pred(arguments_true, arguments_logits)
         arguments_seq_accuracy = tf.cast(tf.reduce_all(arguments_true == arguments_pred, axis=-1), dtype=tf.float32)
         arguments_seq_mask = tf.cast(tf.reduce_min(arguments_true, axis=-1) > -1, dtype=tf.float32)
 
-        self.arguments_seq_accuracy.update_state(arguments_seq_accuracy, sample_weight=arguments_seq_mask)
-        self.strict_accuracy.update_state(arguments_seq_accuracy * tactic_accuracy, sample_weight=sample_weight)
+        self.arguments_seq_accuracy.update_state(arguments_seq_mask * arguments_seq_accuracy,
+                                                 sample_weight=sample_weight)
+        self.strict_accuracy.update_state(arguments_seq_mask * arguments_seq_accuracy * tactic_accuracy,
+                                          sample_weight=sample_weight)
 
         metric_results[LocalArgumentPrediction.ARGUMENTS_SEQ_ACCURACY] = self.arguments_seq_accuracy.result()
         metric_results[LocalArgumentPrediction.STRICT_ACCURACY] = self.strict_accuracy.result()
@@ -171,7 +181,8 @@ class GlobalArgumentModel(tf.keras.Model):
         local_arguments = y[GlobalArgumentPrediction.LOCAL_ARGUMENTS_LOGITS]
         local_arguments_logits = y_pred[GlobalArgumentPrediction.LOCAL_ARGUMENTS_LOGITS]
         local_arguments_best_logit = tf.reduce_max(local_arguments_logits, axis=-1)
-        local_arguments_pred = tf.argmax(local_arguments_logits, axis=-1)
+        local_arguments_pred = _local_arguments_pred(y_true=tf.squeeze(local_arguments.to_tensor(-1), axis=1),
+                                                     y_pred=local_arguments_logits)
 
         global_arguments = y[GlobalArgumentPrediction.GLOBAL_ARGUMENTS_LOGITS]
         global_arguments_logits = y_pred[GlobalArgumentPrediction.GLOBAL_ARGUMENTS_LOGITS]
@@ -187,8 +198,10 @@ class GlobalArgumentModel(tf.keras.Model):
         arguments_seq_accuracy = tf.cast(tf.reduce_all(arguments_pred == arguments_true, axis=-1), tf.float32)
         arguments_seq_mask = tf.cast(tf.reduce_min(arguments_true, axis=-1) > -1, dtype=tf.float32)
 
-        self.arguments_seq_accuracy.update_state(arguments_seq_accuracy, sample_weight=arguments_seq_mask)
-        self.strict_accuracy.update_state(arguments_seq_accuracy * tactic_accuracy, sample_weight=sample_weight)
+        self.arguments_seq_accuracy.update_state(arguments_seq_mask * arguments_seq_accuracy,
+                                                 sample_weight=sample_weight)
+        self.strict_accuracy.update_state(arguments_seq_mask * arguments_seq_accuracy * tactic_accuracy,
+                                          sample_weight=sample_weight)
 
         metric_results[GlobalArgumentPrediction.ARGUMENTS_SEQ_ACCURACY] = self.arguments_seq_accuracy.result()
         metric_results[GlobalArgumentPrediction.STRICT_ACCURACY] = self.strict_accuracy.result()
