@@ -1,48 +1,50 @@
+from typing import Optional
 from math import floor
-import tensorflow as tf
-from tensorflow.python.lib.io import file_io
+from collections import OrderedDict
 
-def _delete_file_if_exists(filespec):
-    """Deletes files matching `filespec`."""
-    for pathname in file_io.get_matching_files(filespec):
-        try:
-            file_io.delete_file(pathname)
-        except errors.NotFoundError:
-            logging.warning(
-                "Hit NotFoundError when deleting '%s', possibly because another "
-                "process/thread is also deleting/moving the same file", pathname)
+import re
+import tensorflow as tf
 
 class QCheckpointManager(tf.train.CheckpointManager):
-    def __init__(self, *args, qsaving = None, **kwargs):
+    """
+    A CheckpointManager supporting Q-saving.
+    """
+    def __init__(self, *args, qsaving: Optional[float] = None, **kwargs):
         super().__init__(*args, **kwargs)
         if qsaving is not None and qsaving <= 1:
             raise ValueError(f'qsaving parameter should be greater than 1, but got {qsaving}')
         self._qsaving = qsaving
+
     def _sweep(self):
-        """Deletes or preserves managed checkpoints."""
+        """
+        Deletes or preserves managed checkpoints.
+        Saves checkpoints at epoch = [q^n] for n = 0, 1, ..., otherwise lets the parent CheckpointManager decide.
+        """
         if not self._max_to_keep:
             # Does not update self._last_preserved_timestamp, since everything is kept
             # in the active set.
             return
+
+        maybe_delete = OrderedDict()
         while len(self._maybe_delete) > self._max_to_keep:
             filename, timestamp = self._maybe_delete.popitem(last=False)
-            # Even if we're keeping this checkpoint due to
-            # keep_checkpoint_every_n_hours, we won't reference it to avoid
-            # infinitely-growing CheckpointState protos.
-            if (self._keep_checkpoint_every_n_hours
-                and (timestamp - self._keep_checkpoint_every_n_hours * 3600.
-                     >= self._last_preserved_timestamp)):
-                self._last_preserved_timestamp = timestamp
-                continue
-            if self._qsaving is not None:
-                try:
-                    i = int(filename.split('-')[-1])
-                except ValueError:
-                    i = None
-                if i is not None:
-                    q = 1
-                    while q < i: q *= self._qsaving
-                    if i == floor(q):
-                        continue
-            _delete_file_if_exists(filename + ".index")
-            _delete_file_if_exists(filename + ".data-?????-of-?????")
+            filename_regex = re.search('.*-(\d+)', filename)
+            if filename_regex is not None:
+                epoch = int(filename_regex.group(1))
+                q = 1
+                while q < epoch:
+                    q *= self._qsaving
+                if epoch == floor(q):
+                    # This checkpoint will be saved due to Q-saving
+                    continue
+            # It is not for us to decide whether this checkpoint is kept or not
+            maybe_delete[filename] = timestamp
+
+        # The rest of the checkpoints will be processed at some later stage
+        while len(self._maybe_delete):
+            filename, timestamp = self._maybe_delete.popitem(last=False)
+            maybe_delete[filename] = timestamp
+
+        # Let the parent class do its thing
+        self._maybe_delete = maybe_delete
+        super()._sweep()
