@@ -686,7 +686,38 @@ class DenseTacticHead(tf.keras.layers.Layer):
         return tactic_embedding
 
 
-class RNNArgumentsHead(tf.keras.layers.Layer):
+class ArgumentsHead(tf.keras.layers.Layer):
+    """
+    Base layer for argument heads, taking care of the special case where there are no arguments to compute.
+    Sub-classed layers should implement the _get_hidden_state_sequences method.
+    """
+
+    @staticmethod
+    def _no_hidden_state_sequences(inputs):
+        """
+        Produces an empty arguments tensor with the right dimensions.
+
+        @param inputs: a tuple with the same inputs as the arguments head receives
+        @return: a RaggedTensor of shape [ None(batch_size), None(0), hidden_size ]
+        """
+        hidden_graph, tactic_embedding, num_arguments = inputs
+
+        # TODO: This sometimes produces a warning about type inference failing; investigate
+        return tf.RaggedTensor.from_row_lengths(
+            values=tf.repeat(hidden_graph.context['hidden_state'], repeats=num_arguments, axis=0),
+            row_lengths=num_arguments,
+            validate=False
+        )
+
+    def call(self, inputs, training=False):
+        hidden_graph, tactic_embedding, num_arguments = inputs
+
+        return tf.cond(tf.reduce_sum(num_arguments) > 0,
+                       lambda: self._get_hidden_state_sequences(inputs, training=training),
+                       lambda: self._no_hidden_state_sequences(inputs))
+
+
+class RNNArgumentsHead(ArgumentsHead):
     """
     Simple recurrent head to put on top of a GNN component to predict argument hidden states:
         - inputs should match the `hidden_graph_spec` in `graph_schema.py`.
@@ -733,15 +764,18 @@ class RNNArgumentsHead(tf.keras.layers.Layer):
         })
         return config
 
-    def call(self, inputs, training=False):
+    def _get_hidden_state_sequences(self, inputs, training=False):
         hidden_graph, tactic_embedding, num_arguments = inputs
 
         hidden_state_sequences = tf.RaggedTensor.from_row_lengths(
-            tf.repeat(hidden_graph.context['hidden_state'], repeats=num_arguments, axis=0), num_arguments)
+            values=tf.repeat(hidden_graph.context['hidden_state'], repeats=num_arguments, axis=0),
+            row_lengths=num_arguments,
+            validate=False
+        )
         internal_state = tactic_embedding
         for rnn_layer in self._rnn_layers:
             hidden_state_sequences, internal_state = rnn_layer(hidden_state_sequences, initial_state=internal_state, training=training)
-        hidden_state_sequences = self._final_dense(hidden_state_sequences)
+        hidden_state_sequences = self._final_dense(hidden_state_sequences, training=training)
 
         return hidden_state_sequences
 

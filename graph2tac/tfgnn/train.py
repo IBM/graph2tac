@@ -195,9 +195,6 @@ class Trainer:
         # batching
         dataset = dataset.batch(self.batch_size)
 
-        # filtering
-        dataset = dataset.filter(self.prediction_task.batch_filter)
-
         return dataset
 
     def _l2_regularization(self):
