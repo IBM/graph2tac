@@ -701,8 +701,13 @@ class ArgumentsHead(tf.keras.layers.Layer):
         @return: a RaggedTensor of shape [ None(batch_size), None(0), hidden_size ]
         """
         hidden_graph, tactic_embedding, num_arguments = inputs
+
+        # TODO: This sometimes produces a warning about type inference failing; investigate
         return tf.RaggedTensor.from_row_lengths(
-            tf.repeat(hidden_graph.context['hidden_state'], repeats=num_arguments, axis=0), num_arguments)
+            values=tf.repeat(hidden_graph.context['hidden_state'], repeats=num_arguments, axis=0),
+            row_lengths=num_arguments,
+            validate=False
+        )
 
     def call(self, inputs, training=False):
         hidden_graph, tactic_embedding, num_arguments = inputs
@@ -763,11 +768,14 @@ class RNNArgumentsHead(ArgumentsHead):
         hidden_graph, tactic_embedding, num_arguments = inputs
 
         hidden_state_sequences = tf.RaggedTensor.from_row_lengths(
-            tf.repeat(hidden_graph.context['hidden_state'], repeats=num_arguments, axis=0), num_arguments)
+            values=tf.repeat(hidden_graph.context['hidden_state'], repeats=num_arguments, axis=0),
+            row_lengths=num_arguments,
+            validate=False
+        )
         internal_state = tactic_embedding
         for rnn_layer in self._rnn_layers:
             hidden_state_sequences, internal_state = rnn_layer(hidden_state_sequences, initial_state=internal_state, training=training)
-        hidden_state_sequences = self._final_dense(hidden_state_sequences)
+        hidden_state_sequences = self._final_dense(hidden_state_sequences, training=training)
 
         return hidden_state_sequences
 
