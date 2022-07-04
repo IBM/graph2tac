@@ -5,7 +5,6 @@ import yaml
 import tensorflow as tf
 import tensorflow_gnn as tfgnn
 from pathlib import Path
-from math import ceil
 
 from graph2tac.loader.data_server import DataServer, GraphConstants, graph_as
 from graph2tac.tfgnn.graph_schema import proofstate_graph_spec, definition_graph_spec
@@ -17,65 +16,99 @@ UNDIRECTED = 'undirected'
 
 class Dataset:
     """
-    Base class for TF-GNN datasets, subclasses should populate the _graph_constants
-    attribute and implement the following methods:
-        - _train_proofstates
-        - _valid_proofstates
-        - _definitions
+    Base class for TF-GNN datasets, subclasses should define:
+        - _proofstates()
+        - _definitions()
+        - _graph_constants
+        - _total_proofstates
     """
     SHUFFLE_BUFFER_SIZE = int(1e4)
     STATISTICS_BATCH_SIZE = int(1e4)
 
-    _train_proofstates: Callable[[], tf.data.Dataset]
-    _valid_proofstates: Callable[[], tf.data.Dataset]
+    _proofstates: Callable[[], tf.data.Dataset]
     _definitions: Callable[[], tf.data.Dataset]
     _graph_constants: GraphConstants
+    _total_proofstates: int
 
     def __init__(self,
                  symmetrization: Optional[str] = None,
                  add_self_edges: bool = False,
-                 split_random_seed: int = 0,
                  max_subgraph_size: int = 1024):
         """
         @param symmetrization: use BIDIRECTIONAL, UNDIRECTED or None
         @param add_self_edges: whether to add a self-loop to each node
-        @param split_random_seed: the seed for random splitting
         @param max_subgraph_size: the maximum size of the returned sub-graphs
         """
         if symmetrization is not None and symmetrization != BIDIRECTIONAL and symmetrization != UNDIRECTED:
             raise ValueError(f'{symmetrization} is not a valid graph symmetrization scheme (use {BIDIRECTIONAL}, {UNDIRECTED} or None)')
         self.symmetrization = symmetrization
         self.add_self_edges = add_self_edges
-        self.split_random_seed = split_random_seed
         self.max_subgraph_size = max_subgraph_size
         self.options = tf.data.Options()
-        self._stats = None
+        self._stats = {}
 
     def get_config(self) -> dict:
         return {
             'symmetrization': self.symmetrization,
             'add_self_edges': self.add_self_edges,
-            'split_random_seed': self.split_random_seed,
             'max_subgraph_size': self.max_subgraph_size
         }
 
-    def train_proofstates(self, shuffle: bool = True) -> tf.data.Dataset:
+    def proofstates(self,
+                    split: Tuple[int,int] = (9,1),
+                    split_random_seed: int = 0,
+                    shuffle: bool = True) -> Tuple[tf.data.Dataset, tf.data.Dataset]:
         """
-        Returns the training proof-state dataset.
-        """
-        return self._preprocess(self._train_proofstates(), shuffle=shuffle).cache()
+        Returns a pair of proof-state datasets for train and validation.
 
-    def valid_proofstates(self, shuffle: bool = True) -> tf.data.Dataset:
+        @param split: a pair of (not necessarily normalized) probabilities for the train and validation splits
+        @param split_random_seed: the seed to use for the train/validation split
+        @param shuffle: whether to shuffle the resulting datasets
+        @return: a dataset of (GraphTensor, label) pairs
         """
-        Returns the validation proof-state dataset.
-        """
-        return self._preprocess(self._valid_proofstates(), shuffle=shuffle).cache()
+        # get proof-states and apply the symmetrization and self-edge transformations
+        proofstate_dataset = self._proofstates().apply(self._preprocess)
 
-    def definitions(self, shuffle: bool = True) -> tf.data.Dataset:
+        # create dataset of split labels
+        split_logits = tf.math.log(tf.constant(split, dtype=tf.float32) / sum(split))
+        labels = tf.random.stateless_categorical(logits=tf.expand_dims(split_logits, axis=0),
+                                                 num_samples=self._total_proofstates,
+                                                 seed=[0, split_random_seed])[0]
+        label_dataset = tf.data.Dataset.from_tensor_slices(labels)
+
+        # create a dataset of pairs (GraphTensor, label)
+        pair_dataset = tf.data.Dataset.zip(datasets=(proofstate_dataset, label_dataset))
+
+        # apply options
+        pair_dataset = pair_dataset.with_options(self.options)
+
+        # get train dataset (shuffling if necessary)
+        train = pair_dataset.filter(lambda _, label: label == 0).map(lambda proofstate_graph, _: proofstate_graph)
+        if shuffle:
+            train = train.shuffle(buffer_size=self.SHUFFLE_BUFFER_SIZE)
+
+        # get validation dataset
+        valid = pair_dataset.filter(lambda _, label: label == 1).map(lambda proofstate_graph, _: proofstate_graph)
+
+        return train.cache(), valid.cache()
+
+    def total_proofstates(self):
+        return self._total_proofstates
+
+    def definitions(self, shuffle: bool = False) -> tf.data.Dataset:
         """
         Returns the definition dataset.
+
+        @param shuffle: whether to shuffle the resulting dataset
+        @return: a dataset with all the definition clusters
         """
-        return self._preprocess(self._definitions(), shuffle=shuffle).cache()
+        definitions = self._definitions().apply(self._preprocess)
+        if shuffle:
+            definitions = definitions.shuffle(buffer_size=self.SHUFFLE_BUFFER_SIZE)
+        return definitions.cache()
+
+    def total_definitions(self):
+        return self._graph_constants.cluster_subgraphs_num
 
     def graph_constants(self) -> GraphConstants:
         """
@@ -90,6 +123,34 @@ class Dataset:
             graph_constants.edge_label_num += 1
         return graph_constants
 
+    def proofstates_tfrecord_filepath(self, tfrecord_prefix: Path) -> Path:
+        """
+        Returns the filepath for the proof-states TFRecord file with prefix `tfrecord_prefix`.
+
+        @param tfrecord_prefix: the filepath prefix to the TFRecord files for the dataset
+        @return: a Path to the TFRecord file containing all proof-states
+        """
+        return tfrecord_prefix.with_stem(f'{tfrecord_prefix.stem}-proofstates-{self.max_subgraph_size}').with_suffix('.tfrecord')
+
+    def definitions_tfrecord_filepath(self, tfrecord_prefix: Path) -> Path:
+        """
+        Returns the filepath for the definitions TFRecord file with prefix `tfrecord_prefix`.
+
+        @param tfrecord_prefix: the filepath prefix to the TFRecord files for the dataset
+        @return: a Path to the TFRecord file containing all definitions
+        """
+        return tfrecord_prefix.with_stem(f'{tfrecord_prefix.stem}-definitions-{self.max_subgraph_size}').with_suffix('.tfrecord')
+
+    @staticmethod
+    def graph_constants_filepath(tfrecord_prefix: Path) -> Path:
+        """
+        Returns the filepath for the graph constants YAML file with prefix `tfrecord_prefix`.
+
+        @param tfrecord_prefix: the filepath prefix to the TFRecord files for the dataset
+        @return: a Path to the YAML file containing the (original) graph constants
+        """
+        return tfrecord_prefix.with_stem(f'{tfrecord_prefix.stem}-constants').with_suffix('.yml')
+
     def dump(self, tfrecord_prefix: Path) -> None:
         """
         Create TFRecord files for this dataset.
@@ -97,16 +158,14 @@ class Dataset:
 
         @param tfrecord_prefix: the prefix for the TFRecord files we want to create
         """
-        train_tfrecord_filepath = self._train_tfrecord_filepath(tfrecord_prefix)
-        valid_tfrecord_filepath = self._valid_tfrecord_filepath(tfrecord_prefix)
-        definition_tfrecord_filepath = self._definition_tfrecord_filepath(tfrecord_prefix)
-        graph_constants_filepath = self._graph_constants_filepath(tfrecord_prefix)
+        proofstates_tfrecord_filepath = self.proofstates_tfrecord_filepath(tfrecord_prefix)
+        definitions_tfrecord_filepath = self.definitions_tfrecord_filepath(tfrecord_prefix)
+        graph_constants_filepath = self.graph_constants_filepath(tfrecord_prefix)
 
         # Make sure we dump the original data, not the pre-processed data!
         datasets = {
-            train_tfrecord_filepath: self._train_proofstates(),
-            valid_tfrecord_filepath: self._valid_proofstates(),
-            definition_tfrecord_filepath: self._definitions(),
+            proofstates_tfrecord_filepath: self._proofstates(),
+            definitions_tfrecord_filepath: self._definitions(),
         }
         for tfrecord_filepath, dataset in datasets.items():
             print(f'exporting {tfrecord_filepath}')
@@ -118,18 +177,27 @@ class Dataset:
         print(f'exporting {graph_constants_filepath}')
         graph_constants_filepath.write_text(yaml.dump(self._graph_constants.__dict__))
 
-    def stats(self) -> dict[str, dict[str, int]]:
+    def stats(self, split: Tuple[int, int] = (9,1), split_random_seed: int = 0) -> dict[str, dict[str, int]]:
         """
-        Compute statistics for the various datasets.
+        Compute statistics for the proof-state and definition datasets.
+
+        @param split: a pair of (not necessarily normalized) probabilities for the train and validation splits
+        @param split_random_seed: the seed to use for the train/validation split
+        @return: a dictionary with statistics for the proof-state and definition datasets
         """
-        if self._stats is None:
+        split_settings = (tuple(split), split_random_seed)
+        if split_settings not in self._stats.keys():
             print('computing dataset statistics (this may take a while)...')
 
-            proofstate_datasets = {'train_proofstates': self.train_proofstates().batch(self.STATISTICS_BATCH_SIZE),
-                                   'valid_proofstates': self.valid_proofstates().batch(self.STATISTICS_BATCH_SIZE)}
+            train_proofstates, valid_proofstates = self.proofstates(split=split,
+                                                                    split_random_seed=split_random_seed,
+                                                                    shuffle=False)
+
+            proofstate_datasets = {'train_proofstates': train_proofstates.batch(self.STATISTICS_BATCH_SIZE),
+                                   'valid_proofstates': valid_proofstates.batch(self.STATISTICS_BATCH_SIZE)}
             definition_dataset = self.definitions().batch(self.STATISTICS_BATCH_SIZE)
 
-            self._stats = {}
+            stats = {}
             for name, dataset in proofstate_datasets.items():
                 num_arguments = dataset.reduce(0, lambda result, proofstate_graph: result + self._count_proofstate_arguments(proofstate_graph))
                 num_local_arguments = dataset.reduce(0, lambda result, proofstate_graph: result + self._count_proofstate_local_arguments(proofstate_graph))
@@ -137,8 +205,8 @@ class Dataset:
                 num_local_proofstates = dataset.reduce(0, lambda result, proofstate_graph: result + self._count_proofstate_local(proofstate_graph))
                 num_global_proofstates = dataset.reduce(0, lambda result, proofstate_graph: result + self._count_proofstate_global(proofstate_graph))
 
-                self._stats[name] = self._basic_stats(dataset)
-                self._stats[name].update({
+                stats[name] = self._basic_stats(dataset)
+                stats[name].update({
                     'num_arguments': int(num_arguments),
                     'num_local_arguments': int(num_local_arguments),
                     'num_global_arguments': int(num_global_arguments),
@@ -147,21 +215,11 @@ class Dataset:
                 })
 
             num_definitions = definition_dataset.reduce(0, lambda result, definition_graph: result + self._count_definitions(definition_graph))
-            self._stats['definitions'] = self._basic_stats(definition_dataset)
-            self._stats['definitions'].update({'num_definitions': int(num_definitions)})
-        return self._stats
+            stats['definitions'] = self._basic_stats(definition_dataset)
+            stats['definitions'].update({'num_definitions': int(num_definitions)})
 
-    def train_proofstates_steps_per_epoch(self, batch_size: int) -> int:
-        """
-        Return the number of train steps in an epoch, for the given file size.
-        """
-        return ceil(self.stats().get('train_proofstates').get('num_graphs')/batch_size)
-
-    def valid_proofstates_steps_per_epoch(self, batch_size: int) -> int:
-        """
-        Return the number of validation steps in an epoch, for the given file size.
-        """
-        return ceil(self.stats().get('valid_proofstates').get('num_graphs')/batch_size)
+            self._stats[split_settings] = stats
+        return self._stats[split_settings]
 
     @staticmethod
     def _symmetrize(graph_tensor: tfgnn.GraphTensor,
@@ -232,10 +290,11 @@ class Dataset:
                                              node_sets=graph_tensor.node_sets,
                                              edge_sets={'edge': edge_set})
 
-    def _preprocess(self, dataset: tf.data.Dataset, shuffle: bool = True) -> tf.data.Dataset:
+    def _preprocess(self, dataset: tf.data.Dataset) -> tf.data.Dataset:
         """
-        @param dataset: the dataset we want to prepare
-        @param shuffle: whether to shuffle the data or leave it as is
+        Applies the symmetrization and adds self-edges to the GraphTensor objects streamed by the input dataset.
+
+        @param dataset: the dataset of GraphTensor objects we want to process
         @return: a tf.data.Dataset object with symmetrization and self-edges added according to the dataset config
         """
         # applying symmetrization
@@ -252,13 +311,6 @@ class Dataset:
         if self.add_self_edges:
             dataset = dataset.map(lambda graph_tensor: self._add_self_edges(graph_tensor, edge_label_num),
                                   num_parallel_calls=tf.data.AUTOTUNE)
-
-        # shuffling
-        if shuffle:
-            dataset = dataset.shuffle(self.SHUFFLE_BUFFER_SIZE)
-
-        # applying options
-        dataset = dataset.with_options(self.options)
 
         return dataset
 
@@ -315,6 +367,9 @@ class Dataset:
     def _basic_stats(cls, dataset: tf.data.Dataset) -> Dict[str, Any]:
         """
         Gather basic statistics about a graph dataset (applicable to proof-state and definition graphs).
+
+        @param dataset: the tf.data.Dataset we want statistics for
+        @return: a dict with basic statistics about the graphs
         """
         num_graphs = dataset.reduce(0, lambda result, graph_tensor: result + cls._count_graphs(graph_tensor))
         num_nodes = dataset.reduce(0, lambda result, graph_tensor: result + cls._count_nodes(graph_tensor))
@@ -380,36 +435,11 @@ class Dataset:
         """
         return tf.reduce_sum(tf.cast(definition_graph.context['num_definitions'], dtype=tf.int32))
 
-    def _train_tfrecord_filepath(self, tfrecord_prefix: Path) -> Path:
-        """
-        Returns the filepath for the train proof-states TFRecord file with prefix `tfrecord_prefix`.
-        """
-        return tfrecord_prefix.with_stem(f'{tfrecord_prefix.stem}-train-{self.split_random_seed}-{self.max_subgraph_size}').with_suffix('.tfrecord')
-
-    def _valid_tfrecord_filepath(self, tfrecord_prefix: Path) -> Path:
-        """
-        Returns the filepath for the validation proof-states TFRecord file with prefix `tfrecord_prefix`.
-        """
-        return tfrecord_prefix.with_stem(f'{tfrecord_prefix.stem}-valid-{self.split_random_seed}-{self.max_subgraph_size}').with_suffix('.tfrecord')
-
-    def _definition_tfrecord_filepath(self, tfrecord_prefix: Path) -> Path:
-        """
-        Returns the filepath for the definition TFRecord file with prefix `tfrecord_prefix`.
-        """
-        return tfrecord_prefix.with_stem(f'{tfrecord_prefix.stem}-definition-{self.max_subgraph_size}').with_suffix('.tfrecord')
-
-    @staticmethod
-    def _graph_constants_filepath(tfrecord_prefix: Path) -> Path:
-        """
-        Returns the filepath for the graph constants YAML file with prefix `tfrecord_prefix`.
-        """
-        return tfrecord_prefix.with_stem(f'{tfrecord_prefix.stem}-constants').with_suffix('.yml')
-
 
 class TFRecordDataset(Dataset):
     """
-    Subclass for TF-GNN datasets which are read from TFRecord files (no GraphTensor construction here,
-    so this is presumably more efficient than using `DataLoaderDataset`).
+    Subclass for TF-GNN datasets which are read from TFRecord files
+    (no GraphTensor construction here, so this is presumably more efficient than using `DataServerDataset`).
     """
     def __init__(self, tfrecord_prefix: Path, **kwargs):
         """
@@ -417,14 +447,33 @@ class TFRecordDataset(Dataset):
         @param kwargs: additional keyword arguments are passed on to the parent class
         """
         super().__init__(**kwargs)
-        self.tfrecord_prefix = tfrecord_prefix
 
-        graph_constants_filepath = self._graph_constants_filepath(tfrecord_prefix)
+        # check all required files exist
+        graph_constants_filepath = self.graph_constants_filepath(tfrecord_prefix)
         if not graph_constants_filepath.exists():
             raise FileNotFoundError(f'{graph_constants_filepath} does not exist')
 
+        proofstates_tfrecord_filepath = self.proofstates_tfrecord_filepath(tfrecord_prefix)
+        if not proofstates_tfrecord_filepath.exists():
+            raise FileNotFoundError(f'{proofstates_tfrecord_filepath} does not exist')
+
+        definitions_tfrecord_filepath = self.definitions_tfrecord_filepath(tfrecord_prefix)
+        if not definitions_tfrecord_filepath.exists():
+            raise FileNotFoundError(f'{definitions_tfrecord_filepath} does not exist')
+
+        # load the graph constants
         with graph_constants_filepath.open('r') as yml_file:
             self._graph_constants = GraphConstants(**yaml.load(yml_file, Loader=yaml.UnsafeLoader))
+
+        # load the proofstates
+        self._proofstates_dataset = tf.data.TFRecordDataset(filenames=[str(proofstates_tfrecord_filepath.absolute())])
+
+        # compute the total number of proofstates
+        print('counting proofstates (this can take a while)...')
+        self._total_proofstates = self._proofstates_dataset.reduce(0, lambda result, _: result + 1)
+
+        # load the definitions
+        self._definitions_dataset = tf.data.TFRecordDataset(filenames=[str(definitions_tfrecord_filepath.absolute())])
 
     @classmethod
     def from_yaml_config(cls, tfrecord_prefix: Path, yaml_filepath: Path) -> "TFRecordDataset":
@@ -440,46 +489,38 @@ class TFRecordDataset(Dataset):
         return cls(tfrecord_prefix=tfrecord_prefix, **dataset_config)
 
     @classmethod
-    def _tfdataset_from_tfrecord(cls, tfrecord_filepath: Path, graph_spec: tfgnn.GraphTensorSpec) -> tf.data.Dataset:
+    def _parse_tfrecord_dataset(cls, dataset: tf.data.Dataset, graph_spec: tfgnn.GraphTensorSpec) -> tf.data.Dataset:
         """
-        Create a TFDataset from a TFRecord file.
+        Parse a TFRecordDataset into GraphTensor matching a given graph spec.
 
-        @param tfrecord_filepath: the path to the .tfrecord file containing the data
+        @param dataset: the TFRecordDataset we want to parse
         @param graph_spec: the graph spec for the graphs contained in the dataset
         @return: a tf.data.Dataset containing all the graphs
         """
-        # get the data from the TFRecord
-        dataset = tf.data.TFRecordDataset(filenames=[str(tfrecord_filepath.absolute())])
-
-        # parse it into GraphTensor objects
-        dataset = dataset.map(lambda graph_tensor: tfgnn.parse_single_example(graph_spec, graph_tensor),
+        return dataset.map(lambda graph_tensor: tfgnn.parse_single_example(graph_spec, graph_tensor),
                               num_parallel_calls=tf.data.AUTOTUNE)
 
-        return dataset
+    def _proofstates(self) -> tf.data.Dataset:
+        """
+        Returns a dataset with all the proof-states.
 
-    def _train_proofstates(self) -> tf.data.Dataset:
-        train_tfrecord_filepath = self._train_tfrecord_filepath(self.tfrecord_prefix)
-        if not train_tfrecord_filepath.exists():
-            raise FileNotFoundError(f'{train_tfrecord_filepath} does not exist')
-        return self._tfdataset_from_tfrecord(train_tfrecord_filepath, graph_spec=proofstate_graph_spec)
-
-    def _valid_proofstates(self) -> tf.data.Dataset:
-        valid_tfrecord_filepath = self._valid_tfrecord_filepath(self.tfrecord_prefix)
-        if not valid_tfrecord_filepath.exists():
-            raise FileNotFoundError(f'{valid_tfrecord_filepath} does not exist')
-        return self._tfdataset_from_tfrecord(valid_tfrecord_filepath, graph_spec=proofstate_graph_spec)
+        @return: a tf.data.Dataset streaming GraphTensor objects
+        """
+        return self._parse_tfrecord_dataset(self._proofstates_dataset, graph_spec=proofstate_graph_spec)
 
     def _definitions(self) -> tf.data.Dataset:
-        definition_tfrecord_filepath = self._definition_tfrecord_filepath(self.tfrecord_prefix)
-        if not definition_tfrecord_filepath.exists():
-            raise FileNotFoundError(f'{definition_tfrecord_filepath} does not exist')
-        return self._tfdataset_from_tfrecord(definition_tfrecord_filepath, graph_spec=definition_graph_spec)
+        """
+        Returns a dataset with all the definitions.
+
+        @return: a tf.data.Dataset streaming GraphTensor objects
+        """
+        return self._parse_tfrecord_dataset(self._definitions_dataset, graph_spec=definition_graph_spec)
 
 
-class DataLoaderDataset(Dataset):
+class DataServerDataset(Dataset):
     """
-    Subclass for TF-GNN datasets which are obtained directly from the loader (this is presumable slower
-    than using pre-processed `TFRecordDataset`).
+    Subclass for TF-GNN datasets which are obtained directly from the loader
+    (this is presumable slower than using pre-processed `TFRecordDataset`).
     """
 
     # tf.TensorSpec for the data coming from the loader
@@ -511,15 +552,15 @@ class DataLoaderDataset(Dataset):
         """
         super().__init__(**kwargs)
         self.data_server = DataServer(data_dir=data_dir,
-                                      work_dir=Path('.'),
-                                      split_random_seed=self.split_random_seed,
                                       max_subgraph_size=self.max_subgraph_size,
-                                      restrict_to_spine=False)
+                                      split=(1,0,0),
+                                      split_random_seed=0)
 
         self._graph_constants = self.data_server.graph_constants()
+        self._total_proofstates = self.data_server.total_proofstates()
 
     @classmethod
-    def from_yaml_config(cls, data_dir: Path, yaml_filepath: Path) -> "DataLoaderDataset":
+    def from_yaml_config(cls, data_dir: Path, yaml_filepath: Path) -> "DataServerDataset":
         """
         Create a DataLoaderDataset from a YAML configuration file
 
@@ -560,6 +601,13 @@ class DataLoaderDataset(Dataset):
 
     @staticmethod
     def _action_to_arguments(action: Tuple, local_context_length: tf.Tensor) -> Tuple[int, tf.Tensor, tf.Tensor]:
+        """
+        Convert an action in the loader's format into the corresponding TF-GNN format.
+
+        @param action: the action, as returned by the DataServer
+        @param local_context_length: the size of the local context in the proofstate
+        @return: a triple with the tactic, a tf.Tensor for the local arguments and a tf.Tensor for the global arguments
+        """
         (tactic_id, arguments_array) = action
         is_global_argument, argument_ids = tf.unstack(arguments_array, axis=1)
 
@@ -626,17 +674,23 @@ class DataLoaderDataset(Dataset):
                                              edge_sets=bare_graph_tensor.edge_sets,
                                              context=context)
 
-    def _train_proofstates(self) -> tf.data.Dataset:
-        dataset = tf.data.Dataset.from_generator(lambda: self.data_server.data_train(),
-                                                 output_signature=self.proofstate_data_spec)
-        return dataset.map(self._make_proofstate_graph_tensor, num_parallel_calls=tf.data.AUTOTUNE)
+    def _proofstates(self) -> tf.data.Dataset:
+        """
+        Returns a dataset with all the proof-states.
 
-    def _valid_proofstates(self) -> tf.data.Dataset:
-        dataset = tf.data.Dataset.from_generator(lambda: self.data_server.data_valid(),
-                                                 output_signature=self.proofstate_data_spec)
-        return dataset.map(self._make_proofstate_graph_tensor, num_parallel_calls=tf.data.AUTOTUNE)
+        @return: a tf.data.Dataset streaming GraphTensor objects
+        """
+        # get the proofstates from the DataServer
+        proofstates = tf.data.Dataset.from_generator(lambda: self.data_server.data_train(shuffled=False, as_text=False),
+                                                     output_signature=self.proofstate_data_spec)
+        return proofstates.map(self._make_proofstate_graph_tensor, num_parallel_calls=tf.data.AUTOTUNE)
 
     def _definitions(self) -> tf.data.Dataset:
+        """
+        Returns a dataset with all the definitions.
+
+        @return: a tf.data.Dataset streaming GraphTensor objects
+        """
         dataset = tf.data.Dataset.from_generator(lambda: self.data_server.def_cluster_subgraphs(),
                                                  output_signature=self.definition_data_spec)
         return dataset.map(self._make_definition_graph_tensor, num_parallel_calls=tf.data.AUTOTUNE)
@@ -661,22 +715,18 @@ def main():
         parser.error(f'--tfrecord-prefix {args.tfrecord_prefix} must have a filename prefix')
 
     # create dataset
-    dataset = DataLoaderDataset.from_yaml_config(data_dir=args.data_dir, yaml_filepath=args.dataset_config)
+    dataset = DataServerDataset.from_yaml_config(data_dir=args.data_dir, yaml_filepath=args.dataset_config)
 
     # check we don't overwrite existing files
-    train_tfrecord_filepath = dataset._train_tfrecord_filepath(tfrecord_prefix=args.tfrecord_prefix)
-    if train_tfrecord_filepath.exists():
-        parser.error(f'{train_tfrecord_filepath} already exists')
+    proofstates_tfrecord_filepath = dataset.proofstates_tfrecord_filepath(tfrecord_prefix=args.tfrecord_prefix)
+    if proofstates_tfrecord_filepath.exists():
+        parser.error(f'{proofstates_tfrecord_filepath} already exists')
 
-    valid_tfrecord_filepath = dataset._valid_tfrecord_filepath(tfrecord_prefix=args.tfrecord_prefix)
-    if valid_tfrecord_filepath.exists():
-        parser.error(f'{valid_tfrecord_filepath} already exists')
+    definitions_tfrecord_filepath = dataset.definitions_tfrecord_filepath(tfrecord_prefix=args.tfrecord_prefix)
+    if definitions_tfrecord_filepath.exists():
+        parser.error(f'{definitions_tfrecord_filepath} already exists')
 
-    definition_tfrecord_filepath = dataset._definition_tfrecord_filepath(tfrecord_prefix=args.tfrecord_prefix)
-    if definition_tfrecord_filepath.exists():
-        parser.error(f'{definition_tfrecord_filepath} already exists')
-
-    graph_constants_filepath = dataset._graph_constants_filepath(tfrecord_prefix=args.tfrecord_prefix)
+    graph_constants_filepath = dataset.graph_constants_filepath(tfrecord_prefix=args.tfrecord_prefix)
     if graph_constants_filepath.exists():
         parser.error(f'{graph_constants_filepath} already exists')
 

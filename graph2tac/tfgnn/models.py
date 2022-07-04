@@ -712,9 +712,10 @@ class ArgumentsHead(tf.keras.layers.Layer):
     def call(self, inputs, training=False):
         hidden_graph, tactic_embedding, num_arguments = inputs
 
-        return tf.cond(tf.reduce_sum(num_arguments) > 0,
-                       lambda: self._get_hidden_state_sequences(inputs, training=training),
-                       lambda: self._no_hidden_state_sequences(inputs))
+        if tf.reduce_sum(num_arguments) > 0:
+            return self._get_hidden_state_sequences(inputs, training=training)
+        else:
+            return self._no_hidden_state_sequences(inputs)
 
 
 class RNNArgumentsHead(ArgumentsHead):

@@ -37,13 +37,14 @@ class FullLocalArgumentSparseCategoricalAccuracy(tf.keras.metrics.Mean):
             self.clip_value_max = 1.0
 
     def update_state(self, y_true, y_pred, sample_weight=None):
-        arguments_pred = tf.argmax(y_pred, axis=-1)
+        if tf.shape(y_pred)[-1] > 0:
+            arguments_pred = tf.argmax(y_pred, axis=-1)
 
-        positions = tf.where(tf.reduce_min(y_true, axis=-1) >= 0)
-        valid_arguments_true = tf.gather_nd(y_true.to_tensor(), positions)
-        valid_arguments_pred = tf.gather_nd(tf.expand_dims(arguments_pred, axis=1), positions)
+            positions = tf.where(tf.reduce_min(y_true, axis=-1) >= 0)
+            valid_arguments_true = tf.gather_nd(y_true.to_tensor(), positions)
+            valid_arguments_pred = tf.gather_nd(tf.expand_dims(arguments_pred, axis=1), positions)
 
-        weights = tf.cast(tf.gather_nd(y_true.row_lengths(axis=-1), positions), dtype=tf.float32)
-        clipped_weights = tf.clip_by_value(weights, clip_value_min=self.clip_value_min, clip_value_max=self.clip_value_max)
+            weights = tf.cast(tf.gather_nd(y_true.row_lengths(axis=-1), positions), dtype=tf.float32)
+            clipped_weights = tf.clip_by_value(weights, clip_value_min=self.clip_value_min, clip_value_max=self.clip_value_max)
 
-        super().update_state(tf.reduce_all(valid_arguments_true == valid_arguments_pred, axis=-1), clipped_weights)
+            super().update_state(tf.reduce_all(valid_arguments_true == valid_arguments_pred, axis=-1), clipped_weights)

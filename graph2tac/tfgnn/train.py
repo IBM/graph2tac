@@ -1,4 +1,4 @@
-from typing import Optional, Dict
+from typing import Optional, Dict, Tuple
 
 import yaml
 import argparse
@@ -6,8 +6,9 @@ import atexit
 import tensorflow as tf
 import tensorflow_gnn as tfgnn
 from pathlib import Path
+from math import ceil
 
-from graph2tac.tfgnn.dataset import Dataset, DataLoaderDataset, TFRecordDataset
+from graph2tac.tfgnn.dataset import Dataset, DataServerDataset, TFRecordDataset
 from graph2tac.tfgnn.tasks import PredictionTask, DefinitionTask, DefinitionMeanSquaredError
 from graph2tac.tfgnn.graph_schema import definition_graph_spec, batch_graph_spec
 
@@ -21,7 +22,6 @@ class Trainer:
 
     def __init__(self,
                  dataset: Dataset,
-                 batch_size: int,
                  prediction_task: PredictionTask,
                  optimizer_type: str,
                  optimizer_config: Optional[dict] = None,
@@ -33,7 +33,6 @@ class Trainer:
                  keep_checkpoint_every_n_hours: Optional[int] = None):
         """
         @param dataset:
-        @param batch_size:
         @param prediction_task:
         @param optimizer_type:
         @param optimizer_config:
@@ -46,7 +45,6 @@ class Trainer:
         """
         # dataset
         self.dataset = dataset
-        self.batch_size = batch_size
 
         # prediction task
         self.prediction_task = prediction_task
@@ -87,7 +85,6 @@ class Trainer:
     def get_config(self):
         config = {
             'dataset': self.dataset.get_config(),
-            'batch_size': self.batch_size,
             'prediction_task': self.prediction_task.get_config(),
             'optimizer_type': self.optimizer_type,
             'optimizer_config': self.optimizer.get_config(),
@@ -183,17 +180,17 @@ class Trainer:
 
         return (proofstate_graph, definition_graph), outputs
 
-    def _prepare_dataset(self, dataset):
+    def _prepare_dataset(self, dataset: tf.data.Dataset) -> tf.data.Dataset:
         # create input-output pairs
-        dataset = dataset.map(self.prediction_task.create_input_output).repeat()
+        dataset = dataset.map(self.prediction_task.create_input_output)
 
         # add definitions if necessary
         if self.definition_task is not None:
-            dataset = tf.data.Dataset.zip(datasets=(dataset, self.dataset.definitions().repeat()))
+            count = ceil(self.dataset.total_proofstates()/self.dataset.total_definitions())
+            definitions = self.dataset.definitions(shuffle=False)
+            definitions = definitions.repeat(count).shuffle(self.dataset.SHUFFLE_BUFFER_SIZE)
+            dataset = tf.data.Dataset.zip(datasets=(dataset, definitions))
             dataset = dataset.map(self._input_output_mixing)
-
-        # batching
-        dataset = dataset.batch(self.batch_size)
 
         return dataset
 
@@ -254,19 +251,36 @@ class Trainer:
             loss_weights.update({self.DEFINITION_EMBEDDING: self.definition_loss_coefficient})
         return loss_weights
 
-    def run(self, total_epochs):
+    def run(self,
+            total_epochs: int,
+            batch_size: int,
+            split: Tuple[int, int],
+            split_random_seed: int
+            ) -> tf.keras.callbacks.History:
+        """
+        @param total_epochs: the total number of epochs to train for (will automatically resume from last trained epoch)
+        @param batch_size: the global batch size to use
+        @param split: a pair of integers specifying the training/validation split, as passed to Dataset.proofstates()
+        @param split_random_seed: a seed for the training/validation split, as passed to Dataset.proofstates()
+        @return: the training history
+        """
         self.train_model.compile(loss=self._loss(),
                                  loss_weights=self._loss_weights(),
                                  optimizer=self.optimizer,
                                  metrics=self.prediction_task.metrics())
 
-        history = self.train_model.fit(self._prepare_dataset(self.dataset.train_proofstates()),
-                                       steps_per_epoch=self.dataset.train_proofstates_steps_per_epoch(self.batch_size),
+        train_proofstates, valid_proofstates = self.dataset.proofstates(split=split,
+                                                                        split_random_seed=split_random_seed,
+                                                                        shuffle=True)
+
+        train_proofstates = train_proofstates.apply(self._prepare_dataset).batch(batch_size).prefetch(tf.data.AUTOTUNE)
+        valid_proofstates = valid_proofstates.apply(self._prepare_dataset).batch(batch_size).prefetch(tf.data.AUTOTUNE)
+
+        history = self.train_model.fit(train_proofstates,
+                                       validation_data=valid_proofstates,
+                                       initial_epoch=self.trained_epochs.numpy(),
                                        epochs=total_epochs,
-                                       validation_data=self._prepare_dataset(self.dataset.valid_proofstates()),
-                                       validation_steps=self.dataset.valid_proofstates_steps_per_epoch(self.batch_size),
-                                       callbacks=self._callbacks(),
-                                       initial_epoch=self.trained_epochs.numpy())
+                                       callbacks=self._callbacks())
         return history
 
 
@@ -319,20 +333,22 @@ def main():
     # training specification
     parser.add_argument("--trainer-config", metavar="TRAINING_YAML", type=Path, required=True,
                         help="YAML file with the configuration for training")
-    parser.add_argument("--total-epochs", type=int, required=True,
-                        help="Total number of epochs to train for")
+    parser.add_argument("--run-config", metavar="RUN_YAML", type=Path, required=True,
+                        help="YAML file with the configuration for training")
     parser.add_argument("--log", type=Path, metavar="DIRECTORY",
                         help="Directory where checkpoints and logs are kept")
 
     # device specification
     parser.add_argument("--gpu", type=str,
                         help="GPUs to use for training ('/gpu:0', '/gpu:1', ... or use 'all' for multi-GPU training)")
-    parser.add_argument("--tf-seed", type=int,
-                        help="Global TensorFlow seed")
     args = parser.parse_args()
 
-    # set global random seed
-    tf.random.set_seed(args.tf_seed)
+    # read the run parameters and set the global seed
+    if not args.run_config.is_file():
+        parser.error(f'--run-config {args.run_config} must be a YAML file')
+    with args.run_config.open() as yaml_file:
+        run_config = yaml.load(yaml_file, Loader=yaml.SafeLoader)
+    tf.random.set_seed(run_config['tf_seed'])
 
     # dataset creation
     if args.data_dir is not None and not args.data_dir.is_dir():
@@ -341,7 +357,7 @@ def main():
         parser.error(f'--dataset-config {args.dataset_config} must be a YAML file')
 
     if args.data_dir is not None:
-        dataset = DataLoaderDataset.from_yaml_config(data_dir=args.data_dir,
+        dataset = DataServerDataset.from_yaml_config(data_dir=args.data_dir,
                                                      yaml_filepath=args.dataset_config)
     else:
         dataset = TFRecordDataset.from_yaml_config(tfrecord_prefix=args.tfrecord_prefix,
@@ -379,10 +395,10 @@ def main():
                                            log_dir=args.log)
 
     # training
-    if args.total_epochs <= 0:
-        parser.error(f'--total-epochs {args.total_epochs} should be a positive integer')
-
-    trainer.run(total_epochs=args.total_epochs)
+    trainer.run(total_epochs=run_config['total_epochs'],
+                batch_size=run_config['batch_size'],
+                split=run_config['split'],
+                split_random_seed=run_config['split_random_seed'])
 
 
 if __name__ == "__main__":
