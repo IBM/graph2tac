@@ -3,8 +3,8 @@ data server provides the class to serve data to training
  - from a collection of bin files in a filesystem
  - from messages in a stream in interactive session (to be implmeneted)
 """
+from typing import List, Tuple, Callable
 
-import multiprocessing
 import time
 import os
 import random
@@ -19,7 +19,6 @@ from graph2tac.hash import get_split_label
 from graph2tac.loader.helpers import get_all_fnames
 
 import tqdm
-from graph2tac.common import uuid
 
 
 from graph2tac.loader.clib.loader import (
@@ -40,7 +39,6 @@ from graph2tac.loader.clib.loader import (
 )
 
 
-
 @dataclass
 class GraphConstants:
     tactic_num: int
@@ -49,21 +47,21 @@ class GraphConstants:
     node_label_num: int
     cluster_subgraphs_num: int
     tactic_index_to_numargs: np.ndarray  # dtype = np.uint32
-    tactic_index_to_string: list[str]    # tactic names
+    tactic_index_to_string: List[str]    # tactic names
     tactic_index_to_hash: np.ndarray
     global_context: np.ndarray
-    label_to_names: list[str]
-    label_in_spine: list[bool]
-
+    label_to_names: List[str]
+    label_in_spine: List[bool]
+    max_subgraph_size: int
 
 
 @dataclass
 class DataPoint:
     proof_step_idx: int
-    graph: tuple[np.ndarray]
+    graph: Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]
     context: np.ndarray
     root: int
-    action: tuple[np.ndarray]
+    action: Tuple[np.ndarray, np.ndarray]
     state_text: bytes
     action_base_text: bytes
     action_interm_text: bytes
@@ -82,7 +80,7 @@ class DefIndexTable:
     idx_in_spine: list[bool]
 
 
-def graph_as(model: str, graph):
+def graph_as(model: str, graph) -> Tuple:
     """
     input: the graph as loader returns it
     output: the graph in a format that model consumes where the model is "tf2" or "tfgnn"
@@ -91,40 +89,34 @@ def graph_as(model: str, graph):
     nodes, edges, edge_labels, edges_offset = graph
 
     if model == "tf_gnn":
-        return (nodes, edges[:, 0], edges[:, 1], edge_labels)
+        return nodes, edges[:, 0], edges[:, 1], edge_labels
     if model == "tf2":
         edges_grouped_by_label = np.split(edges, edges_offset)
-        return (nodes, edges_grouped_by_label)
+        return nodes, edges_grouped_by_label
 
     raise Exception(f"currently supported graph format is for models tf2 or tfgnn, but received {model}")
 
 
-
-
-def find_bin_files(data_dir: str):
+def find_bin_files(data_dir: Path) -> List[Path]:
     """
     returns the list of bin files (packed) in root dir
     """
     return [Path(data_dir).joinpath(f + '.bin') for f in get_all_fnames(data_dir, '**/*.bin')]
 
-def find_binx_files(data_dir: str):
+
+def find_binx_files(data_dir: Path) -> List[Path]:
     """
     returns the list of binx files (unpacked) in root dir
     """
     return [Path(data_dir).joinpath(f + '.binx') for f in get_all_fnames(data_dir, '**/*.binx')]
 
 
-def unpack_bin_files(data_dir):
-    for fname in find_bin_files(data_dir):
-        print(f"unpacking {fname}")
-        capnp_unpack(os.fsencode(fname))
-
-
-def top_sort_dataset_modules(data_dir: Path):
+def top_sort_dataset_modules(data_dir: Path) -> List[Path]:
     fnames = find_bin_files(data_dir)
     root_dir = data_dir
     comp = files_get_scc_components(os.fsencode(root_dir), list(map(os.fsencode, fnames)))
     return list(map(lambda x: fnames[x], comp))
+
 
 def get_global_def_table(buf_list, message_type: str, restrict_to_spine=False):
     """
@@ -150,6 +142,7 @@ def get_global_nodes_in_spine(buf_list, message_type):
             global_nodes_in_spine.add((file_idx,node_idx))
     return global_nodes_in_spine
 
+
 def build_def_index(global_def_table, global_nodes_in_spine: set[tuple[int,int]]) -> DefIndexTable:
     def_idx_to_global_node = []
     def_idx_to_name = []
@@ -168,19 +161,19 @@ def build_def_index(global_def_table, global_nodes_in_spine: set[tuple[int,int]]
     return DefIndexTable(def_idx_to_global_node, global_node_to_def_idx, def_idx_to_name, def_idx_to_hash, def_idx_in_spine)
 
 
-
-
 def def_hash_of_tactic_point(def_index_table, tactic_point):
     def_idx = def_index_table.global_node_to_idx[(tactic_point[2].item(), tactic_point[3].item())]
 
     return def_index_table.idx_to_hash[def_idx]
 
+
 def def_name_of_tactic_point(def_index_table, tactic_point):
     def_idx = def_index_table.global_node_to_idx[(tactic_point[2].item(), tactic_point[3].item())]
     return def_index_table.idx_to_name[def_idx]
 
-def def_hash_split(x, prob, seed):
-    return get_split_label(x[7].item(), prob, seed)
+
+def def_hash_split(tactical_point, prob: List[float], seed: int) -> int:
+    return get_split_label(tactical_point[7].item(), prob, seed)
 
 
 def get_tactic_hash_num_args_collision(tactical_data, fnames):
@@ -196,7 +189,7 @@ def get_tactic_hash_num_args_collision(tactical_data, fnames):
     return data_error_report
 
 
-class Data2():
+class Data2:
     """
     this is low-level api for refactored online loader from mmaped capnp bin files
     """
@@ -335,7 +328,7 @@ class Data2():
 
         tactic_index_to_string = list(self.get_proof_step_text(tdataidx)[1] for tdataidx in idx_thash_narg_tdataidx[:,3])
 
-        base_node_label_names, edge_label_num = get_graph_constants_online();
+        base_node_label_names, edge_label_num = get_graph_constants_online()
         base_node_label_num = len(base_node_label_names)
 
         global_context = np.arange(base_node_label_num, base_node_label_num + len(self.__def_index_table.idx_to_hash), dtype=np.uint32)
@@ -357,18 +350,17 @@ class Data2():
                               tactic_index_to_hash=tactic_index_to_hash,
                               global_context=global_context,
                               label_to_names=label_to_names,
-                              label_in_spine=label_in_spine)
+                              label_in_spine=label_in_spine,
+                              max_subgraph_size=self.__max_subgraph_size)
 
 
     def def_name_of_tactic_point(self, data_point_idx):
         return def_name_of_tactic_point(self.__def_index_table, self.__tactical_data[data_point_idx])
 
-
     def get_proof_step_text(self, data_point_idx):
         tactic_point = self.__tactical_data[data_point_idx]
         state_text, action_base_text, action_interm_text, action_text = get_proof_step_online_text(self.__c_data_online, tactic_point[2:6])
         return state_text, action_base_text, action_interm_text, action_text
-
 
     def get_proof_step(self, data_point_idx,
                        skip_text=False):
@@ -379,7 +371,6 @@ class Data2():
             np.array([(file_idx.item(), state_root_node.item())], dtype=np.uint32),
             self.__bfs_option, self.__max_subgraph_size, False)
         nodes, edges, edge_labels, edges_offset, global_visited, _, _, _, _ = res
-        edges_grouped_by_label = np.split(edges, edges_offset)
 
         context, root, tactic_index, args = get_proof_step_online(self.__c_data_online, tactic_point[2:6], global_visited)
 
@@ -405,9 +396,7 @@ class Data2():
                          step_in_proof=proof_step_idx.item(),
                          file_name=self.__fnames[file_idx])
 
-
-
-    def select_data_points(self, split_fun, label):
+    def select_data_points(self, split_fun: Callable[[...], int], label: int) -> List[int]:
         """
         returns a list of datapoint indices that have given label
 
@@ -419,26 +408,29 @@ class Data2():
         return [i for i, tactical_point in enumerate(self.__tactical_data) if split_fun(tactical_point) == label]
 
     def data_train(self):
-        return self.select_data_points(split_fun=lambda x: def_hash_split(x, self.__split, self.__split_random_seed), label=0)
+        return self.select_data_points(split_fun=lambda x: def_hash_split(x, self.__split, self.__split_random_seed),
+                                       label=0)
 
     def data_valid(self):
-        return self.select_data_points(split_fun=lambda x: def_hash_split(x, self.__split, self.__split_random_seed), label=1)
+        return self.select_data_points(split_fun=lambda x: def_hash_split(x, self.__split, self.__split_random_seed),
+                                       label=1)
 
     def data_test(self):
-        return self.select_data_points(split_fun=lambda x: def_hash_split(x, self.__split, self.__split_random_seed), label=2)
+        return self.select_data_points(split_fun=lambda x: def_hash_split(x, self.__split, self.__split_random_seed),
+                                       label=2)
 
 
     # REFACTOR CLIENTS
     def step_state(self, data_point_idx: int):
         proof_step = self.get_proof_step(data_point_idx, skip_text=True)
-        return (proof_step.graph, proof_step.root, proof_step.context)
+        return proof_step.graph, proof_step.root, proof_step.context
 
     def step_state_text(self, data_point_idx: int):
         return self.get_proof_step(data_point_idx).state_text
 
     def step_label_text(self, data_point_idx: int):
         res = self.get_proof_step(data_point_idx)
-        return (res.action_base_text, res.action_interm_text, res.action_text)
+        return res.action_base_text, res.action_interm_text, res.action_text
 
     def step_label(self, data_point_idx):
         return self.get_proof_step(data_point_idx, skip_text=True).action
@@ -454,10 +446,7 @@ class Data2():
         nodes, edges, edge_labels, edges_offset, _ , _, _, _, _ = res
 
         graph = nodes, edges, edge_labels, edges_offset
-        return (graph, len(def_cluster))
-
-
-
+        return graph, len(def_cluster)
 
 
 class Iterator:
@@ -482,9 +471,6 @@ class Iterator:
         return self.__size
 
 
-
-
-
 class DataServer:
     """
     implements higher level api compatible with current train.py
@@ -492,14 +478,11 @@ class DataServer:
     """
     def __init__(self,
                  data_dir: Path,
-                 work_dir: Path = Path('.'),
-                 split: tuple[int] = (8, 1, 1),
+                 max_subgraph_size,
+                 split: Tuple[int, int, int] = (8, 1, 1),
                  cross_valid_fold: int = 0,
                  bfs_option = True,
-                 max_subgraph_size: int = 20000,
                  split_random_seed = 0,
-                 num_proc = None,
-                 ignore_def_hash: bool = True,
                  restrict_to_spine: bool = False,
     ):
         """
@@ -528,12 +511,16 @@ class DataServer:
 
         self.__cluster_subgraphs = None
 
-    def data_point(self, proof_step_idx):
+    def data_point(self, proof_step_idx: int):
         return self.__online_data.get_proof_step(proof_step_idx)
 
+    def total_proofstates(self) -> int:
+        """
+        @return: the total number of proofstates (in all splits)
+        """
+        return self.__online_data.tactical_data().shape[0]
 
-
-    def data_train(self, shuffled=False,  as_text=False):
+    def data_train(self, shuffled: bool = False,  as_text: bool = False):
         """
         returns a stream of training data, optionally shuffled
         with the default format (state, action) where
@@ -564,9 +551,7 @@ class DataServer:
                             functools.partial(data.step_label),
                             lambda x: x)
 
-
-
-    def data_valid(self, as_text=False):
+    def data_valid(self, as_text: bool = False):
         """
         returns a stream of validation data in the same format as  data_train
         see doc_string for data_train for the format
@@ -585,9 +570,7 @@ class DataServer:
                             functools.partial(data.step_label),
                             lambda x: x)
 
-
-
-    def def_cluster_subgraph(self, cluster_idx):
+    def def_cluster_subgraph(self, cluster_idx: int):
         """
         returns a definition cluster with cluster_idx
         in the same format as def_class_subgraph (see docstring there)
@@ -596,7 +579,6 @@ class DataServer:
         the entry points to the definition nodes are the first K in the list of returned nodes
         """
         return self.__online_data.def_cluster_subgraph(cluster_idx)
-
 
     def def_cluster_subgraphs(self):
         """
@@ -614,10 +596,8 @@ class DataServer:
                 self.__cluster_subgraphs.append(self.def_cluster_subgraph(idx))
         return self.__cluster_subgraphs
 
-
     def graph_constants(self):
         return self.__online_data.graph_constants()
-
 
     def _debug_online_data(self):
         return self.__online_data

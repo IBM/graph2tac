@@ -93,15 +93,18 @@ setup(
                   [
                       'g2t-preprocess=graph2tac.loader.preprocess:main',
                       'g2t-train=graph2tac.tf2.train:main',
+                      'g2t-train-tfgnn=graph2tac.tfgnn.train:main',
                       'g2t-stat=graph2tac.loader.graph_stat:main',
                       'g2t-printlog=graph2tac.printlog:main',
                       'g2t-unpack=graph2tac.loader.unpack:main',
-                      'g2t-server=graph2tac.loader.predict_server:main'
+                      'g2t-server=graph2tac.loader.predict_server:main',
+                      'g2t-train-hmodel=graph2tac.loader.hmodel:main'
                   ]},
     license='MIT',
     install_requires=[
         'keras>=2.8',
         'tensorflow>=2.8',
+        'tensorflow_gnn>=0.2.0.dev1',
         'fire',
         'pycapnp',
         'psutil',

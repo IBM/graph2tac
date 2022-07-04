@@ -1,4 +1,3 @@
-batch_size: 64
 optimizer_type: adam
 optimizer_config:
   amsgrad: false

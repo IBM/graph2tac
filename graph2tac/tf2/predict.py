@@ -72,6 +72,13 @@ class Predict:
         """
         return self.dataset_consts.node_label_in_spine
 
+    def get_max_subgraph_size(self) -> int:
+        """
+        Public API
+        """
+        return self.dataset_consts.max_subgraph_size
+
+
 
     def initialize(self, global_context: Optional[list[int]] = None):
 

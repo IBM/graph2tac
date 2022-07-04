@@ -36,6 +36,7 @@ LOG_LEVEL = logging.INFO
 from graph2tac.loader.clib.loader import (
     get_scc_components,
     data_online_extend,
+    data_online_resize,
     get_def_deps_online,
     get_subgraph_online,
     load_msg_online,
@@ -176,18 +177,22 @@ def wrap_debug_record(debug_dir, msg, context_cnt):
         fname = os.path.join(debug_dir, f'msg_init.{context_cnt}.bin')
         debug_record(msg, fname=fname)
 
+def train_names_in_cluster(def_scc_cluster, eval_label_to_train_label, train_node_label_to_name):
+    result = []
+    for eval_def_idx in def_scc_cluster:
+            eval_label = len(BASE_NAMES) + eval_def_idx.item()
+            train_label = eval_label_to_train_label[eval_label]
+            train_name = train_node_label_to_name[train_label] if train_label < len(train_node_label_to_name) else b".MISSING"
+            result.append(train_name.decode())
+    return result
+
 
 def log_clusters_verbose(def_scc_clusters, eval_label_to_train_label, train_node_label_to_name):
     for i, cluster in enumerate(def_scc_clusters):
-        result = ""
-        for eval_def_idx in cluster:
-
-            eval_label = len(BASE_NAMES) + eval_def_idx.item()
-            train_label = eval_label_to_train_label[eval_label]
-            train_name = train_node_label_to_name[train_label] if train_label < len(train_node_label_to_name) else ".MISSING"
-            result += f" {train_name}"
-
-        log_verbose(f"cluster {i}: {result}")
+        x = train_names_in_cluster(cluster, eval_label_to_train_label, train_node_label_to_name)
+        log_verbose(x)
+        string_of_cluster_names = " ".join(x)
+        log_verbose(f"cluster {i}: {string_of_cluster_names}")
 
 
 
@@ -198,7 +203,12 @@ def get_unaligned_nodes(def_idx_to_node, def_idx_to_name, eval_label_to_train_la
             unaligned_nodes.append((node_idx, eval_name))
     return unaligned_nodes
 
-def process_alignment_request(al_msg_data, train_node_label_to_name, train_node_label_in_spine):
+def process_alignment_request(
+        network_tactic_hash_to_numargs,
+        al_msg_data,
+        msg,
+        train_node_label_to_name,
+        train_node_label_in_spine):
     al_def_idx_to_node, al_train_label_to_eval_label, al_eval_label_to_train_label, al_eval_names = get_def_idx_to_node__train_to_eval__eval_to_train__eval_names(
         al_msg_data, train_node_label_to_name, train_node_label_in_spine, "request.checkAlignment")
     al_def_idx_to_name = al_eval_names[len(BASE_NAMES):]
@@ -206,16 +216,22 @@ def process_alignment_request(al_msg_data, train_node_label_to_name, train_node_
                                           al_def_idx_to_name,
                                           al_eval_label_to_train_label,
                                           len(train_node_label_to_name))
-    log_info("checkAlignment unaligned nodes: ", unaligned_nodes)
+    log_verbose("checkAlignment unaligned nodes: ", unaligned_nodes)
+
+
+    evaluation_tactic_hash_to_numargs = dict()
+    for tac_reader in msg.checkAlignment.tactics:
+        evaluation_tactic_hash_to_numargs[tac_reader.ident] = tac_reader.parameters
+
 
     unaligned_tactics = list(sorted(set(evaluation_tactic_hash_to_numargs.items())
-                                    - set(network_tactic_hash_to_numargs)))
-    log_info("checkAlignment unaligned tactics: ", unaligned_tactics)
+                                    - set(network_tactic_hash_to_numargs.items())))
+    log_verbose("checkAlignment unaligned tactics: ", unaligned_tactics)
+    return unaligned_tactics, unaligned_nodes
 
 
 def main_loop(reader, sock, predict, debug_dir, session_idx=0,
               bfs_option=True,
-              max_subgraph_size=512,
               with_meter=False,
               tactic_expand_bound=8,
               total_expand_bound=2048,
@@ -223,6 +239,7 @@ def main_loop(reader, sock, predict, debug_dir, session_idx=0,
               update_all_definitions=False,
               update_new_definitions=False,
               progress_bar=False):
+    max_subgraph_size = predict.get_max_subgraph_size()
 
     if debug_dir is not None:
         debug_dir_session = os.path.join(debug_dir, f"session_{session_idx}")
@@ -264,7 +281,12 @@ def main_loop(reader, sock, predict, debug_dir, session_idx=0,
         elif msg_type == "checkAlignment":
             log_info("checkAlignment request")
             al_msg_data = msg.as_builder().to_bytes()
-            unaligned_tactics, unaligned_nodes = process_alignment_request(al_msg_data, train_node_label_to_name, train_node_label_in_spine)
+            unaligned_tactics, unaligned_nodes = process_alignment_request(
+                network_tactic_hash_to_numargs,
+                al_msg_data,
+                msg,
+                train_node_label_to_name,
+                train_node_label_in_spine)
 
             response = graph_api_capnp.PredictionProtocol.Response.new_message(
                 alignment={'unalignedTactics': [x for (x,v) in unaligned_tactics],
@@ -283,7 +305,7 @@ def main_loop(reader, sock, predict, debug_dir, session_idx=0,
 
             context_cnt += 1
 
-            log_normal(f'session {session_idx} theorem {context_cnt} started.')
+            log_normal(f'session {session_idx} theorem idx={context_cnt}, annotation={msg.initialize.logAnnotation} started.')
 
             wrap_debug_record(debug_dir, msg, context_cnt)
 
@@ -300,7 +322,7 @@ def main_loop(reader, sock, predict, debug_dir, session_idx=0,
                                                   def_idx_to_name,
                                                   eval_label_to_train_label,
                                                   len(train_node_label_to_name))
-            log_info("intialization unaligned nodes", unaligned_nodes)
+            log_verbose("intialization unaligned nodes", unaligned_nodes)
 
             c_data_online = build_data_online_from_buf(def_idx_to_node,
                                                        network_tactic_index_to_hash,
@@ -318,8 +340,7 @@ def main_loop(reader, sock, predict, debug_dir, session_idx=0,
 
             log_info(f"c_data_online references {n_msg_recorded} msg")
 
-            def_max_subgraph_size = max_subgraph_size
-            def_deps_ids =  get_def_deps_online(c_data_online, bfs_option, def_max_subgraph_size)
+            def_deps_ids =  get_def_deps_online(c_data_online, bfs_option, max_subgraph_size)
             # log_info(f"computed def_deps_ids =  {def_deps_ids}")
             def_scc_clusters = get_scc_components(def_deps_ids)
             log_info(f"computed def_scc_clusters  of size {len(def_scc_clusters)}")
@@ -328,7 +349,7 @@ def main_loop(reader, sock, predict, debug_dir, session_idx=0,
 
 
             log_info(f"generating clusters from initialization message")
-            map_eval_label_to_train_label = np.array(eval_label_to_train_label, dtype=np.intp)
+            map_eval_label_to_train_label = np.array(eval_label_to_train_label, dtype=np.int32)
 
             global_context = map_eval_label_to_train_label[len(BASE_NAMES):].astype(np.int32)
             # available_global = np.arange(0, len(global_context), 1, dtype=np.uint64)
@@ -366,18 +387,21 @@ def main_loop(reader, sock, predict, debug_dir, session_idx=0,
             decorated_iterator = tqdm.tqdm(def_clusters_for_update) if progress_bar else def_clusters_for_update
             t0 = time.time()
             for def_cluster in decorated_iterator:
-                    res = get_subgraph_online(c_data_online, def_idx_to_node[def_cluster], bfs_option, max_subgraph_size, False)
-                    eval_node_labels, edges, edge_labels, edges_offset, global_visited, _, _, _, _ = res
+                cluster_names = [def_idx_to_name[def_idx] for def_idx in def_cluster]
+                # print(cluster_names)
 
-                    train_node_labels = map_eval_label_to_train_label[eval_node_labels]
-                    # edges_grouped_by_label = np.split(edges, edges_offset)
+                res = get_subgraph_online(c_data_online, def_idx_to_node[def_cluster], bfs_option, max_subgraph_size, False)
+                eval_node_labels, edges, edge_labels, edges_offset, global_visited, _, _, _, _ = res
 
-                    cluster_graph = train_node_labels, edges, edge_labels, edges_offset
+                train_node_labels = map_eval_label_to_train_label[eval_node_labels]
+                # edges_grouped_by_label = np.split(edges, edges_offset)
 
-                    # cluster_state = (train_node_labels, edges_grouped_by_label, len(def_cluster))
-                    cluster_state = (cluster_graph, len(def_cluster))
+                cluster_graph = train_node_labels, edges, edge_labels, edges_offset
 
-                    predict.compute_new_definitions([cluster_state])
+                # cluster_state = (train_node_labels, edges_grouped_by_label, len(def_cluster))
+                cluster_state = (cluster_graph, len(def_cluster))
+                # print(cluster_state)
+                predict.compute_new_definitions([cluster_state])
             t1 = time.time()
             n_def_clusters_updated = len(def_clusters_for_update)
             update_def_time = t1 - t0
@@ -389,8 +413,6 @@ def main_loop(reader, sock, predict, debug_dir, session_idx=0,
             for tac_hash in tacs:
                 if tac_hash in network_tactic_hash_to_index.keys():
                     allowed_model_tactics.append(network_tactic_hash_to_index[tac_hash])
-
-
 
             msg_idx = 0
             t0_coq = time.time()
@@ -410,20 +432,19 @@ def main_loop(reader, sock, predict, debug_dir, session_idx=0,
 
             msg_data = msg.as_builder().to_bytes()
 
-            local_to_global = [np.array([msg_idx, 0], dtype=np.uint32)]
-            n_msg_recorded = data_online_extend(c_data_online,
+            data_online_resize(c_data_online, 1);
+            local_to_global = [np.array([1, 0], dtype=np.uint32)]
+
+            num_messages_stored = data_online_extend(c_data_online,
                                                 [msg_data],
                                                 [b'.proof_state_graph'],
                                                 local_to_global,
                                                 "request.predict",
                                                 )
             total_data_online_size += len(msg_data)
-
-            log_info(f"online_data stores {n_msg_recorded} graphs")
-
-
-
-            roots = np.array( [(msg_idx, msg.predict.state.root)], dtype=np.uint32)
+            log_info(f"num_messages_stored {num_messages_stored}")
+            data_msg_idx = num_messages_stored - 1
+            roots = np.array( [(data_msg_idx, msg.predict.state.root)], dtype=np.uint32)
 
             res = get_subgraph_online(c_data_online,
                                       roots,
@@ -434,32 +455,36 @@ def main_loop(reader, sock, predict, debug_dir, session_idx=0,
 
             train_node_labels = map_eval_label_to_train_label[eval_node_labels]
             edges_grouped_by_label = np.split(edges, edges_offset)
-            this_encoded_root, this_encoded_context, this_context = load_msg_online(msg_data, global_visited, msg_idx)
-            log_verbose("this encoded root", this_encoded_root)
-            log_verbose("this encoded context", this_encoded_context)
-            # for tf2 format
+            this_encoded_root, this_encoded_context, this_context = load_msg_online(msg_data, global_visited, data_msg_idx)
 
-            # online_state = (train_node_labels, edges_grouped_by_label, this_encoded_root, this_encoded_context)
+            log_debug("this encoded root", this_encoded_root)
+            log_debug("this encoded context", this_encoded_context)
+            log_debug("this context", this_context)
 
-            # for tf-gnn format:
-            # online_state = (train_node_labels, edges[:,0], edges[:,1], edge_labels, this_encoded_root, this_encoded_context)
-            online_graph = eval_node_labels, edges, edge_labels, edges_offset
+            log_debug("state from python:", msg.predict.state)
+            log_debug("root children from python:")
+            child_start = msg.predict.graph.nodes[msg.predict.state.root].childrenIndex
+            child_stop  = child_start + msg.predict.graph.nodes[msg.predict.state.root].childrenCount
+            for edge_idx in range(child_start, child_stop):
+                log_debug("root 0 child", msg.predict.graph.edges[edge_idx])
 
+            online_graph = train_node_labels, edges, edge_labels, edges_offset
 
 
             log_verbose("online_state", online_graph)
 
+            t0 = time.time()
+
             online_actions, online_confidences = predict.ranked_predictions(
                 (online_graph, this_encoded_root, this_encoded_context),
-                # online_state,
-                # available_global=available_global,
                 tactic_expand_bound=tactic_expand_bound,
                 total_expand_bound=total_expand_bound,
                 allowed_model_tactics=allowed_model_tactics,
+                annotation = msg_idx - 1,
+                debug = (LOG_LEVEL <= logging.INFO)
             )
 
 
-            t0 = time.time()
 
 
 
@@ -471,7 +496,7 @@ def main_loop(reader, sock, predict, debug_dir, session_idx=0,
                                                               this_context,  sock.fileno(), eval_names[len(BASE_NAMES):])
             for action_idx, (online_encoded_action, online_confidence) in enumerate(
                     zip(top_online_encoded_actions, top_online_confidences)):
-                log_info(f"model action {action_idx}, prob = {online_confidence:.6f}",
+                log_info(f"sending to coq the action {action_idx}, prob = {online_confidence:.6f}",
                          online_encoded_action)
 
 
@@ -479,7 +504,7 @@ def main_loop(reader, sock, predict, debug_dir, session_idx=0,
             t_predict += (t1 - t0)
             n_predict += 1
 
-            # log_info(f'Process predict this call {t1-t0:.6f} seconds')
+            log_verbose(f'Process predict this call {t1-t0:.6f} seconds')
             if n_predict != 0 and n_predict % 10 == 0:
                 log_info(f'Network predicts {t_predict/n_predict:.6f} second/call')
             t0_coq = time.time()
@@ -488,7 +513,7 @@ def main_loop(reader, sock, predict, debug_dir, session_idx=0,
                             "msg type is not 'predict', 'synchronize', or 'initialize'")
 
 
-    log_normal(f'theorem {context_cnt} had {msg_idx} '
+    log_normal(f'(final): theorem {context_cnt} had {msg_idx} '
                f'messages received of total size (unpacked) {total_data_online_size} bytes, '
                f'with network compiled in {build_network_time:.6f} s, ',
                f'with {n_def_clusters_updated} def clusters updated in {update_def_time:.6f} s')
@@ -663,16 +688,25 @@ def main():
     predict = None
     if not args.model is None:
         os.environ['TF_CPP_MIN_LOG_LEVEL'] = tf_log_levels[args.tf_log_level]
-        log_info("importing tensorflow...")
-        import tensorflow as tf
-        tf.get_logger().setLevel(int(tf_log_levels[args.log_level]))
-        tf.config.run_functions_eagerly(args.tf_eager)
-        log_info("importing Predict class..")
         if args.arch == 'tf2':
+            log_info("importing tensorflow...")
+            import tensorflow as tf
+            tf.get_logger().setLevel(int(tf_log_levels[args.log_level]))
+            tf.config.run_functions_eagerly(args.tf_eager)
             from graph2tac.tf2.predict import Predict
+            log_info("importing Predict class..")
             predict = Predict(Path(args.model).expanduser().absolute())
         elif args.arch == 'tfgnn':
+            log_info("importing tensorflow...")
+            import tensorflow as tf
+            tf.get_logger().setLevel(int(tf_log_levels[args.log_level]))
+            tf.config.run_functions_eagerly(args.tf_eager)
             from graph2tac.tfgnn.predict import Predict
+            log_info("importing Predict class..")
+            predict = Predict(Path(args.model).expanduser().absolute())
+        elif args.arch == 'hmodel':
+            log_info("importing Predict class..")
+            from graph2tac.loader.hmodel import Predict
             predict = Predict(Path(args.model).expanduser().absolute())
         else:
             Exception(f'the provided model architecture {args.arch} is not supported')
@@ -717,6 +751,7 @@ def main():
                           update_new_definitions=args.update_new_definitions,
                           progress_bar=args.progress_bar,
                 )
+                log_normal("coq client disconnected ", remote_addr)
 
                 session_idx += 1
         finally:
