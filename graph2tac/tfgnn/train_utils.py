@@ -5,6 +5,35 @@ from collections import OrderedDict
 import re
 import tensorflow as tf
 
+
+class ExtendedTensorBoard(tf.keras.callbacks.TensorBoard):
+    """
+    A callback extending the standard TensorBoard callback to additionally write the model summary, training config, etc
+    """
+    def __init__(self, trainer: Trainer, line_length: int = 200, **kwargs):
+        self.line_length = line_length
+        self.trainer_config = trainer.get_config()
+        self.dataset_stats = trainer.dataset.stats()
+        super().__init__(**kwargs)
+
+    @property
+    def _text_writer(self):
+        if 'text' not in self._writers:
+            self._writers['text'] = tf.summary.create_file_writer(self.log_dir)
+        return self._writers['text']
+
+    def on_train_begin(self, logs=None):
+        # TODO: here we should check that we are not resuming training
+        model_summary = []
+        self.model.summary(print_fn=lambda line: model_summary.append(line))
+
+        with self._text_writer.as_default():
+            tf.summary.text(name='model summary', data='<pre>\n' + '\n'.join(model_summary) + '\n</pre>', step=0)
+            tf.summary.text(name='trainer config', data='<pre>\n' + yaml.dump(self.trainer_config) + '\n</pre>', step=0)
+            tf.summary.text(name='dataset stats', data='<pre>\n' + yaml.dump(self.dataset_stats) + '\n</pre>', step=0)
+        super().on_train_begin(logs)
+
+
 class QCheckpointManager(tf.train.CheckpointManager):
     """
     A CheckpointManager supporting Q-saving.
