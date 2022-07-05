@@ -71,9 +71,11 @@ class Trainer:
         self.qsaving = qsaving
 
         self.trained_epochs = tf.Variable(initial_value=0, trainable=False)
+        self.num_runs = tf.Variable(initial_value=0, trainable=False)
         self.checkpoint = tf.train.Checkpoint(prediction_task=prediction_task.checkpoint,
                                               optimizer=self.optimizer,
-                                              trained_epochs=self.trained_epochs)
+                                              trained_epochs=self.trained_epochs,
+                                              num_runs=self.num_runs)
         if definition_task is not None:
             self.checkpoint.definition_task = definition_task
 
@@ -129,7 +131,8 @@ class Trainer:
         callbacks = self.prediction_task.callbacks()
 
         trained_epochs_callback = tf.keras.callbacks.LambdaCallback(on_epoch_end=lambda epoch, logs: self.trained_epochs.assign(epoch + 1))
-        callbacks.append(trained_epochs_callback)
+        num_runs_callback = tf.keras.callbacks.LambdaCallback(on_train_begin=lambda logs: self.num_runs.assign_add(1))
+        callbacks.extend([trained_epochs_callback, num_runs_callback])
 
         if self.log_dir is not None:
             # create directory for logs
