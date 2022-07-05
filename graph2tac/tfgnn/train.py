@@ -11,7 +11,7 @@ from math import ceil
 from graph2tac.tfgnn.dataset import Dataset, DataServerDataset, TFRecordDataset
 from graph2tac.tfgnn.tasks import PredictionTask, DefinitionTask, DefinitionMeanSquaredError
 from graph2tac.tfgnn.graph_schema import definition_graph_spec, batch_graph_spec
-from graph2tac.tfgnn.train_utils import QCheckpointManager
+from graph2tac.tfgnn.train_utils import QCheckpointManager, ExtendedTensorBoard
 
 
 class Trainer:
@@ -64,21 +64,17 @@ class Trainer:
         # regularization
         self.l2_regularization_coefficient = l2_regularization_coefficient
 
-        # logging
-        self.log_dir = log_dir
-        self.max_to_keep = max_to_keep
-        self.keep_checkpoint_every_n_hours = keep_checkpoint_every_n_hours
-        self.qsaving = qsaving
-
+        # checkpoint
         self.trained_epochs = tf.Variable(initial_value=0, trainable=False)
-        self.num_runs = tf.Variable(initial_value=0, trainable=False)
+        self.run_counter = tf.Variable(initial_value=0, trainable=False, dtype=tf.int64)
         self.checkpoint = tf.train.Checkpoint(prediction_task=prediction_task.checkpoint,
                                               optimizer=self.optimizer,
                                               trained_epochs=self.trained_epochs,
-                                              num_runs=self.num_runs)
+                                              num_runs=self.run_counter)
         if definition_task is not None:
             self.checkpoint.definition_task = definition_task
 
+        # train model
         with prediction_task.prediction_model.distribute_strategy.scope():
             if self.definition_task is not None:
                 self.train_model = self._create_train_model()
@@ -87,6 +83,49 @@ class Trainer:
 
             if self.l2_regularization_coefficient is not None:
                 self.train_model.add_loss(self._l2_regularization)
+
+        # logging
+        self.log_dir = log_dir
+        self.max_to_keep = max_to_keep
+        self.keep_checkpoint_every_n_hours = keep_checkpoint_every_n_hours
+        self.qsaving = qsaving
+
+        if log_dir is not None:
+            # create directory for logs
+            log_dir.mkdir(exist_ok=True)
+
+            # save configuration
+            config_dir = log_dir / 'config'
+            config_dir.mkdir(exist_ok=True)
+
+            graph_constants_filepath = config_dir / 'graph_constants.yaml'
+            graph_constants_filepath.write_text(yaml.dump(dataset._graph_constants.__dict__))
+
+            dataset_yaml_filepath = config_dir / 'dataset.yaml'
+            dataset_yaml_filepath.write_text(yaml.dump(dataset.get_config()))
+
+            prediction_yaml_filepath = config_dir / 'prediction.yaml'
+            prediction_yaml_filepath.write_text(yaml.dump(prediction_task.get_config()))
+
+            if self.definition_task is not None:
+                definition_yaml_filepath = config_dir / 'definition.yaml'
+                definition_yaml_filepath.write_text(yaml.dump(definition_task.get_config()))
+
+            # checkpointing callback
+            self.checkpoint_path = log_dir / 'ckpt'
+            self.checkpoint_manager = QCheckpointManager(self.checkpoint,
+                                                         self.checkpoint_path,
+                                                         max_to_keep=max_to_keep,
+                                                         keep_checkpoint_every_n_hours=keep_checkpoint_every_n_hours,
+                                                         qsaving=qsaving)
+            try:
+                checkpoint_restored = self.checkpoint_manager.restore_or_initialize()
+            except tf.errors.NotFoundError as error:
+                print(f'unable to restore checkpoint from {self.checkpoint_path}!')
+                raise error
+            else:
+                if checkpoint_restored is not None:
+                    print(f'Restored checkpoint {checkpoint_restored}!')
 
     def get_config(self):
         config = {
@@ -97,6 +136,8 @@ class Trainer:
             'definition_task': self.definition_task.get_config() if self.definition_task is not None else None,
             'definition_loss_coefficient': self.definition_loss_coefficient,
             'l2_regularization_coefficient': self.l2_regularization_coefficient,
+            'max_to_keep': self.max_to_keep,
+            'keep_checkpoint_every_n_hours': self.keep_checkpoint_every_n_hours,
             'qsaving': self.qsaving
         }
         return config
@@ -132,54 +173,12 @@ class Trainer:
         callbacks = self.prediction_task.callbacks()
 
         trained_epochs_callback = tf.keras.callbacks.LambdaCallback(on_epoch_end=lambda epoch, logs: self.trained_epochs.assign(epoch + 1))
-        num_runs_callback = tf.keras.callbacks.LambdaCallback(on_train_begin=lambda logs: self.num_runs.assign_add(1))
+        num_runs_callback = tf.keras.callbacks.LambdaCallback(on_train_begin=lambda logs: self.run_counter.assign_add(1))
         callbacks.extend([trained_epochs_callback, num_runs_callback])
 
         if self.log_dir is not None:
-            # create directory for logs
-            self.log_dir.mkdir(exist_ok=True)
-
-            # save configuration
-            config_dir = self.log_dir / 'config'
-            config_dir.mkdir(exist_ok=True)
-
-            graph_constants_filepath = config_dir / 'graph_constants.yaml'
-            graph_constants_filepath.write_text(yaml.dump(self.dataset._graph_constants.__dict__))
-
-            dataset_yaml_filepath = config_dir / 'dataset.yaml'
-            dataset_yaml_filepath.write_text(yaml.dump(self.dataset.get_config()))
-
-            prediction_yaml_filepath = config_dir / 'prediction.yaml'
-            prediction_yaml_filepath.write_text(yaml.dump(self.prediction_task.get_config()))
-
-            if self.definition_task is not None:
-                definition_yaml_filepath = config_dir / 'definition.yaml'
-                definition_yaml_filepath.write_text(yaml.dump(self.definition_task.get_config()))
-
-            # checkpointing callback
-            checkpoint_path = self.log_dir / 'ckpt'
-            checkpoint_manager = QCheckpointManager(self.checkpoint,
-                                                    checkpoint_path,
-                                                    max_to_keep=self.max_to_keep,
-                                                    keep_checkpoint_every_n_hours=self.keep_checkpoint_every_n_hours,
-                                                    qsaving=self.qsaving)
-            try:
-                checkpoint_restored = checkpoint_manager.restore_or_initialize()
-            except tf.errors.NotFoundError as error:
-                print(f'unable to restore checkpoint from {checkpoint_path}!')
-                raise error
-            else:
-                if checkpoint_restored is not None:
-                    print(f'Restored checkpoint {checkpoint_restored}!')
-
-            save_checkpoint_callback = tf.keras.callbacks.LambdaCallback(on_epoch_end=lambda epoch, logs: checkpoint_manager.save())
+            save_checkpoint_callback = tf.keras.callbacks.LambdaCallback(on_epoch_end=lambda epoch, logs: self.checkpoint_manager.save())
             callbacks.append(save_checkpoint_callback)
-
-            callbacks.append(ExtendedTensorBoard(trainer=self,
-                                                 log_dir=self.log_dir,
-                                                 write_graph=False,
-                                                 write_steps_per_second=True,
-                                                 update_freq='epoch'))
         return callbacks
 
     def _input_output_mixing(self, prediction_task_io, definition_graph):
@@ -273,23 +272,47 @@ class Trainer:
         @param split_random_seed: a seed for the training/validation split, as passed to Dataset.proofstates()
         @return: the training history
         """
+        # compile the training model
         self.train_model.compile(loss=self._loss(),
                                  loss_weights=self._loss_weights(),
                                  optimizer=self.optimizer,
                                  metrics=self.prediction_task.metrics())
 
+        # get training data
         train_proofstates, valid_proofstates = self.dataset.proofstates(split=split,
                                                                         split_random_seed=split_random_seed,
                                                                         shuffle=True)
-
         train_proofstates = train_proofstates.apply(self._prepare_dataset).batch(batch_size).prefetch(tf.data.AUTOTUNE)
         valid_proofstates = valid_proofstates.apply(self._prepare_dataset).batch(batch_size).prefetch(tf.data.AUTOTUNE)
 
+        # prepare callbacks
+        callbacks = self._callbacks()
+        if self.log_dir is not None:
+            tensorboard_callback = ExtendedTensorBoard(log_dir=self.log_dir,
+                                                       write_graph=False,
+                                                       write_steps_per_second=True,
+                                                       update_freq='epoch',
+                                                       run_counter=self.run_counter)
+            callbacks.append(tensorboard_callback)
+
+            # logs for this run
+            tensorboard_callback.log_run(trainer_config=self.get_config(),
+                                         dataset_stats=self.dataset.stats(split=split,
+                                                                          split_random_seed=split_random_seed),
+                                         run_config={
+                                             'total_epochs': total_epochs,
+                                             'batch-size': batch_size,
+                                             'split': split,
+                                             'split_random_seed': split_random_seed
+                                         }
+                                         )
+
+        # run fit
         history = self.train_model.fit(train_proofstates,
                                        validation_data=valid_proofstates,
                                        initial_epoch=self.trained_epochs.numpy(),
                                        epochs=total_epochs,
-                                       callbacks=self._callbacks())
+                                       callbacks=callbacks)
         return history
 
 
