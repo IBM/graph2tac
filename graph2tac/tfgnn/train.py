@@ -30,21 +30,21 @@ class Trainer:
                  definition_loss_coefficient: Optional[float] = None,
                  l2_regularization_coefficient: Optional[float] = None,
                  log_dir: Optional[Path] = None,
-                 max_to_keep: int = 1,
+                 max_to_keep: Optional[int] = 1,
                  keep_checkpoint_every_n_hours: Optional[int] = None,
                  qsaving: Optional[float] = None):
         """
-        @param dataset:
-        @param prediction_task:
-        @param optimizer_type:
-        @param optimizer_config:
-        @param definition_task:
-        @param definition_loss_coefficient:
-        @param l2_regularization_coefficient:
-        @param log_dir:
-        @param max_to_keep:
-        @param keep_checkpoint_every_n_hours:
-        @param qsaving:
+        @param dataset: a `graph2tac.tfgnn.dataset.Dataset` object providing proof-states and definitions
+        @param prediction_task: the `graph2tac.tfgnn.tasks.PredictionTask` to use for proofstates
+        @param optimizer_type: the name of the optimizer to use (as understood by `tf.keras.optimizers.get`)
+        @param optimizer_config: the configuration for the optimizer (or `None` to use all defaults)
+        @param definition_task: the `graph2tac.tfgnn.tasks.DefinitionTask` to use for definitions (or `None` to skip)
+        @param definition_loss_coefficient: the coefficient in front of the definition embeddings loss term
+        @param l2_regularization_coefficient: the coefficient to use for L2 regularization
+        @param log_dir: the directory where TensorBoard logs and checkpoints should be saved
+        @param max_to_keep: the maximum number of checkpoints to keep (or `None` to keep all)
+        @param keep_checkpoint_every_n_hours: optionally keep additional checkpoints every given number of hours
+        @param qsaving: additionally keep checkpoints at epochs [qsaving^n] for n = 0, 1, 2, ...
         """
         # dataset
         self.dataset = dataset
