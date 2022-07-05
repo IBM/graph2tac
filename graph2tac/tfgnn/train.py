@@ -97,6 +97,7 @@ class Trainer:
             'definition_task': self.definition_task.get_config() if self.definition_task is not None else None,
             'definition_loss_coefficient': self.definition_loss_coefficient,
             'l2_regularization_coefficient': self.l2_regularization_coefficient,
+            'qsaving': self.qsaving
         }
         return config
 
