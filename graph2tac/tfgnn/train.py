@@ -95,24 +95,7 @@ class Trainer:
             # create directory for logs
             log_dir.mkdir(exist_ok=True)
 
-            # save configuration
-            config_dir = log_dir / 'config'
-            config_dir.mkdir(exist_ok=True)
-
-            graph_constants_filepath = config_dir / 'graph_constants.yaml'
-            graph_constants_filepath.write_text(yaml.dump(dataset._graph_constants.__dict__))
-
-            dataset_yaml_filepath = config_dir / 'dataset.yaml'
-            dataset_yaml_filepath.write_text(yaml.dump(dataset.get_config()))
-
-            prediction_yaml_filepath = config_dir / 'prediction.yaml'
-            prediction_yaml_filepath.write_text(yaml.dump(prediction_task.get_config()))
-
-            if self.definition_task is not None:
-                definition_yaml_filepath = config_dir / 'definition.yaml'
-                definition_yaml_filepath.write_text(yaml.dump(definition_task.get_config()))
-
-            # checkpointing callback
+            # restore latest checkpoint
             self.checkpoint_path = log_dir / 'ckpt'
             self.checkpoint_manager = QCheckpointManager(self.checkpoint,
                                                          self.checkpoint_path,
@@ -129,6 +112,42 @@ class Trainer:
                     logger.info(f'Restored checkpoint {checkpoint_restored}!')
                 else:
                     self.checkpoint_manager.save(self.trained_epochs)
+
+            # save configuration
+            config_dir = log_dir / 'config'
+            config_dir.mkdir(exist_ok=True)
+
+            self._to_yaml_config(directory=config_dir,
+                                 filename='graph_constants',
+                                 config=dataset._graph_constants.__dict__)
+
+            self._to_yaml_config(directory=config_dir,
+                                 filename='datasets',
+                                 config=dataset.get_config())
+
+            self._to_yaml_config(directory=config_dir,
+                                 filename='prediction',
+                                 config=prediction_task.get_config())
+
+            if self.definition_task is not None:
+                self._to_yaml_config(directory=config_dir,
+                                     filename='definition',
+                                     config=definition_task.get_config())
+
+    def _to_yaml_config(self, directory: Path, filename: str, config: Dict) -> None:
+        """
+        Exports a YAML file for a configuration dict, renaming according to the current run number if necessary.
+
+        @param directory: the directory where the YAML file should be created
+        @param filename: the target filename (without extension)
+        @param config: the dict to export
+        """
+        filepath = directory / f'{filename}.yaml'
+        if filepath.is_file():
+            new_filepath = directory / f'{filename}-{self.run_counter.value()}.yaml'
+            logger.info(f'{filepath} already exists, renaming to {new_filepath}')
+            filepath.rename(new_filepath)
+        filepath.write_text(yaml.dump(config))
 
     def get_config(self):
         config = {
