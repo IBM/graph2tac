@@ -12,6 +12,7 @@ from graph2tac.tfgnn.dataset import Dataset, DataServerDataset, TFRecordDataset
 from graph2tac.tfgnn.tasks import PredictionTask, DefinitionTask, DefinitionMeanSquaredError
 from graph2tac.tfgnn.graph_schema import definition_graph_spec, batch_graph_spec
 from graph2tac.tfgnn.train_utils import QCheckpointManager, ExtendedTensorBoard
+from graph2tac.common import logger
 
 
 class Trainer:
@@ -345,7 +346,14 @@ def main():
     # device specification
     parser.add_argument("--gpu", type=str,
                         help="GPUs to use for training ('/gpu:0', '/gpu:1', ... or use 'all' for multi-GPU training)")
+
+    # logging level
+    parser.add_argument("--log-level", type=int, metavar="LOG_LEVEL", default=20,
+                        help="Logging level (defaults to 20, a.k.a. logging.INFO)")
     args = parser.parse_args()
+
+    # set logging level
+    logger.setLevel(args.log_level)
 
     # read the run parameters and set the global seed
     if not args.run_config.is_file():
