@@ -14,6 +14,7 @@ from graph2tac.tfgnn.dataset import Dataset, DataServerDataset
 from graph2tac.tfgnn.tasks import PredictionTask, GlobalArgumentPrediction, DefinitionTask, BASE_TACTIC_PREDICTION, LOCAL_ARGUMENT_PREDICTION, GLOBAL_ARGUMENT_PREDICTION, _local_arguments_logits
 from graph2tac.tfgnn.models import GraphEmbedding, LogitsFromEmbeddings
 from graph2tac.tfgnn.train import Trainer
+from graph2tac.common import logger
 
 
 NUMPY_NDIM_LIMIT = 32
@@ -191,11 +192,11 @@ class Predict:
         try:
             checkpoint_restored = checkpoint_manager.restore_or_initialize()
         except tf.errors.NotFoundError as error:
-            print(f'unable to restore checkpoint from {checkpoint_path}!')
+            logger.error(f'unable to restore checkpoint from {checkpoint_path}!')
             raise error
         else:
             if checkpoint_restored is not None:
-                print(f'restored checkpoint {checkpoint_restored}!')
+                logger.info(f'restored checkpoint {checkpoint_restored}!')
 
         # choose the prediction method according to the task type
         prediction_task_type = self.prediction_task.get_config().get('prediction_task_type')

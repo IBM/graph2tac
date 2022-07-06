@@ -8,6 +8,7 @@ from pathlib import Path
 
 from graph2tac.loader.data_server import DataServer, GraphConstants, graph_as
 from graph2tac.tfgnn.graph_schema import proofstate_graph_spec, definition_graph_spec
+from graph2tac.common import logger
 
 
 BIDIRECTIONAL = 'bidirectional'
@@ -168,13 +169,13 @@ class Dataset:
             definitions_tfrecord_filepath: self._definitions(),
         }
         for tfrecord_filepath, dataset in datasets.items():
-            print(f'exporting {tfrecord_filepath}')
+            logger.info(f'exporting {tfrecord_filepath}')
             with tf.io.TFRecordWriter(str(tfrecord_filepath.absolute())) as writer:
                 for graph_tensor in iter(dataset):
                     example = tfgnn.write_example(graph_tensor)
                     writer.write(example.SerializeToString())
 
-        print(f'exporting {graph_constants_filepath}')
+        logger.info(f'exporting {graph_constants_filepath}')
         graph_constants_filepath.write_text(yaml.dump(self._graph_constants.__dict__))
 
     def stats(self, split: Tuple[int, int] = (9,1), split_random_seed: int = 0) -> dict[str, dict[str, int]]:
@@ -187,7 +188,7 @@ class Dataset:
         """
         split_settings = (tuple(split), split_random_seed)
         if split_settings not in self._stats.keys():
-            print('computing dataset statistics (this may take a while)...')
+            logger.info('computing dataset statistics (this may take a while)...')
 
             train_proofstates, valid_proofstates = self.proofstates(split=split,
                                                                     split_random_seed=split_random_seed,
@@ -469,7 +470,7 @@ class TFRecordDataset(Dataset):
         self._proofstates_dataset = tf.data.TFRecordDataset(filenames=[str(proofstates_tfrecord_filepath.absolute())])
 
         # compute the total number of proofstates
-        print('counting proofstates (this can take a while)...')
+        logger.info('counting proofstates (this can take a while)...')
         self._total_proofstates = self._proofstates_dataset.reduce(0, lambda result, _: result + 1)
 
         # load the definitions
@@ -704,7 +705,14 @@ def main():
                         help="Prefix for the .tfrecord and .yml files to generate")
     parser.add_argument("--dataset-config", metavar="DATASET_YAML", type=Path, required=True,
                         help="YAML file with the configuration for the dataset")
+
+    # logging level
+    parser.add_argument("--log-level", type=int, metavar="LOG_LEVEL", default=20,
+                        help="Logging level (defaults to 20, a.k.a. logging.INFO)")
     args = parser.parse_args()
+
+    # set logging level
+    logger.setLevel(args.log_level)
 
     # check inputs
     if not args.data_dir.is_dir():

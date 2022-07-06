@@ -1,6 +1,8 @@
 import os, glob
 import capnp
 import hashlib
+import logging
+import sys
 from pathlib import Path
 """
 
@@ -45,3 +47,9 @@ def uuid(data_dir: Path):
     m = hashlib.md5()
     m.update(os.fsencode(data_dir.expanduser().resolve()))
     return m.hexdigest()[:6]
+
+logger = logging.getLogger('graph2tac')
+logger.setLevel(logging.INFO)
+handler = logging.StreamHandler(sys.stdout)
+handler.setFormatter(logging.Formatter('%(name)s:%(levelname)s - %(message)s'))
+logger.addHandler(handler)

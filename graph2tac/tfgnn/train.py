@@ -12,6 +12,7 @@ from graph2tac.tfgnn.dataset import Dataset, DataServerDataset, TFRecordDataset
 from graph2tac.tfgnn.tasks import PredictionTask, DefinitionTask, DefinitionMeanSquaredError
 from graph2tac.tfgnn.graph_schema import definition_graph_spec, batch_graph_spec
 from graph2tac.tfgnn.q_checkpoint_manager import QCheckpointManager
+from graph2tac.common import logger
 
 
 class Trainer:
@@ -162,11 +163,11 @@ class Trainer:
             try:
                 checkpoint_restored = checkpoint_manager.restore_or_initialize()
             except tf.errors.NotFoundError as error:
-                print(f'unable to restore checkpoint from {checkpoint_path}!')
+                logger.error(f'unable to restore checkpoint from {checkpoint_path}!')
                 raise error
             else:
                 if checkpoint_restored is not None:
-                    print(f'Restored checkpoint {checkpoint_restored}!')
+                    logger.info(f'Restored checkpoint {checkpoint_restored}!')
 
             save_checkpoint_callback = tf.keras.callbacks.LambdaCallback(on_epoch_end=lambda epoch, logs: checkpoint_manager.save())
             callbacks.append(save_checkpoint_callback)
@@ -346,7 +347,14 @@ def main():
     # device specification
     parser.add_argument("--gpu", type=str,
                         help="GPUs to use for training ('/gpu:0', '/gpu:1', ... or use 'all' for multi-GPU training)")
+
+    # logging level
+    parser.add_argument("--log-level", type=int, metavar="LOG_LEVEL", default=20,
+                        help="Logging level (defaults to 20, a.k.a. logging.INFO)")
     args = parser.parse_args()
+
+    # set logging level
+    logger.setLevel(args.log_level)
 
     # read the run parameters and set the global seed
     if not args.run_config.is_file():
