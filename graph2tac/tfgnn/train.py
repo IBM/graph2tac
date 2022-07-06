@@ -122,11 +122,13 @@ class Trainer:
             try:
                 checkpoint_restored = self.checkpoint_manager.restore_or_initialize()
             except tf.errors.NotFoundError as error:
-                print(f'unable to restore checkpoint from {self.checkpoint_path}!')
+                logger.error(f'unable to restore checkpoint from {self.checkpoint_path}!')
                 raise error
             else:
                 if checkpoint_restored is not None:
-                    print(f'Restored checkpoint {checkpoint_restored}!')
+                    logger.info(f'Restored checkpoint {checkpoint_restored}!')
+                else:
+                    self.checkpoint_manager.save(self.trained_epochs)
 
     def get_config(self):
         config = {
@@ -178,7 +180,7 @@ class Trainer:
         callbacks.extend([trained_epochs_callback, num_runs_callback])
 
         if self.log_dir is not None:
-            save_checkpoint_callback = tf.keras.callbacks.LambdaCallback(on_epoch_end=lambda epoch, logs: self.checkpoint_manager.save())
+            save_checkpoint_callback = tf.keras.callbacks.LambdaCallback(on_epoch_end=lambda epoch, logs: self.checkpoint_manager.save(self.trained_epochs))
             callbacks.append(save_checkpoint_callback)
         return callbacks
 
