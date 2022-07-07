@@ -122,7 +122,7 @@ class Trainer:
                                  config=dataset._graph_constants.__dict__)
 
             self._to_yaml_config(directory=config_dir,
-                                 filename='datasets',
+                                 filename='dataset',
                                  config=dataset.get_config())
 
             self._to_yaml_config(directory=config_dir,
@@ -148,7 +148,6 @@ class Trainer:
             logger.info(f'{filepath} already exists, renaming to {new_filepath}')
             filepath.rename(new_filepath)
         filepath.write_text(yaml.dump(config))
-
     def get_config(self):
         config = {
             'dataset': self.dataset.get_config(),

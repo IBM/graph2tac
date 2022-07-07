@@ -1,5 +1,6 @@
 from typing import Tuple, List, NamedTuple, Union, Iterable, Callable, Optional
 
+import re
 import yaml
 import numpy as np
 import tensorflow as tf
@@ -141,9 +142,10 @@ class Predict:
         - `get_node_label_to_name`: access the value of `node_label_to_name` seen during training
         - `get_node_label_in_spine`: access the value of `node_label_in_spine` seen during training
     """
-    def __init__(self, log_dir: Path, numpy_output: bool = True):
+    def __init__(self, log_dir: Path, checkpoint_number: Optional[int] = None, numpy_output: bool = True):
         """
         @param log_dir: the directory for the checkpoint that is to be loaded (as passed to the Trainer class)
+        @param checkpoint_number: the checkpoint number we want to load (use `None` for the latest checkpoint)
         @param numpy_output: set to True to return the predictions as a tuple of numpy arrays (for evaluation purposes)
         """
         self.numpy_output = numpy_output
@@ -183,20 +185,28 @@ class Predict:
             self.definition_task = None
 
         # load training checkpoint
-        checkpoint_path = log_dir / 'ckpt'
         checkpoint = tf.train.Checkpoint(prediction_task=self.prediction_task.checkpoint)
         if self.definition_task is not None:
             checkpoint.definition_task = self.definition_task
 
-        checkpoint_manager = tf.train.CheckpointManager(checkpoint, checkpoint_path, max_to_keep=None)
+        checkpoints_path = log_dir / 'ckpt'
+        available_checkpoints = {int(re.search('ckpt-(\d+).index', str(ckpt)).group(1)): ckpt.with_suffix('')
+                                 for ckpt in checkpoints_path.glob('*.index')}
+        if checkpoint_number is None:
+            checkpoint_number = max(available_checkpoints.keys())
+            logger.info(f'no checkpoint number specified, using latest available checkpoint #{checkpoint_number}')
+        elif checkpoint_number not in available_checkpoints.keys():
+            logger.error(f'checkpoint #{checkpoint_number} is not available')
+            raise ValueError(f'checkpoint number {checkpoint_number} not found')
+
         try:
-            checkpoint_restored = checkpoint_manager.restore_or_initialize()
-        except tf.errors.NotFoundError as error:
-            logger.error(f'unable to restore checkpoint from {checkpoint_path}!')
+            load_status = checkpoint.restore(save_path=str(available_checkpoints[checkpoint_number]))
+        except tf.errors.OpError as error:
+            logger.error(f'unable to restore checkpoint #{checkpoint_number}!')
             raise error
         else:
-            if checkpoint_restored is not None:
-                logger.info(f'restored checkpoint {checkpoint_restored}!')
+            load_status.expect_partial().assert_nontrivial_match().assert_existing_objects_matched().run_restore_ops()
+            logger.info(f'restored checkpoint #{checkpoint_number}!')
 
         # choose the prediction method according to the task type
         prediction_task_type = self.prediction_task.get_config().get('prediction_task_type')
