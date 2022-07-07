@@ -61,8 +61,10 @@ class ExtendedTensorBoard(tf.keras.callbacks.TensorBoard):
                             step=self.run_counter)
 
     def on_train_begin(self, logs: Optional[Dict] = None):
+        # keep track of when the training run starts
         self._train_begin_time = datetime.now()
 
+        # log model summary
         model_summary = []
         self.model.summary(print_fn=lambda line: model_summary.append(line))
 
@@ -73,6 +75,7 @@ class ExtendedTensorBoard(tf.keras.callbacks.TensorBoard):
         super().on_train_begin(logs)
 
     def on_train_end(self, logs: Optional[Dict] = None):
+        # log the total training time for this run
         self._train_end_time = datetime.now()
 
         with self._text_writer.as_default():
@@ -82,11 +85,17 @@ class ExtendedTensorBoard(tf.keras.callbacks.TensorBoard):
         super().on_train_end(logs)
 
     def on_epoch_begin(self, epoch: int, logs: Optional[Dict] = None):
+        # reset the stats for memory usage
         for device_name in self.device_names:
             tf.config.experimental.reset_memory_stats(device=device_name)
         super().on_epoch_begin(epoch, logs)
 
     def on_epoch_end(self, epoch: int, logs: Optional[Dict] = None):
+        # log the learning rate if there is a learning rate schedule
+        if isinstance(self.model.optimizer.learning_rate, tf.keras.optimizers.schedules.LearningRateSchedule):
+            logs['learning_rate'] = self.model.optimizer.learning_rate(self.model.optimizer.iterations)
+
+        # log memory usage during this epoch
         for device_name in self.device_names:
             memory_info = tf.config.experimental.get_memory_info(device=device_name)
             logs[f'{device_name}_peak_memory'] = memory_info['peak'] / 1024 / 1024 / 1024

@@ -25,8 +25,7 @@ class Trainer:
     def __init__(self,
                  dataset: Dataset,
                  prediction_task: PredictionTask,
-                 optimizer_type: str,
-                 optimizer_config: Optional[dict] = None,
+                 serialized_optimizer: Dict,
                  definition_task: Optional[DefinitionTask] = None,
                  definition_loss_coefficient: Optional[float] = None,
                  l2_regularization_coefficient: Optional[float] = None,
@@ -37,8 +36,7 @@ class Trainer:
         """
         @param dataset: a `graph2tac.tfgnn.dataset.Dataset` object providing proof-states and definitions
         @param prediction_task: the `graph2tac.tfgnn.tasks.PredictionTask` to use for proofstates
-        @param optimizer_type: the name of the optimizer to use (as understood by `tf.keras.optimizers.get`)
-        @param optimizer_config: the configuration for the optimizer (or `None` to use all defaults)
+        @param serialized_optimizer: the optimizer to use, as serialized by tf.keras.optimizers.serialize
         @param definition_task: the `graph2tac.tfgnn.tasks.DefinitionTask` to use for definitions (or `None` to skip)
         @param definition_loss_coefficient: the coefficient in front of the definition embeddings loss term
         @param l2_regularization_coefficient: the coefficient to use for L2 regularization
@@ -54,9 +52,7 @@ class Trainer:
         self.prediction_task = prediction_task
 
         # optimizer
-        self.optimizer_type = optimizer_type
-        self.optimizer_config = optimizer_config if optimizer_config is not None else {}
-        self.optimizer = tf.keras.optimizers.get(optimizer_type).from_config(self.optimizer_config)
+        self.optimizer = tf.keras.optimizers.deserialize(serialized_optimizer)
 
         # definition task
         self.definition_task = definition_task
@@ -152,8 +148,7 @@ class Trainer:
         config = {
             'dataset': self.dataset.get_config(),
             'prediction_task': self.prediction_task.get_config(),
-            'optimizer_type': self.optimizer_type,
-            'optimizer_config': self.optimizer.get_config(),
+            'serialized_optimizer': tf.keras.optimizers.serialize(self.optimizer),
             'definition_task': self.definition_task.get_config() if self.definition_task is not None else None,
             'definition_loss_coefficient': self.definition_loss_coefficient,
             'l2_regularization_coefficient': self.l2_regularization_coefficient,
