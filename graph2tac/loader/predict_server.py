@@ -470,7 +470,6 @@ def main_loop(reader, sock, predict: Predict, debug_dir, session_idx=0,
 
             online_graph = train_node_labels, edges, edge_labels, edges_offset
 
-
             log_verbose("online_state", online_graph)
 
             t0 = time.time()
@@ -483,9 +482,6 @@ def main_loop(reader, sock, predict: Predict, debug_dir, session_idx=0,
                 annotation = msg_idx - 1,
                 debug = (LOG_LEVEL <= logging.INFO)
             )
-
-
-
 
             top_online_actions = online_actions[:search_expand_bound]
             top_online_confidences = online_confidences[:search_expand_bound]
@@ -596,7 +592,7 @@ def main():
                               "The directory will be created if it doesn't exists and the files may be overwritten. "
                               "Do not provide --debug_dir argument if you do not want to record all capnp messages "
                               "during the interactive session to  --debug_dir. "
-                              "You supply --debug_dir under your responsibilty to ensure sufficient free space "
+                              "You supply --debug_dir under your responsibility to ensure sufficient free space "
                               "and purging when you need. "
                               "If you want quick and  performant recording of debug messages, "
                               "you may wish to use RAM based mounted filesystem like tmpfs "
@@ -606,44 +602,43 @@ def main():
     parser.add_argument('--with_meter',
                         default=False,
                         action='store_true',
-                        help=("Display throughput of predict calls per second"))
+                        help="Display throughput of predict calls per second")
 
     parser.add_argument('--total_expand_bound',
                         type=int,
                         default=2048,
-                        help=("total_expand_bound for ranked argument search"))
+                        help="total_expand_bound for ranked argument search")
 
     parser.add_argument('--tactic_expand_bound',
                         type=int,
                         default=8,
-                        help=("tactic_expand_bound for ranked argument search"))
+                        help="tactic_expand_bound for ranked argument search")
 
     parser.add_argument('--search_expand_bound',
                         type=int,
                         default=8,
-                        help=("maximal number of predictions to be sent to search algorithm in coq evaluation client "))
+                        help="maximal number of predictions to be sent to search algorithm in coq evaluation client ")
 
     parser.add_argument('--update_new_definitions',
                         default=False,
                         action='store_true',
-                        help=("call network update embedding on clusters containing new definitions "))
+                        help="call network update embedding on clusters containing new definitions ")
 
     parser.add_argument('--update_all_definitions',
                         default=False,
                         action='store_true',
-                        help=("call newtwork update embedding on cluster containit all definitions (overwrites update new definitions)"))
+                        help="call newtwork update embedding on cluster containit all definitions (overwrites update new definitions)")
 
     parser.add_argument('--progress_bar',
                         default=False,
                         action='store_true',
-                        help=("show the progress bar of update definition clusters"))
+                        help="show the progress bar of update definition clusters")
 
 
     parser.add_argument('--tf_eager',
                         default=False,
                         action='store_true',
-                        help=("with tf_eager=True activated network tf2 may initialize faster but run slower, use carefully if you need")
-                        )
+                        help="with tf_eager=True activated network tf2 may initialize faster but run slower, use carefully if you need")
 
 
 
@@ -706,7 +701,7 @@ def main():
         elif args.arch == 'hmodel':
             log_info("importing Predict class..")
             from graph2tac.loader.hmodel import HPredict
-            predict = Predict(Path(args.model).expanduser().absolute())
+            predict = HPredict(checkpoint_dir=Path(args.model).expanduser().absolute())
         else:
             Exception(f'the provided model architecture {args.arch} is not supported')
 
