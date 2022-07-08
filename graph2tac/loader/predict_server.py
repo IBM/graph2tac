@@ -199,7 +199,7 @@ def log_clusters_verbose(def_scc_clusters, eval_label_to_train_label, train_node
 def get_unaligned_nodes(def_idx_to_node, def_idx_to_name, eval_label_to_train_label, original_train_len):
     unaligned_nodes = []
     for (node_idx, train_label, eval_name) in zip(def_idx_to_node, eval_label_to_train_label[len(BASE_NAMES):], def_idx_to_name):
-        if (train_label >= original_train_len):
+        if train_label >= original_train_len:
             unaligned_nodes.append((node_idx, eval_name))
     return unaligned_nodes
 
@@ -296,7 +296,7 @@ def main_loop(reader, sock, predict: Predict, debug_dir, session_idx=0,
 
 
         elif msg_type == "initialize":
-            if (context_cnt >= 0):
+            if context_cnt >= 0:
                 log_normal(f'theorem {context_cnt} had {msg_idx} '
                            f'messages received of total size (unpacked) {total_data_online_size} bytes, '
                            f'with network compiled in {build_network_time:.6f} s, ',
@@ -432,7 +432,7 @@ def main_loop(reader, sock, predict: Predict, debug_dir, session_idx=0,
 
             msg_data = msg.as_builder().to_bytes()
 
-            data_online_resize(c_data_online, 1);
+            data_online_resize(c_data_online, 1)
             local_to_global = [np.array([1, 0], dtype=np.uint32)]
 
             num_messages_stored = data_online_extend(c_data_online,
@@ -487,7 +487,6 @@ def main_loop(reader, sock, predict: Predict, debug_dir, session_idx=0,
 
 
 
-
             top_online_actions = online_actions[:search_expand_bound]
             top_online_confidences = online_confidences[:search_expand_bound]
             top_online_encoded_actions = encode_prediction_online(c_data_online,
@@ -526,7 +525,7 @@ def test_record(data_dir):
     fname = Path(uuid(data_dir)).joinpath('check_dataset.out')
     d = DataServer(data_dir=data_dir, bfs_option=True, max_subgraph_size=512)
     dataset_recorded = [d.data_point(idx) for idx in range(d._debug_data().proof_steps_size())]
-    cluster_subgraphs = d.def_cluster_subgraphs(tf_gnn=False)
+    cluster_subgraphs = d.def_cluster_subgraphs()
     pickle.dump((dataset_recorded, cluster_subgraphs), open(fname,'wb'))
 
 def test_check(data_dir):
@@ -534,7 +533,7 @@ def test_check(data_dir):
     fname = Path(uuid(data_dir)).joinpath('check_dataset.out')
     d = DataServer(data_dir=data_dir, bfs_option=True, max_subgraph_size=512)
     dataset = [d.data_point(idx) for idx in range(d._debug_data().proof_steps_size())]
-    cluster_subgraphs = d.def_cluster_subgraphs(tf_gnn=False)
+    cluster_subgraphs = d.def_cluster_subgraphs()
     loaded = pickle.load(open(fname,'rb'))
     if repr(loaded) == repr((dataset, cluster_subgraphs)):
         print('PASSED')
@@ -544,7 +543,7 @@ def test_check(data_dir):
             if not repr(loaded[0][idx]) == repr(dataset[idx]):
                 breakpoint()
         print('FAILED 1 ')
-        if (repr(loaded[1]) != repr(cluster_subgraphs)):
+        if repr(loaded[1]) != repr(cluster_subgraphs):
             breakpoint()
         print('FAILED 2 ')
         breakpoint()
@@ -693,20 +692,20 @@ def main():
             import tensorflow as tf
             tf.get_logger().setLevel(int(tf_log_levels[args.log_level]))
             tf.config.run_functions_eagerly(args.tf_eager)
-            from graph2tac.tf2.predict import Predict
+            from graph2tac.tf2.predict import TF2Predict
             log_info("importing Predict class..")
-            predict = Predict(Path(args.model).expanduser().absolute())
+            predict = TF2Predict(checkpoint_dir=Path(args.model).expanduser().absolute())
         elif args.arch == 'tfgnn':
             log_info("importing tensorflow...")
             import tensorflow as tf
             tf.get_logger().setLevel(int(tf_log_levels[args.log_level]))
             tf.config.run_functions_eagerly(args.tf_eager)
-            from graph2tac.tfgnn.predict import Predict
+            from graph2tac.tfgnn.predict import TFGNNPredict
             log_info("importing Predict class..")
-            predict = Predict(Path(args.model).expanduser().absolute())
+            predict = TFGNNPredict(log_dir=Path(args.model).expanduser().absolute())
         elif args.arch == 'hmodel':
             log_info("importing Predict class..")
-            from graph2tac.loader.hmodel import Predict
+            from graph2tac.loader.hmodel import HPredict
             predict = Predict(Path(args.model).expanduser().absolute())
         else:
             Exception(f'the provided model architecture {args.arch} is not supported')
