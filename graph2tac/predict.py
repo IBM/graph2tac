@@ -87,7 +87,7 @@ class Predict:
     def ranked_predictions(self,
                            state: Tuple,
                            allowed_model_tactics: List,
-                           available_global: np.ndarray,
+                           available_global: Optional[np.ndarray],
                            tactic_expand_bound: int,
                            total_expand_bound: int
                            ) -> Tuple[np.ndarray, List]:
@@ -106,7 +106,7 @@ class Predict:
         """
         raise NotImplementedError('ranked_predictions should be implemented by sub-classes')
 
-    def compute_new_definitions(self, new_cluster_subgraphs : list) -> None:
+    def compute_new_definitions(self, new_cluster_subgraphs : List) -> None:
         """
         [ Public API ] Updates definition embeddings using the model to process definition cluster subgraphs.
 
