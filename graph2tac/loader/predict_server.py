@@ -322,7 +322,7 @@ def main_loop(reader, sock, predict: Predict, debug_dir, session_idx=0,
                                                   def_idx_to_name,
                                                   eval_label_to_train_label,
                                                   len(train_node_label_to_name))
-            log_verbose("intialization unaligned nodes", unaligned_nodes)
+            log_verbose("initialization unaligned nodes", unaligned_nodes)
 
             c_data_online = build_data_online_from_buf(def_idx_to_node,
                                                        network_tactic_index_to_hash,
@@ -479,9 +479,11 @@ def main_loop(reader, sock, predict: Predict, debug_dir, session_idx=0,
                 tactic_expand_bound=tactic_expand_bound,
                 total_expand_bound=total_expand_bound,
                 allowed_model_tactics=allowed_model_tactics,
-                annotation = msg_idx - 1,
-                debug = (LOG_LEVEL <= logging.INFO)
+                available_global=None
             )
+            # FIDEL: why was this here? Does not conform to the API!
+            #                 annotation = msg_idx - 1,
+            #                 debug = (LOG_LEVEL <= logging.INFO)
 
             top_online_actions = online_actions[:search_expand_bound]
             top_online_confidences = online_confidences[:search_expand_bound]
@@ -627,7 +629,7 @@ def main():
     parser.add_argument('--update_all_definitions',
                         default=False,
                         action='store_true',
-                        help="call newtwork update embedding on cluster containit all definitions (overwrites update new definitions)")
+                        help="call network update embedding on cluster containing all definitions (overwrites update new definitions)")
 
     parser.add_argument('--progress_bar',
                         default=False,
