@@ -12,9 +12,9 @@ import argparse
 import numpy as np
 
 from graph2tac.common import uuid
+from graph2tac.predict import Predict
 from graph2tac.loader.data_server import DataServer, build_def_index, get_global_def_table
 
-import io
 import logging
 
 import pickle
@@ -230,7 +230,7 @@ def process_alignment_request(
     return unaligned_tactics, unaligned_nodes
 
 
-def main_loop(reader, sock, predict, debug_dir, session_idx=0,
+def main_loop(reader, sock, predict: Predict, debug_dir, session_idx=0,
               bfs_option=True,
               with_meter=False,
               tactic_expand_bound=8,
@@ -250,8 +250,8 @@ def main_loop(reader, sock, predict, debug_dir, session_idx=0,
 
     evaluation_tactic_hash_to_numargs = dict()
 
-    train_node_label_to_name = [bytes(s, 'utf8') for s in predict.get_node_label_to_name()]
-    train_node_label_in_spine = np.array(predict.get_node_label_in_spine(), dtype=np.uint8)  # bool 0/1
+    train_node_label_to_name = [bytes(s, 'utf8') for s in predict.get_label_to_name()]
+    train_node_label_in_spine = np.array(predict.get_label_in_spine(), dtype=np.uint8)  # bool 0/1
     network_tactic_index_to_hash = np.array(predict.get_tactic_index_to_hash(), dtype=np.uint64)
     network_tactic_index_to_numargs = np.array(predict.get_tactic_index_to_numargs(), dtype=np.uint64)
 

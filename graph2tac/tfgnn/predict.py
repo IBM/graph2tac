@@ -1,4 +1,4 @@
-from typing import Tuple, List, NamedTuple, Union, Iterable, Callable, Optional
+from typing import Tuple, List, Union, Iterable, Callable, Optional
 
 import re
 import yaml
@@ -9,16 +9,13 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from graph2tac.loader.data_server import GraphConstants
-from graph2tac.tf2.predict import cartesian_product
 from graph2tac.tfgnn.graph_schema import strip_graph
 from graph2tac.tfgnn.dataset import Dataset, DataServerDataset
 from graph2tac.tfgnn.tasks import PredictionTask, GlobalArgumentPrediction, DefinitionTask, BASE_TACTIC_PREDICTION, LOCAL_ARGUMENT_PREDICTION, GLOBAL_ARGUMENT_PREDICTION, _local_arguments_logits
 from graph2tac.tfgnn.models import GraphEmbedding, LogitsFromEmbeddings
 from graph2tac.tfgnn.train import Trainer
 from graph2tac.common import logger
-
-
-NUMPY_NDIM_LIMIT = 32
+from graph2tac.predict import Predict, cartesian_product, NUMPY_NDIM_LIMIT
 
 
 class Inference:
@@ -129,19 +126,7 @@ class PredictOutput:
         return self._evaluate(*action)
 
 
-class Predict:
-    """
-    Class to load training checkpoints and make predictions in order to interact with an evaluator.
-    This class exposes the following methods:
-        - `initialize`: set the global context during evaluation
-        - `compute_new_definitions`: update node label embeddings using definition cluster graphs
-        - `ranked_predictions`: make predictions for a single proof-state
-        - `batch_ranked_predictions`: make predictions for a batch of proof-states
-        - `get_tactic_index_to_numargs`: access the value of `tactic_index_to_numargs` seen during training
-        - `get_tactic_index_to_hash`: access the value of `tactic_index_to_hash` seen during training
-        - `get_node_label_to_name`: access the value of `node_label_to_name` seen during training
-        - `get_node_label_in_spine`: access the value of `node_label_in_spine` seen during training
-    """
+class TFGNNPredict(Predict):
     def __init__(self, log_dir: Path, checkpoint_number: Optional[int] = None, numpy_output: bool = True):
         """
         @param log_dir: the directory for the checkpoint that is to be loaded (as passed to the Trainer class)
@@ -153,22 +138,25 @@ class Predict:
         # create dummy dataset for pre-processing purposes
         graph_constants_filepath = log_dir / 'config' / 'graph_constants.yaml'
         with graph_constants_filepath.open('r') as yml_file:
-            self._graph_constants = GraphConstants(**yaml.load(yml_file, Loader=yaml.UnsafeLoader))
+            graph_constants = GraphConstants(**yaml.load(yml_file, Loader=yaml.UnsafeLoader))
 
         dataset_yaml_filepath = log_dir / 'config' / 'dataset.yaml'
         with dataset_yaml_filepath.open('r') as yml_file:
             dataset = Dataset(**yaml.load(yml_file, Loader=yaml.SafeLoader))
-        dataset._graph_constants = self._graph_constants
+        dataset._graph_constants = graph_constants
         self._preprocess = dataset._preprocess
 
+        # call to parent constructor to defines self._graph_constants
+        super().__init__(graph_constants=graph_constants)
+
         # to build dummy proofstates we will need to use a tactic taking no arguments
-        self._dummy_tactic_id = tf.argmin(self._graph_constants.tactic_index_to_numargs)  # num_arguments == 0
+        self._dummy_tactic_id = tf.argmin(graph_constants.tactic_index_to_numargs)  # num_arguments == 0
 
         # the decoding mechanism currently does not support tactics with more than NUMPY_NDIM_LIMIT
-        self._tactic_mask = tf.constant(self._graph_constants.tactic_index_to_numargs<NUMPY_NDIM_LIMIT)
+        self._tactic_mask = tf.constant(graph_constants.tactic_index_to_numargs<NUMPY_NDIM_LIMIT)
 
         # when the local context is empty and we can only use local arguments, we mask all tactics which take arguments
-        self._tactic_mask_no_arguments = tf.constant(self._graph_constants.tactic_index_to_numargs == 0)
+        self._tactic_mask_no_arguments = tf.constant(graph_constants.tactic_index_to_numargs == 0)
 
         # create prediction task
         prediction_yaml_filepath = log_dir / 'config' / 'prediction.yaml'
@@ -219,30 +207,6 @@ class Predict:
         else:
             raise ValueError(f'{prediction_task_type} is not a supported prediction task type')
 
-    def get_tactic_index_to_numargs(self):
-        """
-        Public API
-        """
-        return self._graph_constants.tactic_index_to_numargs
-
-    def get_tactic_index_to_hash(self):
-        """
-        Public API
-        """
-        return self._graph_constants.tactic_index_to_hash
-
-    def get_node_label_to_name(self):
-        """
-        Public API
-        """
-        return self._graph_constants.label_to_names
-
-    def get_node_label_in_spine(self) -> Iterable:
-        """
-        Public API
-        """
-        return self._graph_constants.label_in_spine
-
     @staticmethod
     def _extend_graph_embedding(graph_embedding: GraphEmbedding, new_node_label_num: int) -> GraphEmbedding:
         new_graph_embedding = GraphEmbedding(node_label_num=new_node_label_num,
@@ -257,7 +221,7 @@ class Predict:
         new_graph_embedding._node_embedding.set_weights([new_embeddings])
         return new_graph_embedding
 
-    def initialize(self, global_context: Optional[List[int]] = None):
+    def initialize(self, global_context: Optional[List[int]] = None) -> None:
         if global_context is not None:
             # update the global context
             self._graph_constants.global_context = tf.constant(global_context, dtype=tf.int32)
