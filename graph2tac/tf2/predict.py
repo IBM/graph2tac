@@ -1,5 +1,6 @@
+from typing import Optional, List, Tuple
+
 from pathlib import Path
-from typing import Optional
 import numpy as np
 import tensorflow as tf
 
@@ -123,7 +124,12 @@ class TF2Predict(Predict):
         arg_logits = tf.concat([local_arg_logits, global_arg_logits], axis = 1)
         return top_tactic_ids, tactic_logits[top_tactic_ids], arg_nums, arg_logits
 
-    def ranked_predictions(self, state: tuple, allowed_model_tactics: list, available_global=None, tactic_expand_bound=20, total_expand_bound=1000000):
+    def ranked_predictions(self,
+                           state: Tuple,
+                           allowed_model_tactics: List,
+                           available_global: Optional[np.ndarray] = None,
+                           tactic_expand_bound=20,
+                           total_expand_bound=1000000):
         _, _, context = state
 
         context_len = len(context)

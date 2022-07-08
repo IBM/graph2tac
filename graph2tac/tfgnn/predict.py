@@ -540,11 +540,15 @@ class TFGNNPredict(Predict):
                            state: Tuple,
                            tactic_expand_bound: int,
                            total_expand_bound: int,
+                           available_global: Optional[np.ndarray] = None,
                            allowed_model_tactics: Optional[Iterable[int]] = None
                            ) -> Union[PredictOutput, Tuple[np.ndarray, np.ndarray]]:
         """
         Produces predictions for a single proof-state.
         """
+        if available_global is not None:
+            raise NotImplementedError('available_global is not supported yet')
+
         return self.batch_ranked_predictions(states=[state],
                                              allowed_model_tactics=allowed_model_tactics,
                                              tactic_expand_bound=tactic_expand_bound,
