@@ -32,8 +32,8 @@ class Predict:
         - `ranked_predictions`: make predictions for a single proof-state
         - `get_tactic_index_to_numargs`: access the value of `tactic_index_to_numargs` seen during training
         - `get_tactic_index_to_hash`: access the value of `tactic_index_to_hash` seen during training
-        - `get_node_label_to_name`: access the value of `node_label_to_name` seen during training
-        - `get_node_label_in_spine`: access the value of `node_label_in_spine` seen during training
+        - `get_label_to_name`: access the value of `label_to_name` seen during training
+        - `get_label_in_spine`: access the value of `label_in_spine` seen during training
         - `get_max_subgraph_size`: access the value of `max_subgraph_size` seen during training
     """
     _graph_constants: GraphConstants
