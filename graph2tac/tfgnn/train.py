@@ -11,7 +11,7 @@ from math import ceil
 from graph2tac.tfgnn.dataset import Dataset, DataServerDataset, TFRecordDataset
 from graph2tac.tfgnn.tasks import PredictionTask, DefinitionTask, DefinitionMeanSquaredError
 from graph2tac.tfgnn.graph_schema import definition_graph_spec, batch_graph_spec
-from graph2tac.tfgnn.train_utils import QCheckpointManager, ExtendedTensorBoard
+from graph2tac.tfgnn.train_utils import QCheckpointManager, ExtendedTensorBoard, DefinitionLossScheduler
 from graph2tac.common import logger
 
 
@@ -25,10 +25,10 @@ class Trainer:
     def __init__(self,
                  dataset: Dataset,
                  prediction_task: PredictionTask,
-                 optimizer_type: str,
-                 optimizer_config: Optional[dict] = None,
+                 serialized_optimizer: Dict,
                  definition_task: Optional[DefinitionTask] = None,
                  definition_loss_coefficient: Optional[float] = None,
+                 definition_loss_schedule: Optional[Dict] = None,
                  l2_regularization_coefficient: Optional[float] = None,
                  log_dir: Optional[Path] = None,
                  max_to_keep: Optional[int] = 1,
@@ -37,10 +37,10 @@ class Trainer:
         """
         @param dataset: a `graph2tac.tfgnn.dataset.Dataset` object providing proof-states and definitions
         @param prediction_task: the `graph2tac.tfgnn.tasks.PredictionTask` to use for proofstates
-        @param optimizer_type: the name of the optimizer to use (as understood by `tf.keras.optimizers.get`)
-        @param optimizer_config: the configuration for the optimizer (or `None` to use all defaults)
+        @param serialized_optimizer: the optimizer to use, as serialized by tf.keras.optimizers.serialize
         @param definition_task: the `graph2tac.tfgnn.tasks.DefinitionTask` to use for definitions (or `None` to skip)
         @param definition_loss_coefficient: the coefficient in front of the definition embeddings loss term
+        @param definition_loss_schedule: the parameters for the `DefinitionLossScheduler`, if using
         @param l2_regularization_coefficient: the coefficient to use for L2 regularization
         @param log_dir: the directory where TensorBoard logs and checkpoints should be saved
         @param max_to_keep: the maximum number of checkpoints to keep (or `None` to keep all)
@@ -54,13 +54,21 @@ class Trainer:
         self.prediction_task = prediction_task
 
         # optimizer
-        self.optimizer_type = optimizer_type
-        self.optimizer_config = optimizer_config if optimizer_config is not None else {}
-        self.optimizer = tf.keras.optimizers.get(optimizer_type).from_config(self.optimizer_config)
+        self.optimizer = tf.keras.optimizers.deserialize(serialized_optimizer)
 
         # definition task
         self.definition_task = definition_task
-        self.definition_loss_coefficient = definition_loss_coefficient
+        if definition_task is not None:
+            if definition_loss_coefficient is None:
+                raise ValueError('the definition_loss_coefficient should be set whenever using a definition_task')
+            else:
+                self.definition_loss_coefficient = tf.Variable(initial_value=definition_loss_coefficient,
+                                                               dtype=tf.float32)
+
+            self.definition_loss_schedule = definition_loss_schedule
+        else:
+            self.definition_loss_coefficient = None
+            self.definition_loss_schedule = None
 
         # regularization
         self.l2_regularization_coefficient = l2_regularization_coefficient
@@ -74,6 +82,7 @@ class Trainer:
                                               num_runs=self.run_counter)
         if definition_task is not None:
             self.checkpoint.definition_task = definition_task
+            self.checkpoint.definition_loss_coefficient = self.definition_loss_coefficient
 
         # train model
         with prediction_task.prediction_model.distribute_strategy.scope():
@@ -152,10 +161,10 @@ class Trainer:
         config = {
             'dataset': self.dataset.get_config(),
             'prediction_task': self.prediction_task.get_config(),
-            'optimizer_type': self.optimizer_type,
-            'optimizer_config': self.optimizer.get_config(),
+            'serialized_optimizer': tf.keras.optimizers.serialize(self.optimizer),
             'definition_task': self.definition_task.get_config() if self.definition_task is not None else None,
-            'definition_loss_coefficient': self.definition_loss_coefficient,
+            'definition_loss_coefficient': self.definition_loss_coefficient.value() if self.definition_loss_coefficient is not None else None,
+            'definition_loss_schedule': self.definition_loss_schedule,
             'l2_regularization_coefficient': self.l2_regularization_coefficient,
             'max_to_keep': self.max_to_keep,
             'keep_checkpoint_every_n_hours': self.keep_checkpoint_every_n_hours,
@@ -195,6 +204,11 @@ class Trainer:
 
         trained_epochs_callback = tf.keras.callbacks.LambdaCallback(on_epoch_end=lambda epoch, logs: self.trained_epochs.assign(epoch + 1))
         num_runs_callback = tf.keras.callbacks.LambdaCallback(on_train_begin=lambda logs: self.run_counter.assign_add(1))
+        if self.definition_loss_schedule is not None:
+            definition_loss_scheduler = DefinitionLossScheduler(definition_loss_coefficient=self.definition_loss_coefficient,
+                                                                **self.definition_loss_schedule)
+            callbacks.append(definition_loss_scheduler)
+
         callbacks.extend([trained_epochs_callback, num_runs_callback])
 
         if self.log_dir is not None:
