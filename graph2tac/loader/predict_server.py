@@ -12,9 +12,9 @@ import argparse
 import numpy as np
 
 from graph2tac.common import uuid
+from graph2tac.predict import Predict
 from graph2tac.loader.data_server import DataServer, build_def_index, get_global_def_table
 
-import io
 import logging
 
 import pickle
@@ -199,7 +199,7 @@ def log_clusters_verbose(def_scc_clusters, eval_label_to_train_label, train_node
 def get_unaligned_nodes(def_idx_to_node, def_idx_to_name, eval_label_to_train_label, original_train_len):
     unaligned_nodes = []
     for (node_idx, train_label, eval_name) in zip(def_idx_to_node, eval_label_to_train_label[len(BASE_NAMES):], def_idx_to_name):
-        if (train_label >= original_train_len):
+        if train_label >= original_train_len:
             unaligned_nodes.append((node_idx, eval_name))
     return unaligned_nodes
 
@@ -230,7 +230,7 @@ def process_alignment_request(
     return unaligned_tactics, unaligned_nodes
 
 
-def main_loop(reader, sock, predict, debug_dir, session_idx=0,
+def main_loop(reader, sock, predict: Predict, debug_dir, session_idx=0,
               bfs_option=True,
               with_meter=False,
               tactic_expand_bound=8,
@@ -250,8 +250,8 @@ def main_loop(reader, sock, predict, debug_dir, session_idx=0,
 
     evaluation_tactic_hash_to_numargs = dict()
 
-    train_node_label_to_name = [bytes(s, 'utf8') for s in predict.get_node_label_to_name()]
-    train_node_label_in_spine = np.array(predict.get_node_label_in_spine(), dtype=np.uint8)  # bool 0/1
+    train_node_label_to_name = [bytes(s, 'utf8') for s in predict.get_label_to_name()]
+    train_node_label_in_spine = np.array(predict.get_label_in_spine(), dtype=np.uint8)  # bool 0/1
     network_tactic_index_to_hash = np.array(predict.get_tactic_index_to_hash(), dtype=np.uint64)
     network_tactic_index_to_numargs = np.array(predict.get_tactic_index_to_numargs(), dtype=np.uint64)
 
@@ -296,7 +296,7 @@ def main_loop(reader, sock, predict, debug_dir, session_idx=0,
 
 
         elif msg_type == "initialize":
-            if (context_cnt >= 0):
+            if context_cnt >= 0:
                 log_normal(f'theorem {context_cnt} had {msg_idx} '
                            f'messages received of total size (unpacked) {total_data_online_size} bytes, '
                            f'with network compiled in {build_network_time:.6f} s, ',
@@ -322,7 +322,7 @@ def main_loop(reader, sock, predict, debug_dir, session_idx=0,
                                                   def_idx_to_name,
                                                   eval_label_to_train_label,
                                                   len(train_node_label_to_name))
-            log_verbose("intialization unaligned nodes", unaligned_nodes)
+            log_verbose("initialization unaligned nodes", unaligned_nodes)
 
             c_data_online = build_data_online_from_buf(def_idx_to_node,
                                                        network_tactic_index_to_hash,
@@ -432,7 +432,7 @@ def main_loop(reader, sock, predict, debug_dir, session_idx=0,
 
             msg_data = msg.as_builder().to_bytes()
 
-            data_online_resize(c_data_online, 1);
+            data_online_resize(c_data_online, 1)
             local_to_global = [np.array([1, 0], dtype=np.uint32)]
 
             num_messages_stored = data_online_extend(c_data_online,
@@ -470,7 +470,6 @@ def main_loop(reader, sock, predict, debug_dir, session_idx=0,
 
             online_graph = train_node_labels, edges, edge_labels, edges_offset
 
-
             log_verbose("online_state", online_graph)
 
             t0 = time.time()
@@ -480,13 +479,11 @@ def main_loop(reader, sock, predict, debug_dir, session_idx=0,
                 tactic_expand_bound=tactic_expand_bound,
                 total_expand_bound=total_expand_bound,
                 allowed_model_tactics=allowed_model_tactics,
-                annotation = msg_idx - 1,
-                debug = (LOG_LEVEL <= logging.INFO)
+                available_global=None
             )
-
-
-
-
+            # FIDEL: why was this here? Does not conform to the API!
+            #                 annotation = msg_idx - 1,
+            #                 debug = (LOG_LEVEL <= logging.INFO)
 
             top_online_actions = online_actions[:search_expand_bound]
             top_online_confidences = online_confidences[:search_expand_bound]
@@ -526,7 +523,7 @@ def test_record(data_dir):
     fname = Path(uuid(data_dir)).joinpath('check_dataset.out')
     d = DataServer(data_dir=data_dir, bfs_option=True, max_subgraph_size=512)
     dataset_recorded = [d.data_point(idx) for idx in range(d._debug_data().proof_steps_size())]
-    cluster_subgraphs = d.def_cluster_subgraphs(tf_gnn=False)
+    cluster_subgraphs = d.def_cluster_subgraphs()
     pickle.dump((dataset_recorded, cluster_subgraphs), open(fname,'wb'))
 
 def test_check(data_dir):
@@ -534,7 +531,7 @@ def test_check(data_dir):
     fname = Path(uuid(data_dir)).joinpath('check_dataset.out')
     d = DataServer(data_dir=data_dir, bfs_option=True, max_subgraph_size=512)
     dataset = [d.data_point(idx) for idx in range(d._debug_data().proof_steps_size())]
-    cluster_subgraphs = d.def_cluster_subgraphs(tf_gnn=False)
+    cluster_subgraphs = d.def_cluster_subgraphs()
     loaded = pickle.load(open(fname,'rb'))
     if repr(loaded) == repr((dataset, cluster_subgraphs)):
         print('PASSED')
@@ -544,7 +541,7 @@ def test_check(data_dir):
             if not repr(loaded[0][idx]) == repr(dataset[idx]):
                 breakpoint()
         print('FAILED 1 ')
-        if (repr(loaded[1]) != repr(cluster_subgraphs)):
+        if repr(loaded[1]) != repr(cluster_subgraphs):
             breakpoint()
         print('FAILED 2 ')
         breakpoint()
@@ -597,7 +594,7 @@ def main():
                               "The directory will be created if it doesn't exists and the files may be overwritten. "
                               "Do not provide --debug_dir argument if you do not want to record all capnp messages "
                               "during the interactive session to  --debug_dir. "
-                              "You supply --debug_dir under your responsibilty to ensure sufficient free space "
+                              "You supply --debug_dir under your responsibility to ensure sufficient free space "
                               "and purging when you need. "
                               "If you want quick and  performant recording of debug messages, "
                               "you may wish to use RAM based mounted filesystem like tmpfs "
@@ -607,44 +604,43 @@ def main():
     parser.add_argument('--with_meter',
                         default=False,
                         action='store_true',
-                        help=("Display throughput of predict calls per second"))
+                        help="Display throughput of predict calls per second")
 
     parser.add_argument('--total_expand_bound',
                         type=int,
                         default=2048,
-                        help=("total_expand_bound for ranked argument search"))
+                        help="total_expand_bound for ranked argument search")
 
     parser.add_argument('--tactic_expand_bound',
                         type=int,
                         default=8,
-                        help=("tactic_expand_bound for ranked argument search"))
+                        help="tactic_expand_bound for ranked argument search")
 
     parser.add_argument('--search_expand_bound',
                         type=int,
                         default=8,
-                        help=("maximal number of predictions to be sent to search algorithm in coq evaluation client "))
+                        help="maximal number of predictions to be sent to search algorithm in coq evaluation client ")
 
     parser.add_argument('--update_new_definitions',
                         default=False,
                         action='store_true',
-                        help=("call network update embedding on clusters containing new definitions "))
+                        help="call network update embedding on clusters containing new definitions ")
 
     parser.add_argument('--update_all_definitions',
                         default=False,
                         action='store_true',
-                        help=("call newtwork update embedding on cluster containit all definitions (overwrites update new definitions)"))
+                        help="call network update embedding on cluster containing all definitions (overwrites update new definitions)")
 
     parser.add_argument('--progress_bar',
                         default=False,
                         action='store_true',
-                        help=("show the progress bar of update definition clusters"))
+                        help="show the progress bar of update definition clusters")
 
 
     parser.add_argument('--tf_eager',
                         default=False,
                         action='store_true',
-                        help=("with tf_eager=True activated network tf2 may initialize faster but run slower, use carefully if you need")
-                        )
+                        help="with tf_eager=True activated network tf2 may initialize faster but run slower, use carefully if you need")
 
 
 
@@ -693,21 +689,21 @@ def main():
             import tensorflow as tf
             tf.get_logger().setLevel(int(tf_log_levels[args.log_level]))
             tf.config.run_functions_eagerly(args.tf_eager)
-            from graph2tac.tf2.predict import Predict
+            from graph2tac.tf2.predict import TF2Predict
             log_info("importing Predict class..")
-            predict = Predict(Path(args.model).expanduser().absolute())
+            predict = TF2Predict(checkpoint_dir=Path(args.model).expanduser().absolute())
         elif args.arch == 'tfgnn':
             log_info("importing tensorflow...")
             import tensorflow as tf
             tf.get_logger().setLevel(int(tf_log_levels[args.log_level]))
             tf.config.run_functions_eagerly(args.tf_eager)
-            from graph2tac.tfgnn.predict import Predict
+            from graph2tac.tfgnn.predict import TFGNNPredict
             log_info("importing Predict class..")
-            predict = Predict(Path(args.model).expanduser().absolute())
+            predict = TFGNNPredict(log_dir=Path(args.model).expanduser().absolute())
         elif args.arch == 'hmodel':
             log_info("importing Predict class..")
-            from graph2tac.loader.hmodel import Predict
-            predict = Predict(Path(args.model).expanduser().absolute())
+            from graph2tac.loader.hmodel import HPredict
+            predict = HPredict(checkpoint_dir=Path(args.model).expanduser().absolute())
         else:
             Exception(f'the provided model architecture {args.arch} is not supported')
 
