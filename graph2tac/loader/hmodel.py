@@ -1,19 +1,14 @@
-import pickle
-
-
-from pathlib import Path
-from graph2tac.loader.data_server import DataServer
-from graph2tac.loader.data_server import GraphConstants
-from typing import Iterable
-
-import argparse
+from typing import Optional, List
 
 import tqdm
-
-import numpy as np
-
 import hashlib
+import argparse
+import pickle
+import numpy as np
+from pathlib import Path
 
+from graph2tac.loader.data_server import DataServer
+from graph2tac.predict import Predict
 
 
 def my_hash(x: bytes):
@@ -26,6 +21,7 @@ def hash_nparray(array: np.array):
     x = memoryview(array).tobytes()
     return my_hash(x)
 
+
 def action_encode(action,
                   local_context,
                   global_context):
@@ -33,7 +29,8 @@ def action_encode(action,
     context = (local_context, global_context)
     res = [(arg[0], context[arg[0]][arg[1]]) for arg in args]
 
-    return (tactic_idx, res)
+    return tactic_idx, res
+
 
 def my_hash_of(state, with_context):
     graph, root, context = state
@@ -44,7 +41,6 @@ def my_hash_of(state, with_context):
     state_hash = my_hash(''.join(hash_nparray(x) for x in what_to_hash).encode())
 
     return state_hash
-
 
 
 def args_decode(args,
@@ -65,7 +61,7 @@ def args_decode(args,
 class Train:
     def __init__(self, data_dir: Path, max_subgraph_size, with_context):
         self._data_server = DataServer(data_dir=data_dir,
-                                       split=[1,0,0],
+                                       split=(1,0,0),
                                        bfs_option=True,
                                        restrict_to_spine=False,
                                        max_subgraph_size=max_subgraph_size)
@@ -103,59 +99,29 @@ class Train:
 
 
 
-class Predict:
+class HPredict(Predict):
     def __init__(self, checkpoint_dir: Path):
         loaded_model = pickle.load(open(checkpoint_dir/'hmodel.sav', 'rb'))
-        self._graph_constants: GraphConstants = loaded_model['graph_constants']
+
+        # initialize self._graph_constants
+        super().__init__(graph_constants=loaded_model['graph_constants'])
+
         self._data = loaded_model['data']
         self._label_to_index = None
         self._max_subgraph_size = loaded_model['max_subgraph_size']
         self._with_context = loaded_model['with_context']
-
-    def get_tactic_index_to_numargs(self) -> Iterable:
-        """
-        Public API
-        """
-        return self._graph_constants.tactic_index_to_numargs
-
-    def get_tactic_index_to_hash(self) -> Iterable:
-        """
-        Public API
-        """
-        return self._graph_constants.tactic_index_to_hash
-
-    def get_node_label_to_name(self) -> Iterable:
-        """
-        Public API
-        """
-        return self._graph_constants.label_to_names
-
-
-    def get_node_label_in_spine(self) -> Iterable:
-        """
-        Public API
-        """
-        return self._graph_constants.label_in_spine
-
-    def get_max_subgraph_size(self):
-        """
-        Public API
-        """
-        return self._max_subgraph_size
-
-
-    def initialize(self, global_context):
         self._label_to_idx = dict()
-        for idx, label in enumerate(global_context):
-            self._label_to_idx[label] = idx
+
+    def initialize(self, global_context: Optional[List[int]] = None) -> None:
+        if global_context is not None:
+            for idx, label in enumerate(global_context):
+                self._label_to_idx[label] = idx
 
     def compute_new_definitions(self, clusters: list[tuple[np.ndarray]]):
         """
         a list of cluster states on which we run dummy runs
         """
         pass
-
-
 
     def ranked_predictions(self, state: tuple, allowed_model_tactics: list, available_global=None, tactic_expand_bound=20, total_expand_bound=1000000, annotation="", debug=False):
         graph, root, context = state

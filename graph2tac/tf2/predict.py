@@ -1,37 +1,16 @@
-from pathlib import Path
-from typing import Optional, Iterable
+from typing import Optional, List, Tuple
 
+from pathlib import Path
 import numpy as np
 import tensorflow as tf
-from graph2tac.tf2.datatypes import RaggedPair
-from graph2tac.tf2.graph_nn_batch import make_flat_batch_np
+
+from graph2tac.tf2.graph_nn_batch import make_flat_batch_np, make_flat_batch_np_empty
 from graph2tac.tf2.graph_nn_def_batch import make_flat_def_batch_np
 from graph2tac.tf2.model import ModelWrapper, np_to_tensor, np_to_tensor_def
-from graph2tac.tf2.segments import segment_lens
-import time
-
-from graph2tac.tf2.graph_nn_batch import make_flat_batch_np_empty
-
-NUMPY_NDIM_LIMIT = 32
-
-def cartesian_product(*arrays):
-    """
-    using the code from  https://stackoverflow.com/questions/11144513/cartesian-product-of-x-and-y-array-points-into-single-array-of-2d-points
-    """
-    la = len(arrays)
-
-    if la > 32:
-        print(arrays)
-    dtype = np.result_type(*arrays)
-    arr = np.empty([len(a) for a in arrays] + [la], dtype=dtype)
-    for i, a in enumerate(np.ix_(*arrays)):
-        arr[...,i] = a
-    return arr.reshape(-1, la)
+from graph2tac.predict import Predict, cartesian_product, NUMPY_NDIM_LIMIT
 
 
-from typing import Optional
-
-class Predict:
+class TF2Predict(Predict):
     """
     This is a simple predict class.  It's just a first draft.
 
@@ -40,48 +19,12 @@ class Predict:
     to the particular epoch.
     """
     def __init__(self, checkpoint_dir: Path):
-        """
-        Public API
-        """
         self.checkpoint_dir = checkpoint_dir
         self.params = ModelWrapper.get_params_from_checkpoint(checkpoint_dir)
         self.dataset_consts = self.params.dataset_consts
-        assert self.dataset_consts is not None
+        super().__init__(graph_constants=self.dataset_consts)
 
-    def get_tactic_index_to_numargs(self) -> Iterable:
-        """
-        Public API
-        """
-        return self.dataset_consts.tactic_index_to_numargs
-
-    def get_tactic_index_to_hash(self) -> Iterable:
-        """
-        Public API
-        """
-        return self.dataset_consts.tactic_index_to_hash
-
-    def get_node_label_to_name(self) -> Iterable:
-        """
-        Public API
-        """
-        return self.dataset_consts.node_label_to_name
-
-    def get_node_label_in_spine(self) -> Iterable:
-        """
-        Public API
-        """
-        return self.dataset_consts.node_label_in_spine
-
-    def get_max_subgraph_size(self) -> int:
-        """
-        Public API
-        """
-        return self.dataset_consts.max_subgraph_size
-
-
-
-    def initialize(self, global_context: Optional[list[int]] = None):
-
+    def initialize(self, global_context: Optional[list[int]] = None) -> None:
         self.params = ModelWrapper.get_params_from_checkpoint(self.checkpoint_dir)
         self.dataset_consts = self.params.dataset_consts
         assert self.dataset_consts is not None
@@ -105,9 +48,6 @@ class Predict:
         flat_batch_np = make_flat_batch_np_empty(self.dataset_consts)
         flat_batch = np_to_tensor(flat_batch_np)
         result = self.pred_fn(flat_batch)
-
-
-
 
     def compute_new_definitions(self, new_cluster_subgraphs : list) -> None:
         """
@@ -184,23 +124,12 @@ class Predict:
         arg_logits = tf.concat([local_arg_logits, global_arg_logits], axis = 1)
         return top_tactic_ids, tactic_logits[top_tactic_ids], arg_nums, arg_logits
 
-
-    def ranked_predictions(self, state: tuple, allowed_model_tactics: list, available_global=None, tactic_expand_bound=20, total_expand_bound=1000000):
-        """
-        available_global is np.array of indices into global_context
-
-        returns (ranked_actions, ranked_values)
-
-        where ranked_actions is the list of actions  and ranked_values is the list of corresponding probabilities
-
-        The sum of probabalities is constrained to be a positive real number less or equal to 1.0
-
-        The set of actions are returned by this function is a subset of all potential actions.
-
-        The probabilities for all potential actions sum up to 1.0 by the way tf.nn.softmax is normalized.
-
-        state = (graph, root, context)
-        """
+    def ranked_predictions(self,
+                           state: Tuple,
+                           allowed_model_tactics: List,
+                           available_global: Optional[np.ndarray] = None,
+                           tactic_expand_bound=20,
+                           total_expand_bound=1000000):
         _, _, context = state
 
         context_len = len(context)
