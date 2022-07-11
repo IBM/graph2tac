@@ -238,7 +238,8 @@ def main_loop(reader, sock, predict: Predict, debug_dir, session_idx=0,
               search_expand_bound=8,
               update_all_definitions=False,
               update_new_definitions=False,
-              progress_bar=False):
+              progress_bar=False,
+              temperature=1.0):
     max_subgraph_size = predict.get_max_subgraph_size()
 
     if debug_dir is not None:
@@ -485,11 +486,15 @@ def main_loop(reader, sock, predict: Predict, debug_dir, session_idx=0,
             #                 annotation = msg_idx - 1,
             #                 debug = (LOG_LEVEL <= logging.INFO)
 
+            # apply the temperature (assuming the truncated tail of the probability distribution is clustered in one unseen element)
+            new_online_confidences = np.array(online_confidences, np.float64)**(1/temperature)
+            new_online_confidences /= new_online_confidences.sum() + (1-sum(online_confidences))**(1/temperature)
+
             top_online_actions = online_actions[:search_expand_bound]
-            top_online_confidences = online_confidences[:search_expand_bound]
+            top_online_confidences = new_online_confidences[:search_expand_bound]
             top_online_encoded_actions = encode_prediction_online(c_data_online,
                                                                   top_online_actions,
-                                                                  np.array(top_online_confidences, dtype=np.float64),
+                                                                  top_online_confidences,
                                                               this_context,  sock.fileno(), eval_names[len(BASE_NAMES):])
             for action_idx, (online_encoded_action, online_confidence) in enumerate(
                     zip(top_online_encoded_actions, top_online_confidences)):
@@ -642,6 +647,11 @@ def main():
                         action='store_true',
                         help="with tf_eager=True activated network tf2 may initialize faster but run slower, use carefully if you need")
 
+    parser.add_argument('--temperature',
+                        type=float,
+                        default=1.0,
+                        help="temperature to apply to the probability distributions returned by the model")
+
 
 
 
@@ -722,6 +732,7 @@ def main():
                   update_all_definitions=args.update_all_definitions,
                   update_new_definitions=args.update_new_definitions,
                   progress_bar=args.progress_bar,
+                  temperature=args.temperature
         )
     else:
         log_normal("starting tcp/ip server on port", args.port)
