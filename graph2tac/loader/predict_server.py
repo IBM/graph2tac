@@ -62,7 +62,7 @@ def process_initialize(sock, msg):
     graph1 = msg.initialize.graph
     definitions = msg.initialize.definitions
     logger.verbose("initialize tactics")
-    logger.debug("tactics list",  list(msg.initialize.tactics))
+    logger.debug("tactics list", list(msg.initialize.tactics))
 
     logger.verbose("initialize definitions")
     logger.debug("definitions list", list(msg.initialize.definitions))
@@ -76,8 +76,8 @@ def process_initialize(sock, msg):
     logger.debug("response is", response)
     response.write_packed(sock)
 
-    logger.verbose("tactics ", tacs)
-    logger.verbose("tactics num args", tac_numargs)
+    logger.verbose(f"tactics {tacs}")
+    logger.verbose(f"tactics num args {tac_numargs}")
     return tacs, tac_numargs
 
 
@@ -86,8 +86,9 @@ def check_consistency(evaluation_tactic_hash_to_numargs, network_tactic_hash_to_
     for network_hash, network_numargs in network_tactic_hash_to_numargs.items():
         if network_hash in evaluation_tactic_hash_to_numargs.keys():
             evaluation_numargs = evaluation_tactic_hash_to_numargs[network_hash]
-            logger.verbose("network_hash, network_numargs, evaluation_numargs",
-                     network_hash, network_numargs, evaluation_numargs)
+            logger.verbose(f"network_hash: {network_hash}")
+            logger.verbose(f"network_numargs: {network_numargs}")
+            logger.verbose(f"evaluation_numargs: {evaluation_numargs}")
             if network_numargs != evaluation_numargs:
                 raise ValueError(f"Error! The network thinks that tactic {network_hash} "
                                  f"has {network_numargs} arguments, "
@@ -184,7 +185,7 @@ def process_alignment_request(
                                           al_def_idx_to_name,
                                           al_eval_label_to_train_label,
                                           len(train_node_label_to_name))
-    logger.verbose("checkAlignment unaligned nodes: ", unaligned_nodes)
+    logger.verbose(f"checkAlignment unaligned nodes: {unaligned_nodes}")
 
 
     evaluation_tactic_hash_to_numargs = dict()
@@ -194,7 +195,7 @@ def process_alignment_request(
 
     unaligned_tactics = list(sorted(set(evaluation_tactic_hash_to_numargs.items())
                                     - set(network_tactic_hash_to_numargs.items())))
-    logger.verbose("checkAlignment unaligned tactics: ", unaligned_tactics)
+    logger.verbose(f"checkAlignment unaligned tactics: {unaligned_tactics}")
     return unaligned_tactics, unaligned_nodes
 
 
@@ -244,7 +245,7 @@ def main_loop(reader, sock, predict: Predict, debug_dir, session_idx=0,
 
     for msg in decorated_reader:
         msg_type = msg.which()
-        logger.verbose("message: ", msg.which())
+        logger.verbose(f"message: {msg.which()}")
         if msg_type == "synchronize":
             process_synchronize(sock, msg)
         elif msg_type == "checkAlignment":
@@ -291,7 +292,7 @@ def main_loop(reader, sock, predict: Predict, debug_dir, session_idx=0,
                                                   def_idx_to_name,
                                                   eval_label_to_train_label,
                                                   len(train_node_label_to_name))
-            logger.verbose("initialization unaligned nodes", unaligned_nodes)
+            logger.verbose(f"initialization unaligned nodes {unaligned_nodes}")
 
             c_data_online = build_data_online_from_buf(def_idx_to_node,
                                                        network_tactic_index_to_hash,
@@ -439,7 +440,7 @@ def main_loop(reader, sock, predict: Predict, debug_dir, session_idx=0,
 
             online_graph = train_node_labels, edges, edge_labels, edges_offset
 
-            logger.verbose("online_state", online_graph)
+            logger.verbose(f"online_state: {online_graph}")
 
             t0 = time.time()
 
