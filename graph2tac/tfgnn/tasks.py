@@ -78,10 +78,13 @@ def _local_arguments_pred(y_true: tf.Tensor, y_pred: tf.Tensor) -> tf.Tensor:
     return tf.argmax(y_pred, axis=-1) if tf.shape(y_pred)[-1] > 0 else tf.zeros_like(y_true)
 
 
-class ArgumentSparseCategoricalCrossentropy(tf.keras.losses.Loss):
+class LocalArgumentSparseCategoricalCrossentropy(tf.keras.losses.Loss):
     """
-    Used to compute the sparse categorical crossentropy loss for the argument predictions (either local or global).
-    NOTE: `-1` arguments correspond to `None` or a different argument type, and are ignored.
+    Used to compute the sparse categorical crossentropy loss for the local argument prediction task.
+
+    NOTES:
+        - `-1` arguments correspond to `None`
+        - logits **are not** assumed to be normalized
     """
     def call(self, y_true, y_pred):
         """
@@ -95,6 +98,29 @@ class ArgumentSparseCategoricalCrossentropy(tf.keras.losses.Loss):
             return tf.zeros_like(arguments_true, dtype=tf.float32)
         else:
             return tf.nn.sparse_softmax_cross_entropy_with_logits(arguments_true, arguments_pred)
+
+
+class GlobalArgumentSparseCategoricalCrossentropy(tf.keras.losses.Loss):
+    """
+    Used to compute the sparse categorical crossentropy loss for the global argument prediction task.
+
+    NOTES:
+        - `-1` arguments correspond to `None` or a different type of argument
+        - logits **are** assumed to be normalized
+    """
+
+    def call(self, y_true, y_pred):
+        """
+        @param y_true: ids for the arguments, with shape [ batch_size, 1, None(num_arguments) ]
+        @param y_pred: logits for each argument position, with shape [ batch_size, None(num_arguments), num_categories ]
+        @return: a vector of length equal to the total number of not-None arguments within this batch
+        """
+        arguments_true, arguments_pred = arguments_filter(y_true, y_pred)
+
+        if tf.shape(arguments_pred)[-1] == 0:
+            return tf.zeros_like(arguments_true, dtype=tf.float32)
+        else:
+            return -tf.gather(arguments_pred, arguments_true, batch_dims=1)
 
 
 class ArgumentSparseCategoricalAccuracy(tf.keras.metrics.SparseCategoricalAccuracy):
@@ -498,7 +524,7 @@ class LocalArgumentPrediction(PredictionTask):
     @staticmethod
     def _loss() -> Dict[str, tf.keras.losses.Loss]:
         return {LocalArgumentPrediction.TACTIC_LOGITS: tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True),
-                LocalArgumentPrediction.ARGUMENTS_LOGITS: ArgumentSparseCategoricalCrossentropy()}
+                LocalArgumentPrediction.ARGUMENTS_LOGITS: LocalArgumentSparseCategoricalCrossentropy()}
 
     @staticmethod
     def _metrics() -> Dict[str, Iterable[tf.keras.metrics.Metric]]:
@@ -610,8 +636,8 @@ class GlobalArgumentPrediction(PredictionTask):
     @staticmethod
     def _loss() -> Dict[str, tf.keras.losses.Loss]:
         return {GlobalArgumentPrediction.TACTIC_LOGITS: tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True),
-                GlobalArgumentPrediction.LOCAL_ARGUMENTS_LOGITS: ArgumentSparseCategoricalCrossentropy(),
-                GlobalArgumentPrediction.GLOBAL_ARGUMENTS_LOGITS: ArgumentSparseCategoricalCrossentropy()}
+                GlobalArgumentPrediction.LOCAL_ARGUMENTS_LOGITS: GlobalArgumentSparseCategoricalCrossentropy(),
+                GlobalArgumentPrediction.GLOBAL_ARGUMENTS_LOGITS: GlobalArgumentSparseCategoricalCrossentropy()}
 
     def loss_weights(self) -> Dict[str, float]:
         return {GlobalArgumentPrediction.TACTIC_LOGITS: 1.0,
