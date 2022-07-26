@@ -47,7 +47,7 @@ class GraphConstants:
     node_label_num: int
     cluster_subgraphs_num: int
     tactic_index_to_numargs: np.ndarray  # dtype = np.uint32
-    tactic_index_to_string: List[str]    # tactic names
+    tactic_index_to_string: List[bytes]    # tactic names
     tactic_index_to_hash: np.ndarray
     global_context: np.ndarray
     label_to_names: List[str]
@@ -80,7 +80,7 @@ class DefIndexTable:
     idx_in_spine: list[bool]
 
 
-def graph_as(model: str, graph) -> Tuple:
+def graph_as(model: str, graph: Tuple) -> Tuple:
     """
     input: the graph as loader returns it
     output: the graph in a format that model consumes where the model is "tf2" or "tfgnn"
