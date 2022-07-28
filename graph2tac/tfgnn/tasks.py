@@ -15,9 +15,13 @@ LOCAL_ARGUMENT_PREDICTION = 'local_argument_prediction'
 GLOBAL_ARGUMENT_PREDICTION = 'global_argument_prediction'
 
 
-def arguments_filter(y_true, y_pred):
+def arguments_filter(y_true: tf.RaggedTensor, y_pred: tf.Tensor) -> Tuple[tf.Tensor, tf.Tensor]:
     """
     Extracts the local arguments which are not None from the ground truth and predictions
+
+    @param y_true: the labels for the arguments, with shape [batch_size, 1, None(num_arguments)]
+    @param y_pred: the logits for the arguments, with shape [batch_size, max(num_arguments), context_size]
+    @return: a tuple whose first element contains the not-None arguments, the second element being the logits corresponding to each not-None argument
     """
     # convert y_true to a dense tensor padding with -1 values (also used for None arguments);
     # remove spurious dimension (y_true was created from a non-scalar graph)
@@ -94,9 +98,11 @@ class LocalArgumentSparseCategoricalCrossentropy(tf.keras.losses.Loss):
         """
         arguments_true, arguments_pred = arguments_filter(y_true, y_pred)
 
-        if tf.shape(arguments_pred)[-1] == 0:
+        if tf.size(arguments_pred) == 0:
+            # deal with the edge case where there is no local context or no local arguments to predict in the batch
             return tf.zeros_like(arguments_true, dtype=tf.float32)
         else:
+            # the local context is non-empty and we have at least one argument, so the following doesn't fail
             return tf.nn.sparse_softmax_cross_entropy_with_logits(arguments_true, arguments_pred)
 
 
@@ -117,9 +123,11 @@ class GlobalArgumentSparseCategoricalCrossentropy(tf.keras.losses.Loss):
         """
         arguments_true, arguments_pred = arguments_filter(y_true, y_pred)
 
-        if tf.shape(arguments_pred)[-1] == 0:
+        if tf.size(arguments_pred) == 0:
+            # deal with the edge case where there is no global context or no global arguments to predict in the batch
             return tf.zeros_like(arguments_true, dtype=tf.float32)
         else:
+            # the context is non-empty and we have at least one argument, so the following doesn't fail
             return -tf.gather(arguments_pred, arguments_true, batch_dims=1)
 
 
