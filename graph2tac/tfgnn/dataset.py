@@ -654,8 +654,8 @@ class DataServerDataset(Dataset):
                                              edge_sets=bare_graph_tensor.edge_sets,
                                              context=context)
 
-    @classmethod
-    def _make_definition_graph_tensor(cls,
+    #@classmethod
+    def _make_definition_graph_tensor(self, #cls,
                                       loader_graph: Tuple,
                                       num_definitions: tf.Tensor
                                       ) -> tfgnn.GraphTensor:
@@ -668,6 +668,7 @@ class DataServerDataset(Dataset):
         """
         node_labels, sources, targets, edge_labels = graph_as("tf_gnn", loader_graph)
 
+        cls = type(self)
         bare_graph_tensor = cls._make_bare_graph_tensor(node_labels, sources, targets, edge_labels)
 
         def_names = tf.gather(self._label_to_names, node_labels[:num_definitions])
