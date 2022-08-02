@@ -242,10 +242,11 @@ class TFGNNPredict(Predict):
             )
 
     def compute_new_definitions(self, new_cluster_subgraphs: List[Tuple]) -> None:
+        if self.definition_task is None:
+            raise RuntimeError('cannot update definitions when a definition task is not present')
         definition_graph = self._make_definition_batch(new_cluster_subgraphs)
 
-        masked_definition_graph = Trainer._mask_defined_labels(definition_graph)
-        scalar_definition_graph = masked_definition_graph.merge_batch_to_components()
+        scalar_definition_graph = definition_graph.merge_batch_to_components()
         definition_embeddings = self.definition_task(scalar_definition_graph).flat_values
         defined_labels = Trainer._get_defined_labels(definition_graph).flat_values
 

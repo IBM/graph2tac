@@ -262,8 +262,7 @@ class Trainer:
 
         # compute definition body embeddings
         definition_graph = tf.keras.layers.Input(type_spec=batch_graph_spec(definition_graph_spec))
-        masked_definition_graph = self._mask_defined_labels(definition_graph)
-        scalar_definition_graph = masked_definition_graph.merge_batch_to_components()
+        scalar_definition_graph = definition_graph.merge_batch_to_components()
         definition_body_embeddings = self.definition_task(scalar_definition_graph)  # noqa [ PyCallingNonCallable ]
 
         # get learned definition embeddings
