@@ -684,12 +684,21 @@ class DefinitionTask(tf.keras.layers.Layer):
         else:
             return cls(graph_embedding=graph_embedding, gnn=gnn, **config)
 
-    def call(self, definition_graph: tfgnn.GraphTensor, training: bool = False):
-        bare_graph = strip_graph(definition_graph)
-        embedded_graph = self._graph_embedding(bare_graph, training=training)
-        hidden_graph = self._gnn(embedded_graph, training=training)
+    @staticmethod
+    def _mask_defined_embeddings(scalar_definition_graph: tfgnn.GraphTensor, embedded_graph: tfgnn.GraphTensor):
+        num_definitions = tf.cast(scalar_definition_graph.context['num_definitions'], dtype=tf.int32)
+        is_defined = tf.ragged.range(scalar_definition_graph.node_sets['node'].sizes) < tf.expand_dims(num_definitions, axis=-1)
+        mask = tf.expand_dims(1 - tf.cast(is_defined.flat_values, dtype=tf.float32), axis=-1)
+        masked_hidden_state = embedded_graph.node_sets['node']['hidden_state'] * mask
+        return embedded_graph.replace_features(node_sets={'node': {'hidden_state': masked_hidden_state}})
 
-        num_definitions = definition_graph.context['num_definitions']
+    def call(self, scalar_definition_graph: tfgnn.GraphTensor, training: bool = False):
+        bare_graph = strip_graph(scalar_definition_graph)
+        embedded_graph = self._graph_embedding(bare_graph, training=training)
+        masked_embedded_graph = self._mask_defined_embeddings(scalar_definition_graph, embedded_graph)
+        hidden_graph = self._gnn(masked_embedded_graph, training=training)
+
+        num_definitions = scalar_definition_graph.context['num_definitions']
         definition_body_embeddings = self._definition_head((hidden_graph, num_definitions), training=training)
         return definition_body_embeddings
 
