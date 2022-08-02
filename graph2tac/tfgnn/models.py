@@ -815,10 +815,10 @@ class DenseDefinitionHead(tf.keras.layers.Layer):
         return config
 
     def call(self,
-             inputs: Tuple[tfgnn.GraphTensor, tf.RaggedTensor],
+             inputs: Tuple[tfgnn.GraphTensor, tf.RaggedTensor, tf.RaggedTensor],
              training: bool = False
              ) -> tf.Tensor:
-        hidden_graph, num_definitions = inputs
+        hidden_graph, num_definitions, def_names = inputs
 
         cumulative_sizes = tf.expand_dims(tf.cumsum(hidden_graph.node_sets['node'].sizes, exclusive=True), axis=-1)
         definition_nodes = tf.ragged.range(num_definitions) + tf.cast(cumulative_sizes, dtype=tf.int64)
