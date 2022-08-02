@@ -559,6 +559,7 @@ class DataServerDataset(Dataset):
 
         self._graph_constants = self.data_server.graph_constants()
         self._total_proofstates = self.data_server.total_proofstates()
+        self._label_to_names = tf.ragged.constant(self._graph_constants.label_to_names)
 
     @classmethod
     def from_yaml_config(cls, data_dir: Path, yaml_filepath: Path) -> "DataServerDataset":
@@ -669,7 +670,11 @@ class DataServerDataset(Dataset):
 
         bare_graph_tensor = cls._make_bare_graph_tensor(node_labels, sources, targets, edge_labels)
 
-        context = tfgnn.Context.from_fields(features={'num_definitions': tf.expand_dims(num_definitions, axis=0)})
+        def_names = tf.gather(self._label_to_names, node_labels[:num_definitions])
+        context = tfgnn.Context.from_fields(features={
+            'num_definitions': tf.expand_dims(num_definitions, axis=0),
+            'def_names': def_names,
+        })
 
         return tfgnn.GraphTensor.from_pieces(node_sets=bare_graph_tensor.node_sets,
                                              edge_sets=bare_graph_tensor.edge_sets,

@@ -85,6 +85,15 @@ context {
       dtype: DT_INT64
     }
   }
+
+  features {
+    key: "def_names"
+    value: {
+      description: "[NAME1, NAME2, ...] (string) names of defined nodes."
+      dtype: DT_STRING
+      shape { dim { size: -1 } }
+    }
+  }
 }
 """
 
