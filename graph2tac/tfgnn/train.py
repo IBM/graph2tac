@@ -241,15 +241,6 @@ class Trainer:
         return tf.reduce_sum([tf.keras.regularizers.l2(l2=self.l2_regularization_coefficient)(weight) for weight in self.train_model.trainable_weights])
 
     @staticmethod
-    def _mask_defined_labels(definition_graph: tfgnn.GraphTensor) -> tfgnn.GraphTensor:
-        num_definitions = tf.cast(definition_graph.context['num_definitions'], dtype=tf.int32)
-        is_defined = tf.ragged.range(tf.squeeze(definition_graph.node_sets['node'].sizes, axis=-1)) < num_definitions
-        masked_node_labels = tf.where(is_defined.with_row_splits_dtype(tf.int32),
-                                      tf.constant(-1, dtype=tf.int64),  # TODO: This fails on CPU
-                                      definition_graph.node_sets['node']['node_label'])
-        return definition_graph.replace_features(node_sets={'node': {'node_label': masked_node_labels}})
-
-    @staticmethod
     def _get_defined_labels(definition_graph: tfgnn.GraphTensor) -> tf.Tensor:
         cumulative_sizes = tf.cumsum(definition_graph.node_sets['node'].sizes, exclusive=True)
         definition_nodes = tf.ragged.range(tf.squeeze(definition_graph.context['num_definitions'], axis=-1)) + tf.cast(cumulative_sizes, dtype=tf.int64)
