@@ -230,8 +230,11 @@ class TFGNNPredict(Predict):
             new_node_label_num = max(global_context)+1
             if new_node_label_num > self._graph_constants.node_label_num:
                 logger.info(f'extending global context from {self._graph_constants.node_label_num} to {new_node_label_num} elements')
-                self.prediction_task.graph_embedding = self._extend_graph_embedding(graph_embedding=self.prediction_task.graph_embedding,
-                                                                                    new_node_label_num=new_node_label_num)
+                new_graph_embedding = self._extend_graph_embedding(graph_embedding=self.prediction_task.graph_embedding,
+                                                                   new_node_label_num=new_node_label_num)
+                self.prediction_task.graph_embedding = new_graph_embedding
+                if self.definition_task is not None:
+                    self.definition_task._graph_embedding = new_graph_embedding
                 self._graph_constants.node_label_num = new_node_label_num
 
             # update the global arguments logits head (always necessary, because the local context may shrink!)
