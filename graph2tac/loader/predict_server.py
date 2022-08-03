@@ -1,7 +1,8 @@
 """
 python prediction server to interact with coq-tactician-reinforce
 """
-from typing import NewType, Optional
+from typing import NewType
+
 import sys
 import time
 import os
