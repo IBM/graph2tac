@@ -611,7 +611,7 @@ def main():
                         help="temperature to apply to the probability distributions returned by the model")
 
     parser.add_argument('--debug-predict',
-                        type=Optional[Path],
+                        type=Path,
                         default=None,
                         help="set this flag to run TFGNNPredict in debug mode")
 
