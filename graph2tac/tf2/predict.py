@@ -18,12 +18,13 @@ class TF2Predict(Predict):
     This is usually not the weights directory, but a subdirectory corresponding
     to the particular epoch.
     """
-    def __init__(self, checkpoint_dir: Path):
+    def __init__(self, checkpoint_dir: Path, debug_dir: Optional[Path] = None):
         self.checkpoint_dir = checkpoint_dir
         self.params = ModelWrapper.get_params_from_checkpoint(checkpoint_dir)
         self.dataset_consts = self.params.dataset_consts
-        super().__init__(graph_constants=self.dataset_consts)
+        super().__init__(graph_constants=self.dataset_consts, debug_dir=debug_dir)
 
+    @Predict.api_debugging('initialize')
     def initialize(self, global_context: Optional[list[int]] = None) -> None:
         self.params = ModelWrapper.get_params_from_checkpoint(self.checkpoint_dir)
         self.dataset_consts = self.params.dataset_consts
@@ -49,6 +50,7 @@ class TF2Predict(Predict):
         flat_batch = np_to_tensor(flat_batch_np)
         result = self.pred_fn(flat_batch)
 
+    @Predict.api_debugging('compute_new_definitions')
     def compute_new_definitions(self, new_cluster_subgraphs : list) -> None:
         """
         Public API. The client is supposed to call this method for a sequence of topologically sorted valid roots of
@@ -124,6 +126,7 @@ class TF2Predict(Predict):
         arg_logits = tf.concat([local_arg_logits, global_arg_logits], axis = 1)
         return top_tactic_ids, tactic_logits[top_tactic_ids], arg_nums, arg_logits
 
+    @Predict.api_debugging('ranked_predictions')
     def ranked_predictions(self,
                            state: Tuple,
                            allowed_model_tactics: List,

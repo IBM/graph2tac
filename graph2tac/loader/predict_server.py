@@ -1,7 +1,7 @@
 """
 python prediction server to interact with coq-tactician-reinforce
 """
-import typing
+from typing import NewType, Optional
 import sys
 import time
 import os
@@ -19,7 +19,7 @@ from graph2tac.predict import Predict
 from graph2tac.loader.data_server import DataServer, build_def_index, get_global_def_table
 
 
-Tactic = typing.NewType('Tactic', object)
+Tactic = NewType('Tactic', object)
 
 capnp.remove_import_hook()
 graph_api_filename = pkg_resources.resource_filename('graph2tac.loader','clib/graph_api_v11.capnp')
@@ -610,8 +610,9 @@ def main():
                         default=1.0,
                         help="temperature to apply to the probability distributions returned by the model")
 
-    parser.add_argument('--tfgnn-debug',
-                        default=False,
+    parser.add_argument('--debug-predict',
+                        type=Optional[Path],
+                        default=None,
                         action='store_true',
                         help="set this flag to run TFGNNPredict in debug mode")
 
@@ -658,9 +659,10 @@ def main():
             import tensorflow as tf
             tf.get_logger().setLevel(int(tf_log_levels[args.log_level]))
             tf.config.run_functions_eagerly(args.tf_eager)
-            from graph2tac.tf2.predict import TF2Predict
+
             logger.info("importing TF2Predict class..")
-            predict = TF2Predict(checkpoint_dir=Path(args.model).expanduser().absolute())
+            from graph2tac.tf2.predict import TF2Predict
+            predict = TF2Predict(checkpoint_dir=Path(args.model).expanduser().absolute(), debug_dir=args.debug_predict)
         elif args.arch == 'tfgnn':
             logger.info("importing tensorflow...")
             import tensorflow as tf
@@ -669,11 +671,11 @@ def main():
 
             logger.info("importing TFGNNPredict class...")
             from graph2tac.tfgnn.predict import TFGNNPredict
-            predict = TFGNNPredict(log_dir=Path(args.model).expanduser().absolute(), debug=args.tfgnn_debug)
+            predict = TFGNNPredict(log_dir=Path(args.model).expanduser().absolute(), debug_dir=args.debug_predict)
         elif args.arch == 'hmodel':
             logger.info("importing HPredict class..")
             from graph2tac.loader.hmodel import HPredict
-            predict = HPredict(checkpoint_dir=Path(args.model).expanduser().absolute())
+            predict = HPredict(checkpoint_dir=Path(args.model).expanduser().absolute(), debug_dir=args.debug_predict)
         else:
             Exception(f'the provided model architecture {args.arch} is not supported')
 
