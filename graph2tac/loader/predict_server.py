@@ -613,7 +613,6 @@ def main():
     parser.add_argument('--debug-predict',
                         type=Optional[Path],
                         default=None,
-                        action='store_true',
                         help="set this flag to run TFGNNPredict in debug mode")
 
 
