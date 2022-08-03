@@ -803,10 +803,17 @@ class DenseDefinitionHead(tf.keras.layers.Layer):
         super().__init__(name=name, **kwargs)
         self._hidden_size = hidden_size
 
+        encoder = tf.keras.layers.TextVectorization(
+            split = 'character',
+            vocabulary = [chr(x) for x in range(ord('a'), ord('z')+1)],
+        )
         self._name_layer = tf.keras.Sequential([
-            tf.keras.layers.TextVectorization(
-                split = 'character',
-                vocabulary = [chr(x) for x in range(ord('a'), ord('z')+1)],
+            encoder,
+            tf.keras.layers.Embedding(
+                input_dim=len(encoder.get_vocabulary()),
+                output_dim=64,
+                # Use masking to handle the variable sequence lengths
+                mask_zero=True,
             ),
             tf.keras.layers.Bidirectional(tf.keras.layers.LSTM(hidden_size)),
         ])
