@@ -840,7 +840,7 @@ class DenseDefinitionHead(tf.keras.layers.Layer):
 
         node_hidden_states = tf.gather(hidden_graph.node_sets['node']['hidden_state'], definition_nodes.flat_values)
         graph_hidden_states = tf.repeat(hidden_graph.context['hidden_state'], num_definitions, axis=0)
-        rnn_output = self._name_layer(def_names.values)
+        rnn_output = self._name_layer(def_names.flat_values)
 
         hidden_state = tf.concat([node_hidden_states, graph_hidden_states, rnn_output], axis=-1)
 
