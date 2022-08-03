@@ -674,7 +674,7 @@ class DataServerDataset(Dataset):
         def_names = tf.gather(self._label_to_names, node_labels[:num_definitions])
         context = tfgnn.Context.from_fields(features={
             'num_definitions': tf.expand_dims(num_definitions, axis=0),
-            'def_names': def_names,
+            'def_names': tf.RaggedTensor.from_tensor(tf.expand_dims(def_names, axis = 0), row_splits_dtype=tf.int32)
         })
 
         return tfgnn.GraphTensor.from_pieces(node_sets=bare_graph_tensor.node_sets,
