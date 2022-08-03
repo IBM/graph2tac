@@ -76,7 +76,7 @@ class Predict:
                         pickle.dump((api_name, kwargs), pickle_jar)
                     self._debug_message_number += 1
 
-                api_call(self, **kwargs)
+                return api_call(self, **kwargs)
             return api_call_with_debug
         return decorator
 
