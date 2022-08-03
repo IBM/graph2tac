@@ -43,7 +43,7 @@ BASE_NAMES, EDGE_CONFLATIONS = get_graph_constants_online()
 
 def debug_record(msg, fname: str):
     msg_copy = msg.as_builder()
-    logger.info("debug dumping msg to ", fname)
+    logger.debug("debug dumping msg to ", fname)
     with open(fname, 'wb') as f_out:
         msg_copy.write_packed(f_out)
 
@@ -619,6 +619,11 @@ def main():
                         default=1.0,
                         help="temperature to apply to the probability distributions returned by the model")
 
+    parser.add_argument('--tfgnn-debug',
+                        default=False,
+                        action='store_true',
+                        help="set this flag to run TFGNNPredict in debug mode")
+
 
 
 
@@ -674,9 +679,10 @@ def main():
             import tensorflow as tf
             tf.get_logger().setLevel(int(tf_log_levels[args.log_level]))
             tf.config.run_functions_eagerly(args.tf_eager)
+
+            logger.info("importing TFGNNPredict class...")
             from graph2tac.tfgnn.predict import TFGNNPredict
-            logger.info("importing Predict class..")
-            predict = TFGNNPredict(log_dir=Path(args.model).expanduser().absolute())
+            predict = TFGNNPredict(log_dir=Path(args.model).expanduser().absolute(), debug=args.tfgnn_debug)
         elif args.arch == 'hmodel':
             logger.info("importing Predict class..")
             from graph2tac.loader.hmodel import HPredict
