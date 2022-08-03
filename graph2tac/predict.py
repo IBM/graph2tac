@@ -67,16 +67,16 @@ class Predict:
     @staticmethod
     def api_debugging(api_name: str):
         def decorator(api_call: Callable):
-            def api_call_with_debug(self: "Predict", **kwargs: Dict):
+            def api_call_with_debug(self: "Predict", *args: List, **kwargs: Dict):
                 if self._debug_dir is not None:
                     debug_message_file = self._run_dir / f'{self._debug_message_number}.pickle'
                     logger.debug(f'logging {api_name} call to {debug_message_file}')
 
                     with debug_message_file.open('wb') as pickle_jar:
-                        pickle.dump((api_name, kwargs), pickle_jar)
+                        pickle.dump((api_name, args, kwargs), pickle_jar)
                     self._debug_message_number += 1
 
-                return api_call(self, **kwargs)
+                return api_call(self, *args, **kwargs)
             return api_call_with_debug
         return decorator
 
