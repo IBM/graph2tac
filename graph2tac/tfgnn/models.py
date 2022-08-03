@@ -803,6 +803,14 @@ class DenseDefinitionHead(tf.keras.layers.Layer):
         super().__init__(name=name, **kwargs)
         self._hidden_size = hidden_size
 
+        self._name_layer = tf.keras.Sequential([
+            tf.keras.layers.TextVectorization(
+                split = 'character',
+                vocabulary = [chr(x) for x in range(ord('a'), ord('z')+1)],
+            ),
+            tf.keras.layers.Bidirectional(tf.keras.layers.LSTM(hidden_size)),
+        ])
+
         self._hidden_layers = [tf.keras.layers.Dense.from_config(hidden_layer_config) for hidden_layer_config in hidden_layers]
         self._final_layer = tf.keras.layers.Dense(units=hidden_size)
 
@@ -825,7 +833,9 @@ class DenseDefinitionHead(tf.keras.layers.Layer):
 
         node_hidden_states = tf.gather(hidden_graph.node_sets['node']['hidden_state'], definition_nodes.flat_values)
         graph_hidden_states = tf.repeat(hidden_graph.context['hidden_state'], num_definitions, axis=0)
-        hidden_state = tf.concat([node_hidden_states, graph_hidden_states], axis=-1)
+        rnn_output = tf.ragged.map_flat_values(self._name_layer, def_names)
+
+        hidden_state = tf.concat([node_hidden_states, graph_hidden_states, rnn_output], axis=-1)
 
         for hidden_layer in self._hidden_layers:
             hidden_state = hidden_layer(hidden_state, training=training)
