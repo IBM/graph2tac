@@ -616,6 +616,11 @@ def main():
                         default=None,
                         help="set this flag to run Predict in debug mode")
 
+    parser.add_argument('--checkpoint-number',
+                        type=int,
+                        default=None,
+                        help="choose the checkpoint number to use (defaults to latest available checkpoint)")
+
 
 
 
@@ -671,7 +676,9 @@ def main():
 
             logger.info("importing TFGNNPredict class...")
             from graph2tac.tfgnn.predict import TFGNNPredict
-            predict = TFGNNPredict(log_dir=Path(args.model).expanduser().absolute(), debug_dir=args.debug_predict)
+            predict = TFGNNPredict(log_dir=Path(args.model).expanduser().absolute(),
+                                   debug_dir=args.debug_predict,
+                                   checkpoint_number=args.checkpoint_number)
         elif args.arch == 'hmodel':
             logger.info("importing HPredict class..")
             from graph2tac.loader.hmodel import HPredict
