@@ -3,6 +3,7 @@ from typing import Optional, List, Tuple
 from pathlib import Path
 import numpy as np
 import tensorflow as tf
+from graph2tac.loader.data_server import GraphConstants
 
 from graph2tac.tf2.graph_nn_batch import make_flat_batch_np, make_flat_batch_np_empty
 from graph2tac.tf2.graph_nn_def_batch import make_flat_def_batch_np
@@ -22,7 +23,24 @@ class TF2Predict(Predict):
         self.checkpoint_dir = checkpoint_dir
         self.params = ModelWrapper.get_params_from_checkpoint(checkpoint_dir)
         self.dataset_consts = self.params.dataset_consts
-        super().__init__(graph_constants=self.dataset_consts, debug_dir=debug_dir)
+
+        # this class uses ModelDatasetConstants while the superclass uses GraphConstants,
+        # so we convert before passing to the superclass
+        graph_constants = GraphConstants(
+            tactic_num=self.dataset_consts.tactic_num,
+            edge_label_num=self.dataset_consts.edge_label_num,
+            base_node_label_num=self.dataset_consts.base_node_label_num,
+            node_label_num=self.dataset_consts.node_label_num,
+            cluster_subgraphs_num=0, # not stored, but not something predict needs
+            tactic_index_to_numargs=self.dataset_consts.tactic_index_to_numargs,
+            tactic_index_to_string=[],  # not stored, but not something predict needs
+            tactic_index_to_hash=self.dataset_consts.tactic_index_to_hash,
+            global_context=self.dataset_consts.global_context,
+            label_to_names=self.dataset_consts.node_label_to_name,
+            label_in_spine=self.dataset_consts.node_label_in_spine,
+            max_subgraph_size=self.dataset_consts.max_subgraph_size,
+        )
+        super().__init__(graph_constants=graph_constants)
 
     @Predict.api_debugging('initialize')
     def initialize(self, global_context: Optional[list[int]] = None) -> None:
