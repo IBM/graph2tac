@@ -2,7 +2,6 @@ from typing import Tuple, List, Union, Iterable, Callable, Optional
 
 import re
 import yaml
-import pickle
 import numpy as np
 import tensorflow as tf
 import tensorflow_gnn as tfgnn
@@ -130,9 +129,9 @@ class PredictOutput:
 class TFGNNPredict(Predict):
     def __init__(self,
                  log_dir: Path,
+                 debug_dir: Optional[Path] = None,
                  checkpoint_number: Optional[int] = None,
-                 numpy_output: bool = True,
-                 debug: bool = False
+                 numpy_output: bool = True
                  ):
         """
         @param log_dir: the directory for the checkpoint that is to be loaded (as passed to the Trainer class)
@@ -141,7 +140,6 @@ class TFGNNPredict(Predict):
         @param debug: set to True to dump pickle files for every API call that is made
         """
         self.numpy_output = numpy_output
-        self.debug = debug
 
         # create dummy dataset for pre-processing purposes
         graph_constants_filepath = log_dir / 'config' / 'graph_constants.yaml'
@@ -155,7 +153,7 @@ class TFGNNPredict(Predict):
         self._preprocess = dataset._preprocess
 
         # call to parent constructor to defines self._graph_constants
-        super().__init__(graph_constants=graph_constants)
+        super().__init__(graph_constants=graph_constants, debug_dir=debug_dir)
 
         # to build dummy proofstates we will need to use a tactic taking no arguments
         self._dummy_tactic_id = tf.argmin(graph_constants.tactic_index_to_numargs)  # num_arguments == 0
@@ -215,28 +213,6 @@ class TFGNNPredict(Predict):
         else:
             raise ValueError(f'{prediction_task_type} is not a supported prediction task type')
 
-        # if debug mode is on, initialize evaluation directory
-        if self.debug:
-            eval_dir = log_dir / 'eval'
-            eval_dir.mkdir(exist_ok=True)
-
-            eval_subdirs = [int(subdir.name) for subdir in eval_dir.glob('*') if subdir.is_dir()]
-            eval_number = max(eval_subdirs) + 1 if eval_subdirs else 1
-
-            self.cur_eval_dir = eval_dir / str(eval_number)
-            self.cur_eval_dir.mkdir()
-            logger.info(f'running TFGNNPredict in debug mode, messages will be stored at {self.cur_eval_dir}')
-
-            self.message_number = 0
-
-    def _debug(self, api_call: str, **kwargs) -> None:
-        if self.debug:
-            message_file = self.cur_eval_dir / f'{self.message_number}.pickle'
-            logger.debug(f'logging {api_call} message to {message_file}')
-            with message_file.open('wb') as pickle_jar:
-                pickle.dump((api_call, kwargs), pickle_jar)
-            self.message_number += 1
-
     @staticmethod
     def _extend_graph_embedding(graph_embedding: GraphEmbedding, new_node_label_num: int) -> GraphEmbedding:
         new_graph_embedding = GraphEmbedding(node_label_num=new_node_label_num,
@@ -251,9 +227,8 @@ class TFGNNPredict(Predict):
         new_graph_embedding._node_embedding.set_weights([new_embeddings])
         return new_graph_embedding
 
+    @Predict.api_debugging('initialize')
     def initialize(self, global_context: Optional[List[int]] = None) -> None:
-        self._debug('initialize', global_context=global_context)
-
         if global_context is not None:
             # update the global context
             self._graph_constants.global_context = tf.constant(global_context, dtype=tf.int32)
@@ -276,9 +251,8 @@ class TFGNNPredict(Predict):
                 name=GlobalArgumentPrediction.GLOBAL_ARGUMENTS_LOGITS
             )
 
+    @Predict.api_debugging('compute_new_definitions')
     def compute_new_definitions(self, new_cluster_subgraphs: List[Tuple]) -> None:
-        self._debug('compute_new_definitions', new_cluster_subgraphs=new_cluster_subgraphs)
-
         if self.definition_task is None:
             raise RuntimeError('cannot update definitions when a definition task is not present')
         definition_graph = self._make_definition_batch(new_cluster_subgraphs)
@@ -577,6 +551,7 @@ class TFGNNPredict(Predict):
         else:
             return [predict_output.numpy() for predict_output in batch_predict_output]
 
+    @Predict.api_debugging('ranked_predictions')
     def ranked_predictions(self,
                            state: Tuple,
                            tactic_expand_bound: int,
@@ -587,13 +562,6 @@ class TFGNNPredict(Predict):
         """
         Produces predictions for a single proof-state.
         """
-        self._debug('ranked_predictions',
-                    state=state,
-                    tactic_expand_bound=tactic_expand_bound,
-                    total_expand_bound=total_expand_bound,
-                    available_global=available_global,
-                    allowed_model_tactics=allowed_model_tactics)
-
         if available_global is not None:
             raise NotImplementedError('available_global is not supported yet')
 
