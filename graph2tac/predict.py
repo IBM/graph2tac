@@ -1,7 +1,10 @@
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Callable, Dict
 
+import pickle
 import numpy as np
+from pathlib import Path
 
+from graph2tac.common import logger
 from graph2tac.loader.data_server import GraphConstants
 
 
@@ -23,6 +26,19 @@ def cartesian_product(*arrays):
     return arr.reshape(-1, la)
 
 
+def predict_api_debugging(api_call: Callable):
+    api_name = api_call.__name__
+    def api_call_with_debug(self: "Predict", *args: List, **kwargs: Dict):
+        if self._debug_dir is not None:
+            debug_message_file = self._run_dir / f'{self._debug_message_number}.pickle'
+            logger.debug(f'logging {api_name} call to {debug_message_file}')
+            with debug_message_file.open('wb') as pickle_jar:
+                pickle.dump((api_name, args, kwargs), pickle_jar)
+            self._debug_message_number += 1
+        return api_call(self, *args, **kwargs)
+    return api_call_with_debug
+
+
 class Predict:
     """
     Common prediction API to load training checkpoints and make predictions in order to interact with an evaluator.
@@ -38,44 +54,65 @@ class Predict:
     """
     _graph_constants: GraphConstants
 
-    def __init__(self, graph_constants: GraphConstants):
+    def __init__(self, graph_constants: GraphConstants, debug_dir: Optional[Path] = None):
         """
 
         @param graph_constants: the graph constants seen during training
+        @param debug_dir: a directory where all api calls will be logged for debugging purposes
         """
         self._graph_constants = graph_constants
+        self._debug_dir = debug_dir
         assert self._graph_constants is not None
 
+        # if debug mode is on, initialize evaluation logging directory
+        if self._debug_dir is not None:
+            self._debug_dir.mkdir(exist_ok=True)
+
+            run_dirs = [int(run_dir.name) for run_dir in self._debug_dir.glob('*') if run_dir.is_dir()]
+            run_number = max(run_dirs) + 1 if run_dirs else 1
+
+            self._run_dir = debug_dir / str(run_number)
+            self._run_dir.mkdir()
+            logger.info(f'running Predict in debug mode, messages will be stored at {self._run_dir}')
+
+            self._debug_message_number = 0
+
+    @predict_api_debugging
     def get_tactic_index_to_numargs(self) -> np.ndarray:
         """
         [ Public API ] Returns the tactic_index_to_numargs seen during training
         """
         return self._graph_constants.tactic_index_to_numargs
 
+    @predict_api_debugging
     def get_tactic_index_to_hash(self) -> np.ndarray:
         """
         [ Public API ] Returns the tactic_index_to_hash seen during training
         """
         return self._graph_constants.tactic_index_to_hash
 
+    @predict_api_debugging
     def get_label_to_name(self) -> List[str]:
         """
         [ Public API ] Returns the label_to_names seen during training
         """
         return self._graph_constants.label_to_names
 
+    @predict_api_debugging
     def get_label_in_spine(self) -> List[bool]:
         """
         [ Public API ] Returns the label_in_spine seen during training
         """
         return self._graph_constants.label_in_spine
 
+    @predict_api_debugging
     def get_max_subgraph_size(self) -> int:
         """
         [ Public API ] Returns the max_subgraph_size seen during training
         """
         return self._graph_constants.max_subgraph_size
 
+    @predict_api_debugging
     def initialize(self, global_context: Optional[List[int]] = None) -> None:
         """
         [ Public API ] Initializes the model to use a different global context than the one seen during training.
@@ -84,6 +121,7 @@ class Predict:
         """
         raise NotImplementedError('initialize should be implemented by sub-classes')
 
+    @predict_api_debugging
     def ranked_predictions(self,
                            state: Tuple,
                            allowed_model_tactics: List,
@@ -106,6 +144,7 @@ class Predict:
         """
         raise NotImplementedError('ranked_predictions should be implemented by sub-classes')
 
+    @predict_api_debugging
     def compute_new_definitions(self, new_cluster_subgraphs : List) -> None:
         """
         [ Public API ] Updates definition embeddings using the model to process definition cluster subgraphs.

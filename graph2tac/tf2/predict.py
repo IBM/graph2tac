@@ -3,11 +3,12 @@ from typing import Optional, List, Tuple
 from pathlib import Path
 import numpy as np
 import tensorflow as tf
+from graph2tac.loader.data_server import GraphConstants
 
 from graph2tac.tf2.graph_nn_batch import make_flat_batch_np, make_flat_batch_np_empty
 from graph2tac.tf2.graph_nn_def_batch import make_flat_def_batch_np
 from graph2tac.tf2.model import ModelWrapper, np_to_tensor, np_to_tensor_def
-from graph2tac.predict import Predict, cartesian_product, NUMPY_NDIM_LIMIT
+from graph2tac.predict import Predict, predict_api_debugging, cartesian_product, NUMPY_NDIM_LIMIT
 
 
 class TF2Predict(Predict):
@@ -18,12 +19,30 @@ class TF2Predict(Predict):
     This is usually not the weights directory, but a subdirectory corresponding
     to the particular epoch.
     """
-    def __init__(self, checkpoint_dir: Path):
+    def __init__(self, checkpoint_dir: Path, debug_dir: Optional[Path] = None):
         self.checkpoint_dir = checkpoint_dir
         self.params = ModelWrapper.get_params_from_checkpoint(checkpoint_dir)
         self.dataset_consts = self.params.dataset_consts
-        super().__init__(graph_constants=self.dataset_consts)
 
+        # this class uses ModelDatasetConstants while the superclass uses GraphConstants,
+        # so we convert before passing to the superclass
+        graph_constants = GraphConstants(
+            tactic_num=self.dataset_consts.tactic_num,
+            edge_label_num=self.dataset_consts.edge_label_num,
+            base_node_label_num=self.dataset_consts.base_node_label_num,
+            node_label_num=self.dataset_consts.node_label_num,
+            cluster_subgraphs_num=0, # not stored, but not something predict needs
+            tactic_index_to_numargs=self.dataset_consts.tactic_index_to_numargs,
+            tactic_index_to_string=[],  # not stored, but not something predict needs
+            tactic_index_to_hash=self.dataset_consts.tactic_index_to_hash,
+            global_context=self.dataset_consts.global_context,
+            label_to_names=self.dataset_consts.node_label_to_name,
+            label_in_spine=self.dataset_consts.node_label_in_spine,
+            max_subgraph_size=self.dataset_consts.max_subgraph_size,
+        )
+        super().__init__(graph_constants=graph_constants)
+
+    @predict_api_debugging
     def initialize(self, global_context: Optional[list[int]] = None) -> None:
         self.params = ModelWrapper.get_params_from_checkpoint(self.checkpoint_dir)
         self.dataset_consts = self.params.dataset_consts
@@ -49,6 +68,7 @@ class TF2Predict(Predict):
         flat_batch = np_to_tensor(flat_batch_np)
         result = self.pred_fn(flat_batch)
 
+    @predict_api_debugging
     def compute_new_definitions(self, new_cluster_subgraphs : list) -> None:
         """
         Public API. The client is supposed to call this method for a sequence of topologically sorted valid roots of
@@ -124,6 +144,7 @@ class TF2Predict(Predict):
         arg_logits = tf.concat([local_arg_logits, global_arg_logits], axis = 1)
         return top_tactic_ids, tactic_logits[top_tactic_ids], arg_nums, arg_logits
 
+    @predict_api_debugging
     def ranked_predictions(self,
                            state: Tuple,
                            allowed_model_tactics: List,

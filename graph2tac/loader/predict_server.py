@@ -1,7 +1,8 @@
 """
 python prediction server to interact with coq-tactician-reinforce
 """
-import typing
+from typing import NewType
+
 import sys
 import time
 import os
@@ -19,7 +20,7 @@ from graph2tac.predict import Predict
 from graph2tac.loader.data_server import DataServer, build_def_index, get_global_def_table
 
 
-Tactic = typing.NewType('Tactic', object)
+Tactic = NewType('Tactic', object)
 
 capnp.remove_import_hook()
 graph_api_filename = pkg_resources.resource_filename('graph2tac.loader','clib/graph_api_v11.capnp')
@@ -43,7 +44,7 @@ BASE_NAMES, EDGE_CONFLATIONS = get_graph_constants_online()
 
 def debug_record(msg, fname: str):
     msg_copy = msg.as_builder()
-    logger.info("debug dumping msg to ", fname)
+    logger.debug(f"debug dumping msg to {fname}")
     with open(fname, 'wb') as f_out:
         msg_copy.write_packed(f_out)
 
@@ -55,17 +56,17 @@ def debug_record(msg, fname: str):
 def process_synchronize(sock, msg):
     logger.debug(msg)
     response = graph_api_capnp.PredictionProtocol.Response.new_message(synchronized=msg.synchronize)
-    logger.debug("sending synchronize response in the initialize loop", response)
+    logger.debug(f"sending synchronize response in the initialize loop {response}")
     response.write_packed(sock)
 
 def process_initialize(sock, msg):
     graph1 = msg.initialize.graph
     definitions = msg.initialize.definitions
     logger.verbose("initialize tactics")
-    logger.debug("tactics list", list(msg.initialize.tactics))
+    logger.debug(f"tactics list {list(msg.initialize.tactics)}")
 
     logger.verbose("initialize definitions")
-    logger.debug("definitions list", list(msg.initialize.definitions))
+    logger.debug(f"definitions list {list(msg.initialize.definitions)}")
     tacs = []
     tac_numargs  = []
     for tac_reader in msg.initialize.tactics:
@@ -73,7 +74,7 @@ def process_initialize(sock, msg):
         tac_numargs.append(tac_reader.parameters)
     response = graph_api_capnp.PredictionProtocol.Response.new_message(initialized=None)
     logger.verbose("sending initialize response")
-    logger.debug("response is", response)
+    logger.debug(f"response is {response}")
     response.write_packed(sock)
 
     logger.verbose(f"tactics {tacs}")
@@ -114,8 +115,7 @@ def get_train_eval_alignment(train_name_to_label: dict[bytes,int], eval_names: l
             eval_label_to_train_label.append(cur_label)
             cur_label += 1
 
-    logger.info(f"the network node embedding table has increased from {original_train_node_labels} "
-             f"to {cur_label} with {(len(eval_names) - (cur_label - original_train_node_labels))} aligned ")
+    logger.info(f"the network node embedding table has increased from {original_train_node_labels} to {cur_label} with {(len(eval_names) - (cur_label - original_train_node_labels))} aligned ")
     return train_label_to_eval_label, eval_label_to_train_label
 
 
@@ -226,7 +226,7 @@ def main_loop(reader, sock, predict: Predict, debug_dir, session_idx=0,
     network_tactic_index_to_numargs = np.array(predict.get_tactic_index_to_numargs(), dtype=np.uint64)
 
     network_tactic_hash_to_numargs = {k:v for k,v in zip(network_tactic_index_to_hash, network_tactic_index_to_numargs)}
-    logger.debug("network tactic hash to numargs", network_tactic_hash_to_numargs)
+    logger.debug(f"network tactic hash to numargs {network_tactic_hash_to_numargs}")
     network_tactic_hash_to_index = {tactic_hash : idx for idx, tactic_hash in enumerate(network_tactic_index_to_hash)}
 
     context_cnt = -1
@@ -267,10 +267,7 @@ def main_loop(reader, sock, predict: Predict, debug_dir, session_idx=0,
 
         elif msg_type == "initialize":
             if context_cnt >= 0:
-                logger.info(f'theorem {context_cnt} had {msg_idx} '
-                            f'messages received of total size (unpacked) {total_data_online_size} bytes, '
-                            f'with network compiled in {build_network_time:.6f} s, ',
-                            f'with {n_def_clusters_updated} def clusters updated in {update_def_time:.6f} s')
+                logger.info(f'theorem {context_cnt} had {msg_idx} messages received of total size (unpacked) {total_data_online_size} bytes, with network compiled in {build_network_time:.6f} s, with {n_def_clusters_updated} def clusters updated in {update_def_time:.6f} s')
 
 
             context_cnt += 1
@@ -337,7 +334,7 @@ def main_loop(reader, sock, predict: Predict, debug_dir, session_idx=0,
             if update_all_definitions:
                 logger.info(f"Prepared for update all {len(def_clusters_for_update)} definition clusters")
             elif update_new_definitions:
-                logger.info(f"Prepared for update  {len(def_clusters_for_update)} definition clusters containing unaligned definitions")
+                logger.info(f"Prepared for update {len(def_clusters_for_update)} definition clusters containing unaligned definitions")
             else:
                 logger.info(f"No update of the definition clusters requested")
 
@@ -427,16 +424,16 @@ def main_loop(reader, sock, predict: Predict, debug_dir, session_idx=0,
             edges_grouped_by_label = np.split(edges, edges_offset)
             this_encoded_root, this_encoded_context, this_context = load_msg_online(msg_data, global_visited, data_msg_idx)
 
-            logger.debug("this encoded root", this_encoded_root)
-            logger.debug("this encoded context", this_encoded_context)
-            logger.debug("this context", this_context)
+            logger.debug(f"this encoded root {this_encoded_root}")
+            logger.debug(f"this encoded context {this_encoded_context}")
+            logger.debug(f"this context {this_context}")
 
-            logger.debug("state from python:", msg.predict.state)
+            logger.debug(f"state from python: {msg.predict.state}")
             logger.debug("root children from python:")
             child_start = msg.predict.graph.nodes[msg.predict.state.root].childrenIndex
             child_stop  = child_start + msg.predict.graph.nodes[msg.predict.state.root].childrenCount
             for edge_idx in range(child_start, child_stop):
-                logger.debug("root 0 child", msg.predict.graph.edges[edge_idx])
+                logger.debug(f"root 0 child {msg.predict.graph.edges[edge_idx]}")
 
             online_graph = train_node_labels, edges, edge_labels, edges_offset
 
@@ -467,9 +464,7 @@ def main_loop(reader, sock, predict: Predict, debug_dir, session_idx=0,
                                                               this_context,  sock.fileno(), eval_names[len(BASE_NAMES):])
             for action_idx, (online_encoded_action, online_confidence) in enumerate(
                     zip(top_online_encoded_actions, top_online_confidences)):
-                logger.info(f"sending to coq the action {action_idx}, prob = {online_confidence:.6f}",
-                         online_encoded_action)
-
+                logger.info(f"sending to coq the action {action_idx}, prob = {online_confidence:.6f}, {online_encoded_action}")
 
             t1 = time.time()
             t_predict += (t1 - t0)
@@ -484,10 +479,7 @@ def main_loop(reader, sock, predict: Predict, debug_dir, session_idx=0,
                             "msg type is not 'predict', 'synchronize', or 'initialize'")
 
 
-    logger.info(f'(final): theorem {context_cnt} had {msg_idx} '
-                f'messages received of total size (unpacked) {total_data_online_size} bytes, '
-                f'with network compiled in {build_network_time:.6f} s, ',
-                f'with {n_def_clusters_updated} def clusters updated in {update_def_time:.6f} s')
+    logger.info(f'(final): theorem {context_cnt} had {msg_idx} messages received of total size (unpacked) {total_data_online_size} bytes, with network compiled in {build_network_time:.6f} s, with {n_def_clusters_updated} def clusters updated in {update_def_time:.6f} s')
 
 
 
@@ -619,6 +611,16 @@ def main():
                         default=1.0,
                         help="temperature to apply to the probability distributions returned by the model")
 
+    parser.add_argument('--debug-predict',
+                        type=Path,
+                        default=None,
+                        help="set this flag to run Predict in debug mode")
+
+    parser.add_argument('--checkpoint-number',
+                        type=int,
+                        default=None,
+                        help="choose the checkpoint number to use (defaults to latest available checkpoint)")
+
 
 
 
@@ -627,11 +629,7 @@ def main():
 
     if args.debug_dir is not None:
         os.makedirs(args.debug_dir, exist_ok=True)
-        logger.info(f"WARNING!!!! "
-                    f"the directory {args.debug_dir} was provided to record messages for debugging purposes. "
-                    f"The capnp bin messages will be recorded to {args.debug_dir}. "
-                    f"Please do not provide --debug_dir if you do not want to record messages for later debugging "
-                    f"and inspection purposes!")
+        logger.warning(f"WARNING!!!! the directory {args.debug_dir} was provided to record messages for debugging purposes. The capnp bin messages will be recorded to {args.debug_dir}. Please do not provide --debug_dir if you do not want to record messages for later debugging and inspection purposes!")
 
 
     if not args.test is None:
@@ -666,21 +664,25 @@ def main():
             import tensorflow as tf
             tf.get_logger().setLevel(int(tf_log_levels[args.log_level]))
             tf.config.run_functions_eagerly(args.tf_eager)
+
+            logger.info("importing TF2Predict class..")
             from graph2tac.tf2.predict import TF2Predict
-            logger.info("importing Predict class..")
-            predict = TF2Predict(checkpoint_dir=Path(args.model).expanduser().absolute())
+            predict = TF2Predict(checkpoint_dir=Path(args.model).expanduser().absolute(), debug_dir=args.debug_predict)
         elif args.arch == 'tfgnn':
             logger.info("importing tensorflow...")
             import tensorflow as tf
             tf.get_logger().setLevel(int(tf_log_levels[args.log_level]))
             tf.config.run_functions_eagerly(args.tf_eager)
+
+            logger.info("importing TFGNNPredict class...")
             from graph2tac.tfgnn.predict import TFGNNPredict
-            logger.info("importing Predict class..")
-            predict = TFGNNPredict(log_dir=Path(args.model).expanduser().absolute())
+            predict = TFGNNPredict(log_dir=Path(args.model).expanduser().absolute(),
+                                   debug_dir=args.debug_predict,
+                                   checkpoint_number=args.checkpoint_number)
         elif args.arch == 'hmodel':
-            logger.info("importing Predict class..")
+            logger.info("importing HPredict class..")
             from graph2tac.loader.hmodel import HPredict
-            predict = HPredict(checkpoint_dir=Path(args.model).expanduser().absolute())
+            predict = HPredict(checkpoint_dir=Path(args.model).expanduser().absolute(), debug_dir=args.debug_predict)
         else:
             Exception(f'the provided model architecture {args.arch} is not supported')
 
@@ -702,17 +704,17 @@ def main():
                   temperature=args.temperature
         )
     else:
-        logger.info("starting tcp/ip server on port", args.port)
+        logger.info(f"starting tcp/ip server on port {args.port}")
         server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         server_sock.bind((args.host, args.port))
         try:
             server_sock.listen(1)
-            logger.info("tcp/ip server is listening on", args.port)
+            logger.info(f"tcp/ip server is listening on {args.port}")
             session_idx = 0
             while True:
                 sock, remote_addr = server_sock.accept()
-                logger.info("coq client connected ", remote_addr)
+                logger.info(f"coq client connected {remote_addr}")
                 reader = graph_api_capnp.PredictionProtocol.Request.read_multiple_packed(sock, traversal_limit_in_words=2**64-1)
                 main_loop(reader, sock, predict,
                           args.debug_dir,
@@ -725,11 +727,11 @@ def main():
                           update_new_definitions=args.update_new_definitions,
                           progress_bar=args.progress_bar,
                 )
-                logger.info("coq client disconnected ", remote_addr)
+                logger.info(f"coq client disconnected {remote_addr}")
 
                 session_idx += 1
         finally:
-            logger.info('closing the server on port', args.port)
+            logger.info(f'closing the server on port {args.port}')
             server_sock.close()
 
 

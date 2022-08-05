@@ -12,6 +12,9 @@ from pathlib import Path
 from typing import Optional
 import yaml
 
+# TODO(jrute): This is really just a copy of GraphConstants and should be just replaced with it
+# The only reason this was made was because of the non-serializable data in graph constants,
+# but that is not as much of a problem with the way Fidel is serializing and deserializing the yaml.
 
 @dataclass_json
 @dataclass

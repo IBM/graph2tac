@@ -15,7 +15,7 @@ from graph2tac.tfgnn.tasks import PredictionTask, GlobalArgumentPrediction, Defi
 from graph2tac.tfgnn.models import GraphEmbedding, LogitsFromEmbeddings
 from graph2tac.tfgnn.train import Trainer
 from graph2tac.common import logger
-from graph2tac.predict import Predict, cartesian_product, NUMPY_NDIM_LIMIT
+from graph2tac.predict import Predict, predict_api_debugging, cartesian_product, NUMPY_NDIM_LIMIT
 
 
 class Inference:
@@ -127,11 +127,17 @@ class PredictOutput:
 
 
 class TFGNNPredict(Predict):
-    def __init__(self, log_dir: Path, checkpoint_number: Optional[int] = None, numpy_output: bool = True):
+    def __init__(self,
+                 log_dir: Path,
+                 debug_dir: Optional[Path] = None,
+                 checkpoint_number: Optional[int] = None,
+                 numpy_output: bool = True
+                 ):
         """
         @param log_dir: the directory for the checkpoint that is to be loaded (as passed to the Trainer class)
         @param checkpoint_number: the checkpoint number we want to load (use `None` for the latest checkpoint)
         @param numpy_output: set to True to return the predictions as a tuple of numpy arrays (for evaluation purposes)
+        @param debug: set to True to dump pickle files for every API call that is made
         """
         self.numpy_output = numpy_output
 
@@ -147,7 +153,7 @@ class TFGNNPredict(Predict):
         self._preprocess = dataset._preprocess
 
         # call to parent constructor to defines self._graph_constants
-        super().__init__(graph_constants=graph_constants)
+        super().__init__(graph_constants=graph_constants, debug_dir=debug_dir)
 
         # to build dummy proofstates we will need to use a tactic taking no arguments
         self._dummy_tactic_id = tf.argmin(graph_constants.tactic_index_to_numargs)  # num_arguments == 0
@@ -155,7 +161,7 @@ class TFGNNPredict(Predict):
         # the decoding mechanism currently does not support tactics with more than NUMPY_NDIM_LIMIT
         self._tactic_mask = tf.constant(graph_constants.tactic_index_to_numargs<NUMPY_NDIM_LIMIT)
 
-        # when the local context is empty and we can only use local arguments, we mask all tactics which take arguments
+        # when doing local argument predictions, if the local context is empty we mask all tactics which take arguments
         self._tactic_mask_no_arguments = tf.constant(graph_constants.tactic_index_to_numargs == 0)
 
         # create prediction task
@@ -221,6 +227,7 @@ class TFGNNPredict(Predict):
         new_graph_embedding._node_embedding.set_weights([new_embeddings])
         return new_graph_embedding
 
+    @predict_api_debugging
     def initialize(self, global_context: Optional[List[int]] = None) -> None:
         if global_context is not None:
             # update the global context
@@ -230,8 +237,11 @@ class TFGNNPredict(Predict):
             new_node_label_num = max(global_context)+1
             if new_node_label_num > self._graph_constants.node_label_num:
                 logger.info(f'extending global context from {self._graph_constants.node_label_num} to {new_node_label_num} elements')
-                self.prediction_task.graph_embedding = self._extend_graph_embedding(graph_embedding=self.prediction_task.graph_embedding,
-                                                                                    new_node_label_num=new_node_label_num)
+                new_graph_embedding = self._extend_graph_embedding(graph_embedding=self.prediction_task.graph_embedding,
+                                                                   new_node_label_num=new_node_label_num)
+                self.prediction_task.graph_embedding = new_graph_embedding
+                if self.definition_task is not None:
+                    self.definition_task._graph_embedding = new_graph_embedding
                 self._graph_constants.node_label_num = new_node_label_num
 
             # update the global arguments logits head (always necessary, because the local context may shrink!)
@@ -241,11 +251,13 @@ class TFGNNPredict(Predict):
                 name=GlobalArgumentPrediction.GLOBAL_ARGUMENTS_LOGITS
             )
 
+    @predict_api_debugging
     def compute_new_definitions(self, new_cluster_subgraphs: List[Tuple]) -> None:
+        if self.definition_task is None:
+            raise RuntimeError('cannot update definitions when a definition task is not present')
         definition_graph = self._make_definition_batch(new_cluster_subgraphs)
 
-        masked_definition_graph = Trainer._mask_defined_labels(definition_graph)
-        scalar_definition_graph = masked_definition_graph.merge_batch_to_components()
+        scalar_definition_graph = definition_graph.merge_batch_to_components()
         definition_embeddings = self.definition_task(scalar_definition_graph).flat_values
         defined_labels = Trainer._get_defined_labels(definition_graph).flat_values
 
@@ -539,6 +551,7 @@ class TFGNNPredict(Predict):
         else:
             return [predict_output.numpy() for predict_output in batch_predict_output]
 
+    @predict_api_debugging
     def ranked_predictions(self,
                            state: Tuple,
                            tactic_expand_bound: int,
