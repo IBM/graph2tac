@@ -117,7 +117,7 @@ def make_flat_batch_np(batch: list, global_context_size: int, max_arg_num: int) 
     # then you can call DataServer.data_point(data_point_id) for debug information
 
     # nodes_c, edges, roots, context = zip(*states)
-    graphs, roots, context = zip(*states)
+    graphs, roots, context, _ = zip(*states)
     nodes_c, edges = zip(* map(lambda x: graph_as("tf2", x), graphs))
 
 

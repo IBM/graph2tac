@@ -3,7 +3,7 @@ data server provides the class to serve data to training
  - from a collection of bin files in a filesystem
  - from messages in a stream in interactive session (to be implmeneted)
 """
-from typing import List, Tuple, Callable
+from typing import List, Tuple, Callable, NewType
 
 import time
 import os
@@ -19,6 +19,8 @@ from graph2tac.hash import get_split_label
 from graph2tac.loader.helpers import get_all_fnames
 
 import tqdm
+
+LoaderGraph = NewType('LoaderGraph', Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray])
 
 
 from graph2tac.loader.clib.loader import (
@@ -58,7 +60,7 @@ class GraphConstants:
 @dataclass
 class DataPoint:
     proof_step_idx: int
-    graph: Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]
+    graph: LoaderGraph
     context: np.ndarray
     root: int
     action: Tuple[np.ndarray, np.ndarray]
@@ -421,7 +423,7 @@ class Data2:
 
 
     # REFACTOR CLIENTS
-    def step_state(self, data_point_idx: int):
+    def step_state(self, data_point_idx: int) -> Tuple[LoaderGraph, int, np.ndarray, Tuple]:
         proof_step = self.get_proof_step(data_point_idx, skip_text=True)
         return proof_step.graph, proof_step.root, proof_step.context, (proof_step.def_name, proof_step.step_in_proof)
 

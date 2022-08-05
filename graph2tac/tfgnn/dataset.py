@@ -532,8 +532,14 @@ class DataServerDataset(Dataset):
     loader_graph_spec = (node_labels_spec, edges_spec, edge_labels_spec, edges_offset_spec)
 
     root_spec = tf.TensorSpec(shape=(), dtype=tf.int64, name='root')
+
     context_node_ids_spec = tf.TensorSpec(shape=(None,), dtype=tf.int64, name='context_node_ids')
-    state_spec = (loader_graph_spec, root_spec, context_node_ids_spec)
+
+    name_spec = tf.TensorSpec(shape=(), dtype=tf.string, name='name')
+    step_spec = tf.TensorSpec(shape=(), dtype=tf.int64, name='step')
+    proofstate_info_spec = (name_spec, step_spec)
+
+    state_spec = (loader_graph_spec, root_spec, context_node_ids_spec, proofstate_info_spec)
 
     tactic_id_spec = tf.TensorSpec(shape=(), dtype=tf.int64, name='tactic_id')
     arguments_array_spec = tf.TensorSpec(shape=(None, 2), dtype=tf.int64, name='arguments_array')
@@ -631,8 +637,9 @@ class DataServerDataset(Dataset):
         @param graph_id: the id of the graph
         @return: a GraphTensor object that is compatible with the `proofstate_graph_spec` in `graph_schema.py`
         """
-        loader_graph, root, context_node_ids = state
+        loader_graph, root, context_node_ids, proofstate_info = state
         node_labels, sources, targets, edge_labels = graph_as("tf_gnn", loader_graph)
+        proofstate_name, proofstate_step = proofstate_info
 
         bare_graph_tensor = cls._make_bare_graph_tensor(node_labels, sources, targets, edge_labels)
 
@@ -646,7 +653,10 @@ class DataServerDataset(Dataset):
             'local_arguments': tf.RaggedTensor.from_tensor(tensor=tf.expand_dims(local_arguments, axis=0),
                                                            row_splits_dtype=tf.int32),
             'global_arguments': tf.RaggedTensor.from_tensor(tensor=tf.expand_dims(global_arguments, axis=0),
-                                                            row_splits_dtype=tf.int32)
+                                                            row_splits_dtype=tf.int32),
+            'graph_id': tf.expand_dims(graph_id, axis=0),
+            'name': tf.expand_dims(proofstate_name, axis=0),
+            'step': tf.expand_dims(proofstate_step, axis=0)
         })
 
         return tfgnn.GraphTensor.from_pieces(node_sets=bare_graph_tensor.node_sets,

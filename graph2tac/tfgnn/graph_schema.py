@@ -40,6 +40,15 @@ edge_sets {
 _proofstate_context_schema = """
 context {
   features {
+    key: "context_node_ids"
+    value: {
+      description: "[DATA] The ids of the nodes in the local context."
+      dtype: DT_INT64
+      shape { dim { size: -1 } }
+    }
+  }
+
+  features {
     key: "tactic"
     value: {
       description: "[LABEL] The id of the tactic we are trying to predict."
@@ -48,15 +57,6 @@ context {
   }
 
   features {
-    key: "context_node_ids"
-    value: {
-      description: "[DATA] The ids of the nodes in the local context."
-      dtype: DT_INT64
-      shape { dim { size: -1 } }
-    }
-  }
-  
-  features {
     key: "local_arguments"
     value: {
       description: "[LABEL] The local arguments we are trying to predict (or -1 for global/None)."
@@ -64,13 +64,37 @@ context {
       shape { dim { size: -1 } }
     }
   }
-  
+
   features {
     key: "global_arguments"
     value: {
       description: "[LABEL] The global arguments we are trying to predict (or -1 for local/None)."
       dtype: DT_INT64
       shape { dim { size: -1 } }
+    }
+  }
+
+  features {
+    key: "graph_id"
+    value: {
+      description: "[METADATA] The id of the graph, as returned by the loader."
+      dtype: DT_INT64
+    }
+  }
+
+  features {
+    key: "name"
+    value: {
+      description: "[METADATA] The name of the lemma this proofstate belongs to."
+      dtype: DT_STRING
+    }
+  }
+
+  features {
+    key: "step"
+    value: {
+      description: "[METADATA] The step number in the lemma proof."
+      dtype: DT_INT64
     }
   }
 }
