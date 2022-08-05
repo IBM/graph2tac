@@ -386,7 +386,7 @@ class Data2:
 
         # TEXT ANNOTATION TO BE IMPLEMENTED
         return DataPoint(data_point_idx,
-                         graph = (nodes, edges, edge_labels, edges_offset),
+                         graph = LoaderGraph( (nodes, edges, edge_labels, edges_offset) ),
                          context = context,
                          root = root,
                          action=(tactic_index, args),
@@ -437,7 +437,7 @@ class Data2:
     def step_label(self, data_point_idx):
         return self.get_proof_step(data_point_idx, skip_text=True).action
 
-    def def_cluster_subgraph(self, cluster_idx,  max_arg_size=None):
+    def def_cluster_subgraph(self, cluster_idx,  max_arg_size=None) -> Tuple[LoaderGraph, int]:
         if max_arg_size is None:
             max_arg_size = self.__max_subgraph_size
 
@@ -447,7 +447,7 @@ class Data2:
 
         nodes, edges, edge_labels, edges_offset, _ , _, _, _, _ = res
 
-        graph = nodes, edges, edge_labels, edges_offset
+        graph = LoaderGraph( (nodes, edges, edge_labels, edges_offset) )
         return graph, len(def_cluster)
 
 
