@@ -5,7 +5,7 @@ import numpy as np
 from pathlib import Path
 
 from graph2tac.common import logger
-from graph2tac.loader.data_server import GraphConstants
+from graph2tac.loader.data_server import GraphConstants, LoaderProofstate, LoaderDefinition
 
 
 NUMPY_NDIM_LIMIT = 32
@@ -123,8 +123,8 @@ class Predict:
 
     @predict_api_debugging
     def ranked_predictions(self,
-                           state: Tuple,
-                           allowed_model_tactics: List,
+                           state: LoaderProofstate,
+                           allowed_model_tactics: List[int],
                            available_global: Optional[np.ndarray],
                            tactic_expand_bound: int,
                            total_expand_bound: int
@@ -145,7 +145,7 @@ class Predict:
         raise NotImplementedError('ranked_predictions should be implemented by sub-classes')
 
     @predict_api_debugging
-    def compute_new_definitions(self, new_cluster_subgraphs : List) -> None:
+    def compute_new_definitions(self, new_cluster_subgraphs : List[LoaderDefinition]) -> None:
         """
         [ Public API ] Updates definition embeddings using the model to process definition cluster subgraphs.
 
