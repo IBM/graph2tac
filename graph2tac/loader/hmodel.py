@@ -8,7 +8,7 @@ import numpy as np
 from pathlib import Path
 
 from graph2tac.loader.data_server import DataServer
-from graph2tac.predict import Predict
+from graph2tac.predict import Predict, predict_api_debugging
 
 
 def my_hash(x: bytes):
@@ -112,20 +112,20 @@ class HPredict(Predict):
         self._with_context = loaded_model['with_context']
         self._label_to_idx = dict()
 
-    @Predict.api_debugging('initialize')
+    @predict_api_debugging
     def initialize(self, global_context: Optional[List[int]] = None) -> None:
         if global_context is not None:
             for idx, label in enumerate(global_context):
                 self._label_to_idx[label] = idx
 
-    @Predict.api_debugging('compute_new_definitions')
+    @predict_api_debugging
     def compute_new_definitions(self, clusters: list[tuple[np.ndarray]]):
         """
         a list of cluster states on which we run dummy runs
         """
         pass
 
-    @Predict.api_debugging('ranked_predictions')
+    @predict_api_debugging
     def ranked_predictions(self, state: tuple, allowed_model_tactics: list, available_global=None, tactic_expand_bound=20, total_expand_bound=1000000, annotation="", debug=False):
         graph, root, context = state
         state_hash = my_hash_of(state, self._with_context)
