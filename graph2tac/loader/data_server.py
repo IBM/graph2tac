@@ -423,7 +423,7 @@ class Data2:
     # REFACTOR CLIENTS
     def step_state(self, data_point_idx: int):
         proof_step = self.get_proof_step(data_point_idx, skip_text=True)
-        return proof_step.graph, proof_step.root, proof_step.context
+        return proof_step.graph, proof_step.root, proof_step.context, (proof_step.def_name, proof_step.step_in_proof)
 
     def step_state_text(self, data_point_idx: int):
         return self.get_proof_step(data_point_idx).state_text
