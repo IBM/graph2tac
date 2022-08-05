@@ -103,6 +103,15 @@ context {
 _definition_context_schema = """
 context {
   features {
+    key: "definition_names"
+    value: {
+      description: "[DATA] The names of the node labels being defined by this graph."
+      dtype: DT_STRING
+      shape { dim { size: -1 } }
+    }
+  }
+
+  features {
     key: "num_definitions"
     value: {
       description: "[LABEL] The number of node labels defined by this graph."

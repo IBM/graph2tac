@@ -437,7 +437,7 @@ class Data2:
     def step_label(self, data_point_idx):
         return self.get_proof_step(data_point_idx, skip_text=True).action
 
-    def def_cluster_subgraph(self, cluster_idx,  max_arg_size=None) -> Tuple[LoaderGraph, int]:
+    def def_cluster_subgraph(self, cluster_idx,  max_arg_size=None) -> Tuple[LoaderGraph, int, np.ndarray]:
         if max_arg_size is None:
             max_arg_size = self.__max_subgraph_size
 
@@ -447,8 +447,15 @@ class Data2:
 
         nodes, edges, edge_labels, edges_offset, _ , _, _, _, _ = res
 
+        base_node_label_names, _ = get_graph_constants_online()
+        label_to_names = np.array(base_node_label_names +  self.__def_index_table.idx_to_name)
+
+        num_definitions = len(def_cluster)
+        definition_labels = nodes[:num_definitions]
+        definition_names = label_to_names[definition_labels]
+
         graph = LoaderGraph( (nodes, edges, edge_labels, edges_offset) )
-        return graph, len(def_cluster)
+        return graph, num_definitions, definition_names
 
 
 class Iterator:

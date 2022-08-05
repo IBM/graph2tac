@@ -70,7 +70,7 @@ def make_flat_def_batch_np(batch: list) -> FlatDefBatchNP:
     assert len(batch) > 0
     batch_size = len(batch)
     # nodes_c, edges, root_nums = zip(*batch)
-    graphs, root_nums = zip(*batch)
+    graphs, root_nums, _ = zip(*batch)
     nodes_c, edges = zip(* map(lambda x: graph_as("tf2", x), graphs))
 
 

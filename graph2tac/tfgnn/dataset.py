@@ -6,7 +6,7 @@ import tensorflow as tf
 import tensorflow_gnn as tfgnn
 from pathlib import Path
 
-from graph2tac.loader.data_server import DataServer, GraphConstants, graph_as
+from graph2tac.loader.data_server import DataServer, GraphConstants, graph_as, LoaderGraph
 from graph2tac.tfgnn.graph_schema import proofstate_graph_spec, definition_graph_spec
 from graph2tac.common import logger
 
@@ -548,9 +548,10 @@ class DataServerDataset(Dataset):
     graph_id_spec = tf.TensorSpec(shape=(), dtype=tf.int64, name='graph_id')
 
     num_definitions_spec = tf.TensorSpec(shape=(), dtype=tf.int64, name='num_definitions')
+    definition_names_spec = tf.TensorSpec(shape=(None,), dtype=tf.string, name='definition_names')
 
     proofstate_data_spec = (state_spec, action_spec, graph_id_spec)
-    definition_data_spec = (loader_graph_spec, num_definitions_spec)
+    definition_data_spec = (loader_graph_spec, num_definitions_spec, definition_names_spec)
 
     def __init__(self, data_dir: Path, **kwargs):
         """
@@ -665,8 +666,9 @@ class DataServerDataset(Dataset):
 
     @classmethod
     def _make_definition_graph_tensor(cls,
-                                      loader_graph: Tuple,
-                                      num_definitions: tf.Tensor
+                                      loader_graph: LoaderGraph,
+                                      num_definitions: tf.Tensor,
+                                      definition_names: tf.Tensor
                                       ) -> tfgnn.GraphTensor:
         """
         Converts the data loader's definition cluster representation into a TF-GNN compatible GraphTensor.
@@ -679,7 +681,11 @@ class DataServerDataset(Dataset):
 
         bare_graph_tensor = cls._make_bare_graph_tensor(node_labels, sources, targets, edge_labels)
 
-        context = tfgnn.Context.from_fields(features={'num_definitions': tf.expand_dims(num_definitions, axis=0)})
+        context = tfgnn.Context.from_fields(features={
+            'num_definitions': tf.expand_dims(num_definitions, axis=0),
+            'definition_names': tf.RaggedTensor.from_tensor(tensor=tf.expand_dims(definition_names, axis=0),
+                                                            row_splits_dtype=tf.int32)
+        })
 
         return tfgnn.GraphTensor.from_pieces(node_sets=bare_graph_tensor.node_sets,
                                              edge_sets=bare_graph_tensor.edge_sets,
