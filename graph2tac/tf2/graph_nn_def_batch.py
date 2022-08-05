@@ -1,6 +1,6 @@
 """
 defines batch dataclass used by the specific gnn defined in graph_nn.py
-the classes in these module probably should be packaged together with
+the classes in these modules probably should be packaged together with
 GraphToLogits class in graph_nn
 """
 
@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from typing import List
 import numpy as np
 
-from graph2tac.loader.data_server import graph_as
+from graph2tac.loader.data_server import graph_as, LoaderDefinition
 
 # TODO(jrute): This code is unique to the model in model.py,
 # and it now depends on the dataset constants saved with that model.
@@ -62,7 +62,7 @@ class FlatDefBatchNP:
                 f"{num_datapoints} datapoints ")
 
 
-def make_flat_def_batch_np(batch: list) -> FlatDefBatchNP:
+def make_flat_def_batch_np(batch: List[LoaderDefinition]) -> FlatDefBatchNP:
     """
     this function forms FlatDefBatchNP of numpy arrays from a non-empty list of datapoints
     for empty input consider a function make_flat_def_batch_np_empty defined below (with different API)

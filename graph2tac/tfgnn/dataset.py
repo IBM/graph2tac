@@ -6,7 +6,7 @@ import tensorflow as tf
 import tensorflow_gnn as tfgnn
 from pathlib import Path
 
-from graph2tac.loader.data_server import DataServer, GraphConstants, graph_as, LoaderGraph
+from graph2tac.loader.data_server import DataServer, GraphConstants, graph_as
 from graph2tac.tfgnn.graph_schema import proofstate_graph_spec, definition_graph_spec
 from graph2tac.common import logger
 
@@ -629,7 +629,10 @@ class DataServerDataset(Dataset):
         return tactic_id, local_arguments, global_arguments
 
     @classmethod
-    def _make_proofstate_graph_tensor(cls, state: Tuple, action: Tuple, graph_id: tf.Tensor) -> tfgnn.GraphTensor:
+    def _make_proofstate_graph_tensor(cls,
+                                      state: Tuple,
+                                      action: Tuple,
+                                      graph_id: tf.Tensor) -> tfgnn.GraphTensor:
         """
         Converts the data loader's proof-state representation into a TF-GNN compatible GraphTensor.
 
@@ -666,7 +669,7 @@ class DataServerDataset(Dataset):
 
     @classmethod
     def _make_definition_graph_tensor(cls,
-                                      loader_graph: LoaderGraph,
+                                      loader_graph: Tuple,
                                       num_definitions: tf.Tensor,
                                       definition_names: tf.Tensor
                                       ) -> tfgnn.GraphTensor:

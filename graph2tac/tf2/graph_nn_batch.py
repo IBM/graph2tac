@@ -1,21 +1,20 @@
 """
 defines batch dataclass used by the specific gnn defined in graph_nn.py
-the classes in these module probably should be packaged together with
+the classes in these modules probably should be packaged together with
 GraphToLogits class in graph_nn
 """
+from typing import List, Tuple, Any
 
-from graph2tac.loader.data_server import graph_as
-
-from dataclasses import dataclass
-from typing import List
 import numpy as np
+from dataclasses import dataclass
+
+from graph2tac.loader.data_server import graph_as, LoaderProofstate
+from graph2tac.tf2.model_params import ModelDatasetConstants
 
 # TODO(jrute): This code is unique to the model in model.py,
 # and it now depends on the dataset constants saved with that model.
 # So we might as well move it there alongside np_to_tensor.
 # Then we can avoid writing np_to_tensor(flat_batch_np(...)) everywhere.
-from graph2tac.tf2.model_params import ModelDatasetConstants
-
 
 @dataclass
 class FlatBatchNP:
@@ -97,10 +96,13 @@ def build_padded_arguments_and_mask(args: np.array, max_arg_num: int, context_le
     b = np.full((max_arg_num - len(args),), False)
     mask = np.concatenate([a,b])
     padded_args = np.concatenate([args, tail_args], axis=0)
-    return (padded_args, mask)
+    return padded_args, mask
 
 
-def make_flat_batch_np(batch: list, global_context_size: int, max_arg_num: int) -> FlatBatchNP:
+def make_flat_batch_np(batch: List[Tuple[LoaderProofstate, Any, int]],
+                       global_context_size: int,
+                       max_arg_num: int
+                       ) -> FlatBatchNP:
     """
     max_arg_num: is the uniformized length of the list of arguments for tail padding
 

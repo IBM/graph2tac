@@ -20,17 +20,22 @@ from graph2tac.loader.helpers import get_all_fnames
 
 import tqdm
 
+# nodes, edges, edge_labels, edge_offsets
 LoaderGraph = NewType('LoaderGraph', Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray])
+
+# loader_graph, root, context_node_ids, (proofstate_name, proofstate_step)
+LoaderProofstate = NewType('LoaderProofstate', Tuple[LoaderGraph, int, np.ndarray, Tuple[bytes, int]])
+
+# loader_graph, num_definitions, definition_names
+LoaderDefinition = NewType('LoaderDefinition', Tuple[LoaderGraph, int, np.ndarray])
 
 
 from graph2tac.loader.clib.loader import (
-    capnp_unpack,
     files_get_scc_components,
     get_buf_def,
     get_buf_tactics,
     build_data_online_from_buf,
     data_online_extend,
-    data_online_resize,
     get_def_deps_online,
     get_local_to_global_file_idx,
     get_scc_components,
@@ -423,9 +428,9 @@ class Data2:
 
 
     # REFACTOR CLIENTS
-    def step_state(self, data_point_idx: int) -> Tuple[LoaderGraph, int, np.ndarray, Tuple]:
+    def step_state(self, data_point_idx: int) -> LoaderProofstate:
         proof_step = self.get_proof_step(data_point_idx, skip_text=True)
-        return proof_step.graph, proof_step.root, proof_step.context, (proof_step.def_name, proof_step.step_in_proof)
+        return LoaderProofstate( (proof_step.graph, proof_step.root, proof_step.context, (proof_step.def_name, proof_step.step_in_proof)) )
 
     def step_state_text(self, data_point_idx: int):
         return self.get_proof_step(data_point_idx).state_text
@@ -437,7 +442,7 @@ class Data2:
     def step_label(self, data_point_idx):
         return self.get_proof_step(data_point_idx, skip_text=True).action
 
-    def def_cluster_subgraph(self, cluster_idx,  max_arg_size=None) -> Tuple[LoaderGraph, int, np.ndarray]:
+    def def_cluster_subgraph(self, cluster_idx,  max_arg_size=None) -> LoaderDefinition:
         if max_arg_size is None:
             max_arg_size = self.__max_subgraph_size
 
@@ -455,7 +460,7 @@ class Data2:
         definition_names = label_to_names[definition_labels]
 
         graph = LoaderGraph( (nodes, edges, edge_labels, edges_offset) )
-        return graph, num_definitions, definition_names
+        return LoaderDefinition( (graph, num_definitions, definition_names) )
 
 
 class Iterator:

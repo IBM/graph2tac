@@ -1,4 +1,4 @@
-from typing import Optional, List
+from typing import Optional, List, Tuple
 
 import tqdm
 import hashlib
@@ -7,7 +7,7 @@ import pickle
 import numpy as np
 from pathlib import Path
 
-from graph2tac.loader.data_server import DataServer
+from graph2tac.loader.data_server import DataServer, LoaderProofstate, LoaderDefinition
 from graph2tac.predict import Predict, predict_api_debugging
 
 
@@ -32,14 +32,10 @@ def action_encode(action,
     return tactic_idx, res
 
 
-def my_hash_of(state, with_context):
-    graph, root, context = state
-    if with_context:
-        what_to_hash = tuple(*graph, context)
-    else:
-        what_to_hash = graph
+def my_hash_of(state: LoaderProofstate, with_context: bool):
+    graph, root, context, _ = state
+    what_to_hash = (*graph, context) if with_context else graph
     state_hash = my_hash(''.join(hash_nparray(x) for x in what_to_hash).encode())
-
     return state_hash
 
 
@@ -74,7 +70,7 @@ class Train:
     def train(self):
         none_counter = 0
         for state, action, idx in tqdm.tqdm(self._data_server.data_train()):
-            graph, root, context = state
+            graph, root, context, _ = state
             state_hash = my_hash_of(state, self._with_context)
 
             train_action = self._data.get(state_hash, [])
@@ -119,15 +115,23 @@ class HPredict(Predict):
                 self._label_to_idx[label] = idx
 
     @predict_api_debugging
-    def compute_new_definitions(self, clusters: list[tuple[np.ndarray]]):
+    def compute_new_definitions(self, clusters: List[LoaderDefinition]) -> None:
         """
         a list of cluster states on which we run dummy runs
         """
         pass
 
     @predict_api_debugging
-    def ranked_predictions(self, state: tuple, allowed_model_tactics: list, available_global=None, tactic_expand_bound=20, total_expand_bound=1000000, annotation="", debug=False):
-        graph, root, context = state
+    def ranked_predictions(self,
+                           state: LoaderProofstate,
+                           allowed_model_tactics: List[int],
+                           available_global: Optional[np.ndarray] = None,
+                           tactic_expand_bound: int = 20,
+                           total_expand_bound: int = 1000000,
+                           annotation: str = "",
+                           debug: bool = False
+                           ) -> Tuple[np.ndarray, List]:
+        graph, root, context, _ = state
         state_hash = my_hash_of(state, self._with_context)
         inverse_local_context = dict()
         for (i, node_idx) in enumerate(context):
@@ -182,7 +186,7 @@ class HPredict(Predict):
             result_pred.append(pred)
             result_val.append(val)
 
-        return result_pred, result_val
+        return np.array(result_pred), result_val
 
 def main():
     parser = argparse.ArgumentParser()
