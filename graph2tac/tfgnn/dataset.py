@@ -669,7 +669,7 @@ class DataServerDataset(Dataset):
                                              context=context)
 
     @classmethod
-    def _make_definition_graph_tensor(self, #cls,
+    def _make_definition_graph_tensor(cls,
                                       loader_graph: Tuple,
                                       num_definitions: tf.Tensor,
                                       definition_names: tf.Tensor
@@ -683,7 +683,6 @@ class DataServerDataset(Dataset):
         """
         node_labels, sources, targets, edge_labels = graph_as("tf_gnn", loader_graph)
 
-        cls = type(self)
         bare_graph_tensor = cls._make_bare_graph_tensor(node_labels, sources, targets, edge_labels)
 
         context = tfgnn.Context.from_fields(features={
