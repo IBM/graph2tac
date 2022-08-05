@@ -26,6 +26,19 @@ def cartesian_product(*arrays):
     return arr.reshape(-1, la)
 
 
+def predict_api_debugging(api_call: Callable):
+    api_name = api_call.__name__
+    def api_call_with_debug(self: "Predict", *args: List, **kwargs: Dict):
+        if self._debug_dir is not None:
+            debug_message_file = self._run_dir / f'{self._debug_message_number}.pickle'
+            logger.debug(f'logging {api_name} call to {debug_message_file}')
+            with debug_message_file.open('wb') as pickle_jar:
+                pickle.dump((api_name, args, kwargs), pickle_jar)
+            self._debug_message_number += 1
+        return api_call(self, *args, **kwargs)
+    return api_call_with_debug
+
+
 class Predict:
     """
     Common prediction API to load training checkpoints and make predictions in order to interact with an evaluator.
@@ -64,58 +77,42 @@ class Predict:
 
             self._debug_message_number = 0
 
-    @staticmethod
-    def api_debugging(api_name: str):
-        def decorator(api_call: Callable):
-            def api_call_with_debug(self: "Predict", *args: List, **kwargs: Dict):
-                if self._debug_dir is not None:
-                    debug_message_file = self._run_dir / f'{self._debug_message_number}.pickle'
-                    logger.debug(f'logging {api_name} call to {debug_message_file}')
-
-                    with debug_message_file.open('wb') as pickle_jar:
-                        pickle.dump((api_name, args, kwargs), pickle_jar)
-                    self._debug_message_number += 1
-
-                return api_call(self, *args, **kwargs)
-            return api_call_with_debug
-        return decorator
-
-    @api_debugging('get_tactic_index_to_numargs')
+    @predict_api_debugging
     def get_tactic_index_to_numargs(self) -> np.ndarray:
         """
         [ Public API ] Returns the tactic_index_to_numargs seen during training
         """
         return self._graph_constants.tactic_index_to_numargs
 
-    @api_debugging('get_tactic_index_to_hash')
+    @predict_api_debugging
     def get_tactic_index_to_hash(self) -> np.ndarray:
         """
         [ Public API ] Returns the tactic_index_to_hash seen during training
         """
         return self._graph_constants.tactic_index_to_hash
 
-    @api_debugging('get_label_to_name')
+    @predict_api_debugging
     def get_label_to_name(self) -> List[str]:
         """
         [ Public API ] Returns the label_to_names seen during training
         """
         return self._graph_constants.label_to_names
 
-    @api_debugging('get_label_in_spine')
+    @predict_api_debugging
     def get_label_in_spine(self) -> List[bool]:
         """
         [ Public API ] Returns the label_in_spine seen during training
         """
         return self._graph_constants.label_in_spine
 
-    @api_debugging('get_max_subgraph_size')
+    @predict_api_debugging
     def get_max_subgraph_size(self) -> int:
         """
         [ Public API ] Returns the max_subgraph_size seen during training
         """
         return self._graph_constants.max_subgraph_size
 
-    @api_debugging('initialize')
+    @predict_api_debugging
     def initialize(self, global_context: Optional[List[int]] = None) -> None:
         """
         [ Public API ] Initializes the model to use a different global context than the one seen during training.
@@ -124,7 +121,7 @@ class Predict:
         """
         raise NotImplementedError('initialize should be implemented by sub-classes')
 
-    @api_debugging('ranked_predictions')
+    @predict_api_debugging
     def ranked_predictions(self,
                            state: Tuple,
                            allowed_model_tactics: List,
@@ -147,7 +144,7 @@ class Predict:
         """
         raise NotImplementedError('ranked_predictions should be implemented by sub-classes')
 
-    @api_debugging('compute_new_definitions')
+    @predict_api_debugging
     def compute_new_definitions(self, new_cluster_subgraphs : List) -> None:
         """
         [ Public API ] Updates definition embeddings using the model to process definition cluster subgraphs.

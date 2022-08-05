@@ -8,7 +8,7 @@ from graph2tac.loader.data_server import GraphConstants
 from graph2tac.tf2.graph_nn_batch import make_flat_batch_np, make_flat_batch_np_empty
 from graph2tac.tf2.graph_nn_def_batch import make_flat_def_batch_np
 from graph2tac.tf2.model import ModelWrapper, np_to_tensor, np_to_tensor_def
-from graph2tac.predict import Predict, cartesian_product, NUMPY_NDIM_LIMIT
+from graph2tac.predict import Predict, predict_api_debugging, cartesian_product, NUMPY_NDIM_LIMIT
 
 
 class TF2Predict(Predict):
@@ -42,7 +42,7 @@ class TF2Predict(Predict):
         )
         super().__init__(graph_constants=graph_constants)
 
-    @Predict.api_debugging('initialize')
+    @predict_api_debugging
     def initialize(self, global_context: Optional[list[int]] = None) -> None:
         self.params = ModelWrapper.get_params_from_checkpoint(self.checkpoint_dir)
         self.dataset_consts = self.params.dataset_consts
@@ -68,7 +68,7 @@ class TF2Predict(Predict):
         flat_batch = np_to_tensor(flat_batch_np)
         result = self.pred_fn(flat_batch)
 
-    @Predict.api_debugging('compute_new_definitions')
+    @predict_api_debugging
     def compute_new_definitions(self, new_cluster_subgraphs : list) -> None:
         """
         Public API. The client is supposed to call this method for a sequence of topologically sorted valid roots of
@@ -144,7 +144,7 @@ class TF2Predict(Predict):
         arg_logits = tf.concat([local_arg_logits, global_arg_logits], axis = 1)
         return top_tactic_ids, tactic_logits[top_tactic_ids], arg_nums, arg_logits
 
-    @Predict.api_debugging('ranked_predictions')
+    @predict_api_debugging
     def ranked_predictions(self,
                            state: Tuple,
                            allowed_model_tactics: List,

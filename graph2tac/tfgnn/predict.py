@@ -15,7 +15,7 @@ from graph2tac.tfgnn.tasks import PredictionTask, GlobalArgumentPrediction, Defi
 from graph2tac.tfgnn.models import GraphEmbedding, LogitsFromEmbeddings
 from graph2tac.tfgnn.train import Trainer
 from graph2tac.common import logger
-from graph2tac.predict import Predict, cartesian_product, NUMPY_NDIM_LIMIT
+from graph2tac.predict import Predict, predict_api_debugging, cartesian_product, NUMPY_NDIM_LIMIT
 
 
 class Inference:
@@ -227,7 +227,7 @@ class TFGNNPredict(Predict):
         new_graph_embedding._node_embedding.set_weights([new_embeddings])
         return new_graph_embedding
 
-    @Predict.api_debugging('initialize')
+    @predict_api_debugging
     def initialize(self, global_context: Optional[List[int]] = None) -> None:
         if global_context is not None:
             # update the global context
@@ -251,7 +251,7 @@ class TFGNNPredict(Predict):
                 name=GlobalArgumentPrediction.GLOBAL_ARGUMENTS_LOGITS
             )
 
-    @Predict.api_debugging('compute_new_definitions')
+    @predict_api_debugging
     def compute_new_definitions(self, new_cluster_subgraphs: List[Tuple]) -> None:
         if self.definition_task is None:
             raise RuntimeError('cannot update definitions when a definition task is not present')
@@ -551,7 +551,7 @@ class TFGNNPredict(Predict):
         else:
             return [predict_output.numpy() for predict_output in batch_predict_output]
 
-    @Predict.api_debugging('ranked_predictions')
+    @predict_api_debugging
     def ranked_predictions(self,
                            state: Tuple,
                            tactic_expand_bound: int,
