@@ -566,7 +566,6 @@ class DataServerDataset(Dataset):
 
         self._graph_constants = self.data_server.graph_constants()
         self._total_proofstates = self.data_server.total_proofstates()
-        self._label_to_names = tf.ragged.constant(self._graph_constants.label_to_names)
 
     @classmethod
     def from_yaml_config(cls, data_dir: Path, yaml_filepath: Path) -> "DataServerDataset":
