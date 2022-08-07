@@ -810,7 +810,7 @@ static PyObject *c_get_file_dep(PyObject *self, PyObject *args) {
 static PyObject *get_def(const Graph::Reader & graph,
 			 std::vector<c_NodeIndex> & def_nodes) {
     /*
-      return hashes and names of list of definitions described by local node index in def_nodes
+      return nodes, hashes, names, parents of list of definitions described by local node index in def_nodes
       in a given capnp Graph reader graph
      */
 
@@ -836,6 +836,27 @@ static PyObject *get_def(const Graph::Reader & graph,
 			 numpy_ndarray1d(std::vector<uint64_t>(def_nodes.begin(), def_nodes.end())),
 			 numpy_ndarray1d(def_hashes),
 			 PyListBytes_FromVectorString(def_names));
+}
+
+static PyObject *get_def_parents(capnp::FlatArrayMessageReader *msg,
+                                 const std::string message_type,
+                                 const c_NodeIndex def_node_idx) {
+    const auto graph = (message_type == "dataset" ? msg->getRoot<Dataset>().getGraph() : (message_type == "request.initialize" ? msg->getRoot<PredictionProtocol::Request>().getInitialize().getGraph() : msg->getRoot<PredictionProtocol::Request>().getCheckAlignment().getGraph()));
+    const auto definitions = (message_type == "dataset" ? msg->getRoot<Dataset>().getDefinitions() : (message_type == "request.initialize" ? msg->getRoot<PredictionProtocol::Request>().getInitialize().getDefinitions() :  msg->getRoot<PredictionProtocol::Request>().getInitialize().getDefinitions()));
+    auto nodes = graph.getNodes();
+    const auto node = nodes[def_node_idx];
+    if (!node.getLabel().hasDefinition()) {
+	    throw std::invalid_argument("in get_def_parents the node " + std::to_string(def_node_idx) +
+					"from Dataset.definitions "
+					"is not a definition but of type " + std::to_string(node.getLabel().which()));
+    }
+    const auto def = node.getLabel().getDefinition();
+    const auto def_parent = def.getPrevious();
+    if (def_parent < nodes.size()) {
+      return Py_BuildValue("I", def_parent);
+    } else {
+      return Py_BuildValue("");
+    }
 }
 
 static PyObject *get_msg_def(capnp::FlatArrayMessageReader *msg,
@@ -874,6 +895,8 @@ static PyObject *get_msg_def(capnp::FlatArrayMessageReader *msg,
 }
 
 
+
+
 static PyObject *c_get_buf_def(PyObject *self, PyObject *args) {
     PyObject *buf_object;
     char * c_message_type;
@@ -908,6 +931,34 @@ static PyObject *c_get_buf_def(PyObject *self, PyObject *args) {
     }
 }
 
+static PyObject *c_get_def_parents(PyObject *self, PyObject *args) {
+  PyObject *buf_object;
+  char * c_message_type;
+  c_NodeIndex def_node_idx;
+  if (!PyArg_ParseTuple(args, "OsI", &buf_object, &c_message_type, &def_node_idx)) {
+    return NULL;
+  }
+  auto message_type = std::string(c_message_type);
+  try {
+    if (!(message_type == "dataset" || message_type == "request.initialize" || message_type == "request.checkAlignment")) {
+	    throw std::invalid_argument("the message_type parameter must be one of dataset | request.initialize | request.checkAlignment");
+    }
+    Py_buffer view;
+    PyObject_GetBuffer(buf_object, &view, PyBUF_SIMPLE);
+    auto array_ptr = kj::ArrayPtr<const capnp::word>(
+	    reinterpret_cast<const capnp::word*>(view.buf), view.len / sizeof(capnp::word));
+    capnp::FlatArrayMessageReader msg(array_ptr, capnp::ReaderOptions{SIZE_MAX});
+    auto result = get_def_parents(&msg, message_type, def_node_idx);
+    PyBuffer_Release(&view);
+    return result;
+  }
+  catch (const std::exception &ia) {
+    log_critical("exception in loader.cpp c_get_def_parents: " +
+                 std::string(ia.what()));
+    PyErr_SetString(PyExc_TypeError, ia.what());
+    return NULL;
+  }
+}
 
 
 
@@ -1948,6 +1999,8 @@ static PyMethodDef GraphMethods[] = {
      "fname -> file deps"},
     {"get_buf_def", c_get_buf_def,  METH_VARARGS,
      "buf_object: buffer, restrict_to_spine: bool = False, as_request: bool = False -> def table"},
+    {"get_def_parents", c_get_def_parents,  METH_VARARGS,
+     "buf_object: buffer, def_node_idx -> def parents"},
     {"get_buf_tactics", c_get_buf_tactics, METH_VARARGS,
      "fname, numpy 1d uint64 array of def nodes -> file tactics  numpy_ndarray1d(tactic_hashes),"
 			     "numpy_ndarray1d(number_arguments), "

@@ -25,6 +25,7 @@ from graph2tac.loader.clib.loader import (
     capnp_unpack,
     files_get_scc_components,
     get_buf_def,
+    get_def_parents,
     get_buf_tactics,
     build_data_online_from_buf,
     data_online_extend,
@@ -78,6 +79,7 @@ class DefIndexTable:
     idx_to_name: list
     idx_to_hash: list
     idx_in_spine: list[bool]
+    idx_to_global_context: list[set] 
 
 
 def graph_as(model: str, graph: Tuple) -> Tuple:
@@ -123,12 +125,7 @@ def get_global_def_table(buf_list, message_type: str, restrict_to_spine=False):
     returns a list of indexed by buffer index
     each element in the above list is a list of tuples: (node_idx, def_hash, def_name)
     """
-    res = []
-    for buf_object in buf_list:
-        temp = get_buf_def(buf_object, message_type, restrict_to_spine)
-        res.append(temp)
-    return res
-
+    return [get_buf_def(buf_object, message_type, restrict_to_spine) for buf_object in buf_list]
 
 def local_to_global_file_idx(data_dir: Path, fnames: list[Path]):
     return get_local_to_global_file_idx(os.fsencode(data_dir), list(map(os.fsencode,fnames)))
@@ -143,22 +140,70 @@ def get_global_nodes_in_spine(buf_list, message_type):
     return global_nodes_in_spine
 
 
-def build_def_index(global_def_table, global_nodes_in_spine: set[tuple[int,int]]) -> DefIndexTable:
+def process_def_parents(buf_list, message_type, def_idx_to_global_context, def_idx_to_global_node, global_node_to_def_idx, def_idx):
+    print("entering ", def_idx)
+    if def_idx_to_global_context[def_idx] is not None:
+        return
+            
+    def_global_node = def_idx_to_global_node[def_idx]
+    print(def_idx, def_global_node)
+
+    def_file_idx, def_node_idx = def_global_node
+
+    parent_node_idx = get_def_parents(buf_list[def_file_idx], message_type, def_node_idx)
+    print("parent_node_idx", parent_node_idx)
+
+    if parent_node_idx is not None:
+        def_parents = [(def_file_idx, parent_node_idx)]
+    else:
+        def_parents = []
+
+    def_global_context = set()
+
+    for parent_global_node in def_parents:
+        parent_idx = global_node_to_def_idx[parent_global_node]
+        
+        print("parent_idx", parent_idx)
+
+        process_def_parents(buf_list, message_type, def_idx_to_global_context, def_idx_to_global_node, global_node_to_def_idx, parent_idx)
+
+        def_global_context.add(parent_idx)
+        def_global_context.update(def_idx_to_global_context[parent_idx])
+
+    def_idx_to_global_context[def_idx] = def_global_context
+
+    
+    
+
+def build_def_index(global_def_table, global_nodes_in_spine: set[tuple[int,int]], buf_list, message_type) -> DefIndexTable:
     def_idx_to_global_node = []
     def_idx_to_name = []
     def_idx_to_hash = []
     global_node_to_def_idx = {}
     def_idx_in_spine = []
-
-    for file_idx, (node_indexes, def_hashes, def_names) in enumerate(global_def_table):
-        for node_idx, def_hash, def_name in zip(node_indexes, def_hashes, def_names):
+    
+    for file_idx, def_data in enumerate(global_def_table):
+        for node_idx, def_hash, def_name in zip(*def_data):
             global_node_id = (file_idx, node_idx)
             global_node_to_def_idx[global_node_id] = len(def_idx_to_global_node)
+            
             def_idx_to_global_node.append(global_node_id)
             def_idx_to_name.append(def_name)
             def_idx_to_hash.append(def_hash)
             def_idx_in_spine.append(global_node_id in global_nodes_in_spine)
-    return DefIndexTable(def_idx_to_global_node, global_node_to_def_idx, def_idx_to_name, def_idx_to_hash, def_idx_in_spine)
+
+    # in a second pass build global context per definition (need another pass because
+
+    def_idx_to_global_context = [None for _ in def_idx_to_global_node]
+    for (def_idx, def_global_node) in enumerate(def_idx_to_global_node):
+        print("looping", def_idx)
+        process_def_parents(buf_list, message_type, def_idx_to_global_context, def_idx_to_global_node, global_node_to_def_idx, def_idx)
+
+
+    return DefIndexTable(def_idx_to_global_node, global_node_to_def_idx, def_idx_to_name, def_idx_to_hash, def_idx_in_spine, def_idx_to_global_context)
+
+
+
 
 
 def def_hash_of_tactic_point(def_index_table, tactic_point):
@@ -225,10 +270,11 @@ class Data2:
         self.__global_def_table = get_global_def_table(buf_list, "dataset", restrict_to_spine)
 
 
+
         global_nodes_in_spine = get_global_nodes_in_spine(buf_list, "dataset")
         print("LOADING | definitions in spine: {len(global_nodes_in_spine)}")
 
-        self.__def_index_table = build_def_index(self.__global_def_table, global_nodes_in_spine)
+        self.__def_index_table = build_def_index(self.__global_def_table, global_nodes_in_spine, buf_list, "dataset")
 
         self.__def_idx_to_node = np.array(self.__def_index_table.idx_to_global_node, dtype=np.uint32)
         print(f"LOADING | definitions: {len(self.__def_idx_to_node)} ")
@@ -354,6 +400,9 @@ class Data2:
                               max_subgraph_size=self.__max_subgraph_size)
 
 
+    def def_index_table(self):
+        return self.__def_index_table
+    
     def def_name_of_tactic_point(self, data_point_idx):
         return def_name_of_tactic_point(self.__def_index_table, self.__tactical_data[data_point_idx])
 
@@ -420,10 +469,32 @@ class Data2:
                                        label=2)
 
 
-    # REFACTOR CLIENTS
+
     def step_state(self, data_point_idx: int):
         proof_step = self.get_proof_step(data_point_idx, skip_text=True)
         return proof_step.graph, proof_step.root, proof_step.context
+
+    def step_global_context(self, data_point_idx: int):
+        """
+        return dynamic global context as a numpy array of indices into GraphConstants.global_context
+
+        when clients are ready to consume step_global_context, append the return of
+        this function to self.step_state() return
+        """
+        _, _, file_idx, def_node_idx, _, _, _, _  = self.__tactical_data[data_point_idx]
+        def_idx = self.__def_index_table.global_node_to_idx[(file_idx, def_node_idx)]
+        def_name = self.__def_index_table.idx_to_name[def_idx]
+        def_global_context = self.__def_index_table.idx_to_global_context[def_idx]
+        return (def_idx, def_name, def_global_context)
+    
+    
+        
+        
+
+
+
+
+        
 
     def step_state_text(self, data_point_idx: int):
         return self.get_proof_step(data_point_idx).state_text
