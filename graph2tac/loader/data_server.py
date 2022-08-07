@@ -25,7 +25,7 @@ from graph2tac.loader.clib.loader import (
     capnp_unpack,
     files_get_scc_components,
     get_buf_def,
-    get_def_parents,
+    get_def_previouses,
     get_buf_tactics,
     build_data_online_from_buf,
     data_online_extend,
@@ -122,8 +122,8 @@ def top_sort_dataset_modules(data_dir: Path) -> List[Path]:
 
 def get_global_def_table(buf_list, message_type: str, restrict_to_spine=False):
     """
-    returns a list of indexed by buffer index
-    each element in the above list is a list of tuples: (node_idx, def_hash, def_name)
+    returns a list of buffer_def_tables
+    buffer_def_table is ((node_idx_list, def_hash_list, def_name_list), representative)
     """
     return [get_buf_def(buf_object, message_type, restrict_to_spine) for buf_object in buf_list]
 
@@ -134,55 +134,58 @@ def local_to_global_file_idx(data_dir: Path, fnames: list[Path]):
 def get_global_nodes_in_spine(buf_list, message_type):
     global_nodes_in_spine = set()
     global_def_table_spine = get_global_def_table(buf_list, message_type, restrict_to_spine=True)
-    for file_idx, file_table in enumerate(global_def_table_spine):
+    for file_idx, (file_table, representative) in enumerate(global_def_table_spine):
         for node_idx, def_hash, def_name in zip(*file_table):
             global_nodes_in_spine.add((file_idx,node_idx))
     return global_nodes_in_spine
 
 
-def process_def_parents(buf_list, message_type, def_idx_to_global_context, def_idx_to_global_node, global_node_to_def_idx, def_idx):
-    print("entering ", def_idx)
+def process_def_previouses(buf_list, message_type, def_idx_to_global_context,
+                           def_idx_to_global_node, global_node_to_def_idx,  def_idx, local_to_global, representatives):
     if def_idx_to_global_context[def_idx] is not None:
         return
             
     def_global_node = def_idx_to_global_node[def_idx]
-    print(def_idx, def_global_node)
 
     def_file_idx, def_node_idx = def_global_node
 
-    parent_node_idx = get_def_parents(buf_list[def_file_idx], message_type, def_node_idx)
-    print("parent_node_idx", parent_node_idx)
+    def_loc_previouses, def_ext_previouses = get_def_previouses(buf_list[def_file_idx], message_type, def_node_idx)
 
-    if parent_node_idx is not None:
-        def_parents = [(def_file_idx, parent_node_idx)]
-    else:
-        def_parents = []
+
+    previous_nodes = []
+    for node_idx in def_loc_previouses:
+        previous_nodes.append((def_file_idx,  node_idx))
+    for dep_idx in def_ext_previouses:
+        p_file_idx = local_to_global[def_file_idx][dep_idx]
+        previous_nodes.append((p_file_idx, representatives[p_file_idx]))
 
     def_global_context = set()
 
-    for parent_global_node in def_parents:
-        parent_idx = global_node_to_def_idx[parent_global_node]
+    for previous_global_node in previous_nodes:
+
+        previous_idx = global_node_to_def_idx[previous_global_node]
         
-        print("parent_idx", parent_idx)
+        process_def_previouses(buf_list, message_type, def_idx_to_global_context,
+                               def_idx_to_global_node, global_node_to_def_idx, previous_idx, local_to_global, representatives)
 
-        process_def_parents(buf_list, message_type, def_idx_to_global_context, def_idx_to_global_node, global_node_to_def_idx, parent_idx)
-
-        def_global_context.add(parent_idx)
-        def_global_context.update(def_idx_to_global_context[parent_idx])
+        def_global_context.add(previous_idx)
+        def_global_context.update(def_idx_to_global_context[previous_idx])
 
     def_idx_to_global_context[def_idx] = def_global_context
 
     
     
 
-def build_def_index(global_def_table, global_nodes_in_spine: set[tuple[int,int]], buf_list, message_type) -> DefIndexTable:
+def build_def_index(global_def_table, global_nodes_in_spine: set[tuple[int,int]], buf_list, message_type, local_to_global) -> DefIndexTable:
     def_idx_to_global_node = []
     def_idx_to_name = []
     def_idx_to_hash = []
     global_node_to_def_idx = {}
     def_idx_in_spine = []
     
-    for file_idx, def_data in enumerate(global_def_table):
+    representatives = []
+    for file_idx, (def_data, representative) in enumerate(global_def_table):
+        representatives.append(representative)
         for node_idx, def_hash, def_name in zip(*def_data):
             global_node_id = (file_idx, node_idx)
             global_node_to_def_idx[global_node_id] = len(def_idx_to_global_node)
@@ -196,8 +199,7 @@ def build_def_index(global_def_table, global_nodes_in_spine: set[tuple[int,int]]
 
     def_idx_to_global_context = [None for _ in def_idx_to_global_node]
     for (def_idx, def_global_node) in enumerate(def_idx_to_global_node):
-        print("looping", def_idx)
-        process_def_parents(buf_list, message_type, def_idx_to_global_context, def_idx_to_global_node, global_node_to_def_idx, def_idx)
+        process_def_previouses(buf_list, message_type, def_idx_to_global_context, def_idx_to_global_node, global_node_to_def_idx, def_idx, local_to_global, representatives)
 
 
     return DefIndexTable(def_idx_to_global_node, global_node_to_def_idx, def_idx_to_name, def_idx_to_hash, def_idx_in_spine, def_idx_to_global_context)
@@ -274,7 +276,7 @@ class Data2:
         global_nodes_in_spine = get_global_nodes_in_spine(buf_list, "dataset")
         print("LOADING | definitions in spine: {len(global_nodes_in_spine)}")
 
-        self.__def_index_table = build_def_index(self.__global_def_table, global_nodes_in_spine, buf_list, "dataset")
+        self.__def_index_table = build_def_index(self.__global_def_table, global_nodes_in_spine, buf_list, "dataset", self.__local_to_global_files)
 
         self.__def_idx_to_node = np.array(self.__def_index_table.idx_to_global_node, dtype=np.uint32)
         print(f"LOADING | definitions: {len(self.__def_idx_to_node)} ")
@@ -285,7 +287,7 @@ class Data2:
         print(f"LOADING | indexing all tactical action-outcomes in {len(self.__fnames)} files...", end='')
         t0 = time.time()
         self.__tactical_data = []
-        for file_idx, (buf_object, fname, def_table) in enumerate(zip(buf_list, map(os.fsencode, self.__fnames), self.__global_def_table)):
+        for file_idx, (buf_object, fname, (def_table, representative)) in enumerate(zip(buf_list, map(os.fsencode, self.__fnames), self.__global_def_table)):
             (tactic_hashes,
              number_arguments,
              def_node_indexes,
@@ -483,17 +485,9 @@ class Data2:
         """
         _, _, file_idx, def_node_idx, _, _, _, _  = self.__tactical_data[data_point_idx]
         def_idx = self.__def_index_table.global_node_to_idx[(file_idx, def_node_idx)]
-        def_name = self.__def_index_table.idx_to_name[def_idx]
+        # def_name = self.__def_index_table.idx_to_name[def_idx]
         def_global_context = self.__def_index_table.idx_to_global_context[def_idx]
-        return (def_idx, def_name, def_global_context)
-    
-    
-        
-        
-
-
-
-
+        return def_global_context
         
 
     def step_state_text(self, data_point_idx: int):

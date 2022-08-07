@@ -134,7 +134,7 @@ def get_train_name_to_label(train_node_label_to_name, train_node_label_in_spine)
 
 def get_def_idx_to_node__train_to_eval__eval_to_train__eval_names(msg_data, train_node_label_to_name, train_node_label_in_spine, message_type):
     train_name_to_label = get_train_name_to_label(train_node_label_to_name, train_node_label_in_spine)
-    node_indexes, def_hashes, def_idx_to_name  = get_global_def_table([msg_data], message_type, restrict_to_spine=False)[0]
+    (node_indexes, def_hashes, def_idx_to_name), _  = get_global_def_table([msg_data], message_type, restrict_to_spine=False)[0]
     eval_names = BASE_NAMES + def_idx_to_name
     def_index_table = build_def_index([(node_indexes, def_hashes, eval_names)], set())
     def_idx_to_node =  np.array(def_index_table.idx_to_global_node, dtype=np.uint32)

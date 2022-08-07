@@ -810,7 +810,7 @@ static PyObject *c_get_file_dep(PyObject *self, PyObject *args) {
 static PyObject *get_def(const Graph::Reader & graph,
 			 std::vector<c_NodeIndex> & def_nodes) {
     /*
-      return nodes, hashes, names, parents of list of definitions described by local node index in def_nodes
+      return (nodes, hashes, names) for  list of definitions described by local node index in def_nodes
       in a given capnp Graph reader graph
      */
 
@@ -838,7 +838,7 @@ static PyObject *get_def(const Graph::Reader & graph,
 			 PyListBytes_FromVectorString(def_names));
 }
 
-static PyObject *get_def_parents(capnp::FlatArrayMessageReader *msg,
+static PyObject *get_def_previouses(capnp::FlatArrayMessageReader *msg,
                                  const std::string message_type,
                                  const c_NodeIndex def_node_idx) {
     const auto graph = (message_type == "dataset" ? msg->getRoot<Dataset>().getGraph() : (message_type == "request.initialize" ? msg->getRoot<PredictionProtocol::Request>().getInitialize().getGraph() : msg->getRoot<PredictionProtocol::Request>().getCheckAlignment().getGraph()));
@@ -846,17 +846,25 @@ static PyObject *get_def_parents(capnp::FlatArrayMessageReader *msg,
     auto nodes = graph.getNodes();
     const auto node = nodes[def_node_idx];
     if (!node.getLabel().hasDefinition()) {
-	    throw std::invalid_argument("in get_def_parents the node " + std::to_string(def_node_idx) +
+	    throw std::invalid_argument("in get_def_previouses the node " + std::to_string(def_node_idx) +
 					"from Dataset.definitions "
 					"is not a definition but of type " + std::to_string(node.getLabel().which()));
     }
     const auto def = node.getLabel().getDefinition();
-    const auto def_parent = def.getPrevious();
-    if (def_parent < nodes.size()) {
-      return Py_BuildValue("I", def_parent);
+    const auto def_previous = def.getPrevious();
+    PyObject * local_previouses;
+    PyObject * external_previouses;
+    if (def_previous < nodes.size()) {
+      local_previouses = numpy_ndarray1d(std::vector<uint32_t> {def_previous});
     } else {
-      return Py_BuildValue("");
+      local_previouses = numpy_ndarray1d(std::vector<uint32_t> {});
     }
+    std::vector<uint32_t> v_external_previouses;
+    for (const auto& dep: def.getExternalPrevious()) {
+      v_external_previouses.emplace_back(dep);
+      }
+    external_previouses = numpy_ndarray1d(v_external_previouses);
+    return Py_BuildValue("NN", local_previouses, external_previouses);
 }
 
 static PyObject *get_msg_def(capnp::FlatArrayMessageReader *msg,
@@ -891,7 +899,13 @@ static PyObject *get_msg_def(capnp::FlatArrayMessageReader *msg,
 	    node_idx = other_idx;
 	}
     }
-    return get_def(graph, def_nodes);
+    c_NodeIndex representative;
+    if (message_type == "dataset") {
+      representative = msg->getRoot<Dataset>().getRepresentative();
+    } else {
+      representative = UINT32_MAX;
+    }
+    return Py_BuildValue("NI", get_def(graph, def_nodes), representative);
 }
 
 
@@ -901,6 +915,7 @@ static PyObject *c_get_buf_def(PyObject *self, PyObject *args) {
     PyObject *buf_object;
     char * c_message_type;
     int restrict_to_spine {false};
+
     /*
       get definitions from an unpacked capnp message provided in byte buffer (python memory view object)
       the memory view (or mmap) gives us the physical pointer to the buffer and no copy is necessary !
@@ -931,10 +946,13 @@ static PyObject *c_get_buf_def(PyObject *self, PyObject *args) {
     }
 }
 
-static PyObject *c_get_def_parents(PyObject *self, PyObject *args) {
+static PyObject *c_get_def_previouses(PyObject *self, PyObject *args) {
   PyObject *buf_object;
   char * c_message_type;
   c_NodeIndex def_node_idx;
+
+
+
   if (!PyArg_ParseTuple(args, "OsI", &buf_object, &c_message_type, &def_node_idx)) {
     return NULL;
   }
@@ -948,12 +966,12 @@ static PyObject *c_get_def_parents(PyObject *self, PyObject *args) {
     auto array_ptr = kj::ArrayPtr<const capnp::word>(
 	    reinterpret_cast<const capnp::word*>(view.buf), view.len / sizeof(capnp::word));
     capnp::FlatArrayMessageReader msg(array_ptr, capnp::ReaderOptions{SIZE_MAX});
-    auto result = get_def_parents(&msg, message_type, def_node_idx);
+    auto result = get_def_previouses(&msg, message_type, def_node_idx);
     PyBuffer_Release(&view);
     return result;
   }
   catch (const std::exception &ia) {
-    log_critical("exception in loader.cpp c_get_def_parents: " +
+    log_critical("exception in loader.cpp c_get_def_previouses: " +
                  std::string(ia.what()));
     PyErr_SetString(PyExc_TypeError, ia.what());
     return NULL;
@@ -1999,8 +2017,8 @@ static PyMethodDef GraphMethods[] = {
      "fname -> file deps"},
     {"get_buf_def", c_get_buf_def,  METH_VARARGS,
      "buf_object: buffer, restrict_to_spine: bool = False, as_request: bool = False -> def table"},
-    {"get_def_parents", c_get_def_parents,  METH_VARARGS,
-     "buf_object: buffer, def_node_idx -> def parents"},
+    {"get_def_previouses", c_get_def_previouses,  METH_VARARGS,
+     "buf_object: buffer, def_node_idx -> def previouses"},
     {"get_buf_tactics", c_get_buf_tactics, METH_VARARGS,
      "fname, numpy 1d uint64 array of def nodes -> file tactics  numpy_ndarray1d(tactic_hashes),"
 			     "numpy_ndarray1d(number_arguments), "
