@@ -3,7 +3,7 @@ data server provides the class to serve data to training
  - from a collection of bin files in a filesystem
  - from messages in a stream in interactive session (to be implmeneted)
 """
-from typing import List, Tuple, Callable
+from typing import List, Tuple, Callable, NewType
 
 import time
 import os
@@ -20,15 +20,22 @@ from graph2tac.loader.helpers import get_all_fnames
 
 import tqdm
 
+# nodes, edges, edge_labels, edge_offsets
+LoaderGraph = NewType('LoaderGraph', Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray])
+
+# loader_graph, root, context_node_ids, (proofstate_name, proofstate_step)
+LoaderProofstate = NewType('LoaderProofstate', Tuple[LoaderGraph, int, np.ndarray, Tuple[bytes, int]])
+
+# loader_graph, num_definitions, definition_names
+LoaderDefinition = NewType('LoaderDefinition', Tuple[LoaderGraph, int, np.ndarray])
+
 
 from graph2tac.loader.clib.loader import (
-    capnp_unpack,
     files_get_scc_components,
     get_buf_def,
     get_buf_tactics,
     build_data_online_from_buf,
     data_online_extend,
-    data_online_resize,
     get_def_deps_online,
     get_local_to_global_file_idx,
     get_scc_components,
@@ -58,7 +65,7 @@ class GraphConstants:
 @dataclass
 class DataPoint:
     proof_step_idx: int
-    graph: Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]
+    graph: LoaderGraph
     context: np.ndarray
     root: int
     action: Tuple[np.ndarray, np.ndarray]
@@ -384,7 +391,7 @@ class Data2:
 
         # TEXT ANNOTATION TO BE IMPLEMENTED
         return DataPoint(data_point_idx,
-                         graph = (nodes, edges, edge_labels, edges_offset),
+                         graph = LoaderGraph( (nodes, edges, edge_labels, edges_offset) ),
                          context = context,
                          root = root,
                          action=(tactic_index, args),
@@ -421,9 +428,9 @@ class Data2:
 
 
     # REFACTOR CLIENTS
-    def step_state(self, data_point_idx: int):
+    def step_state(self, data_point_idx: int) -> LoaderProofstate:
         proof_step = self.get_proof_step(data_point_idx, skip_text=True)
-        return proof_step.graph, proof_step.root, proof_step.context
+        return LoaderProofstate( (proof_step.graph, proof_step.root, proof_step.context, (proof_step.def_name, proof_step.step_in_proof)) )
 
     def step_state_text(self, data_point_idx: int):
         return self.get_proof_step(data_point_idx).state_text
@@ -435,7 +442,7 @@ class Data2:
     def step_label(self, data_point_idx):
         return self.get_proof_step(data_point_idx, skip_text=True).action
 
-    def def_cluster_subgraph(self, cluster_idx,  max_arg_size=None):
+    def def_cluster_subgraph(self, cluster_idx,  max_arg_size=None) -> LoaderDefinition:
         if max_arg_size is None:
             max_arg_size = self.__max_subgraph_size
 
@@ -445,8 +452,15 @@ class Data2:
 
         nodes, edges, edge_labels, edges_offset, _ , _, _, _, _ = res
 
-        graph = nodes, edges, edge_labels, edges_offset
-        return graph, len(def_cluster)
+        base_node_label_names, _ = get_graph_constants_online()
+        label_to_names = np.array(base_node_label_names +  self.__def_index_table.idx_to_name)
+
+        num_definitions = len(def_cluster)
+        definition_labels = nodes[:num_definitions]
+        definition_names = label_to_names[definition_labels]
+
+        graph = LoaderGraph( (nodes, edges, edge_labels, edges_offset) )
+        return LoaderDefinition( (graph, num_definitions, definition_names) )
 
 
 class Iterator:

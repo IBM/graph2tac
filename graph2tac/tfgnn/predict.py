@@ -8,7 +8,7 @@ import tensorflow_gnn as tfgnn
 from dataclasses import dataclass
 from pathlib import Path
 
-from graph2tac.loader.data_server import GraphConstants
+from graph2tac.loader.data_server import GraphConstants, LoaderProofstate, LoaderDefinition
 from graph2tac.tfgnn.graph_schema import strip_graph
 from graph2tac.tfgnn.dataset import Dataset, DataServerDataset
 from graph2tac.tfgnn.tasks import PredictionTask, GlobalArgumentPrediction, DefinitionTask, BASE_TACTIC_PREDICTION, LOCAL_ARGUMENT_PREDICTION, GLOBAL_ARGUMENT_PREDICTION, _local_arguments_logits
@@ -87,7 +87,7 @@ class PredictOutput:
     """
     Container class for a list of predictions for a given proof-state.
     """
-    state: Optional[Tuple]
+    state: Optional[LoaderProofstate]
     predictions: List[Inference]
 
     def p_total(self) -> float:
@@ -116,7 +116,7 @@ class PredictOutput:
         """
         Evaluate an action in tuple format.
         """
-        (loader_graph, root, context_node_ids) = self.state
+        (loader_graph, root, context_node_ids, proofstate_info) = self.state
         local_context_length = tf.shape(context_node_ids, out_type=tf.int64)[0]
 
         tactic_id, arguments_array = action
@@ -137,7 +137,7 @@ class TFGNNPredict(Predict):
         @param log_dir: the directory for the checkpoint that is to be loaded (as passed to the Trainer class)
         @param checkpoint_number: the checkpoint number we want to load (use `None` for the latest checkpoint)
         @param numpy_output: set to True to return the predictions as a tuple of numpy arrays (for evaluation purposes)
-        @param debug: set to True to dump pickle files for every API call that is made
+        @param debug_dir: set to a directory to dump pickle files for every API call that is made
         """
         self.numpy_output = numpy_output
 
@@ -252,7 +252,7 @@ class TFGNNPredict(Predict):
             )
 
     @predict_api_debugging
-    def compute_new_definitions(self, new_cluster_subgraphs: List[Tuple]) -> None:
+    def compute_new_definitions(self, new_cluster_subgraphs: List[LoaderDefinition]) -> None:
         if self.definition_task is None:
             raise RuntimeError('cannot update definitions when a definition task is not present')
         definition_graph = self._make_definition_batch(new_cluster_subgraphs)
@@ -528,7 +528,7 @@ class TFGNNPredict(Predict):
         return batch_predictions
 
     def batch_ranked_predictions(self,
-                                 states: List[Tuple],
+                                 states: List[LoaderProofstate],
                                  tactic_expand_bound: int,
                                  total_expand_bound: int,
                                  allowed_model_tactics: Optional[Iterable[int]] = None
@@ -553,7 +553,7 @@ class TFGNNPredict(Predict):
 
     @predict_api_debugging
     def ranked_predictions(self,
-                           state: Tuple,
+                           state: LoaderProofstate,
                            tactic_expand_bound: int,
                            total_expand_bound: int,
                            available_global: Optional[np.ndarray] = None,
