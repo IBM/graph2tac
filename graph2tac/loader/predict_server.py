@@ -683,6 +683,7 @@ def main():
             if args.exclude_tactics is not None:
                 with Path(args.exclude_tactics).open('r') as yaml_file:
                     exclude_tactics = yaml.load(yaml_file, Loader=yaml.SafeLoader)
+                logger.info(f'excluding tactics {exclude_tactics}')
             else:
                 exclude_tactics = None
 
