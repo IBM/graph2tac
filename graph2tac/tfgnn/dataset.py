@@ -34,17 +34,24 @@ class Dataset:
     def __init__(self,
                  symmetrization: Optional[str] = None,
                  add_self_edges: bool = False,
-                 max_subgraph_size: int = 1024):
+                 max_subgraph_size: int = 1024,
+                 exclude_none_arguments: bool = False,
+                 exclude_not_faithful: bool = False
+                 ):
         """
         @param symmetrization: use BIDIRECTIONAL, UNDIRECTED or None
         @param add_self_edges: whether to add a self-loop to each node
         @param max_subgraph_size: the maximum size of the returned sub-graphs
+        @param exclude_none_arguments: whether to exclude proofstates with `None` arguments
+        @param exclude_not_faithful: whether to exclude proofstates which are not faithful
         """
         if symmetrization is not None and symmetrization != BIDIRECTIONAL and symmetrization != UNDIRECTED:
             raise ValueError(f'{symmetrization} is not a valid graph symmetrization scheme (use {BIDIRECTIONAL}, {UNDIRECTED} or None)')
         self.symmetrization = symmetrization
         self.add_self_edges = add_self_edges
         self.max_subgraph_size = max_subgraph_size
+        self.exclude_none_arguments = exclude_none_arguments
+        self.exclude_not_faithful = exclude_not_faithful
         self.options = tf.data.Options()
         self._stats = {}
 
@@ -52,7 +59,9 @@ class Dataset:
         return {
             'symmetrization': self.symmetrization,
             'add_self_edges': self.add_self_edges,
-            'max_subgraph_size': self.max_subgraph_size
+            'max_subgraph_size': self.max_subgraph_size,
+            'exclude_none_arguments': self.exclude_none_arguments,
+            'exclude_not_faithful': self.exclude_not_faithful
         }
 
     def proofstates(self,
@@ -67,8 +76,19 @@ class Dataset:
         @param shuffle: whether to shuffle the resulting datasets
         @return: a dataset of (GraphTensor, label) pairs
         """
-        # get proof-states and apply the symmetrization and self-edge transformations
-        proofstate_dataset = self._proofstates().apply(self._preprocess)
+        # get proof-states
+        proofstate_dataset = self._proofstates()
+
+        # filter out proof-states with term arguments
+        if self.exclude_not_faithful:
+            proofstate_dataset = proofstate_dataset.filter(lambda proofstate_graph: tf.reduce_all(proofstate_graph.context['faithful'] == 1))
+
+        # filter out proof-states with `None` arguments
+        if self.exclude_none_arguments:
+            proofstate_dataset = proofstate_dataset.filter(self._no_none_arguments)
+
+        # apply the symmetrization and self-edge transformations
+        proofstate_dataset = proofstate_dataset.apply(self._preprocess)
 
         # create dataset of split labels
         split_logits = tf.math.log(tf.constant(split, dtype=tf.float32) / sum(split))
@@ -221,6 +241,16 @@ class Dataset:
 
             self._stats[split_settings] = stats
         return self._stats[split_settings]
+
+    @staticmethod
+    def _no_none_arguments(proofstate_graph: tfgnn.GraphTensor) -> tf.Tensor:
+        """
+        Check whether a proof-state contains no `None` arguments.
+
+        @param graph_tensor: a scalar GraphTensor for a proof-state
+        @return: true if the proof-state does not contain any `None` arguments
+        """
+        return tf.reduce_all(tf.reduce_max(tf.stack([proofstate_graph.context['local_arguments'], proofstate_graph.context['global_arguments']], axis=-1), axis=-1) != -1)
 
     @staticmethod
     def _symmetrize(graph_tensor: tfgnn.GraphTensor,
@@ -537,7 +567,8 @@ class DataServerDataset(Dataset):
 
     name_spec = tf.TensorSpec(shape=(), dtype=tf.string, name='name')
     step_spec = tf.TensorSpec(shape=(), dtype=tf.int64, name='step')
-    proofstate_info_spec = (name_spec, step_spec)
+    faithful_spec = tf.TensorSpec(shape=(), dtype=tf.int64, name='faithful')
+    proofstate_info_spec = (name_spec, step_spec, faithful_spec)
 
     state_spec = (loader_graph_spec, root_spec, context_node_ids_spec, proofstate_info_spec)
 
@@ -643,7 +674,7 @@ class DataServerDataset(Dataset):
         """
         loader_graph, root, context_node_ids, proofstate_info = state
         node_labels, sources, targets, edge_labels = graph_as("tf_gnn", loader_graph)
-        proofstate_name, proofstate_step = proofstate_info
+        proofstate_name, proofstate_step, proofstate_faithful = proofstate_info
 
         bare_graph_tensor = cls._make_bare_graph_tensor(node_labels, sources, targets, edge_labels)
 
@@ -660,7 +691,8 @@ class DataServerDataset(Dataset):
                                                             row_splits_dtype=tf.int32),
             'graph_id': tf.expand_dims(graph_id, axis=0),
             'name': tf.expand_dims(proofstate_name, axis=0),
-            'step': tf.expand_dims(proofstate_step, axis=0)
+            'step': tf.expand_dims(proofstate_step, axis=0),
+            'faithful': tf.expand_dims(proofstate_faithful, axis=0)
         })
 
         return tfgnn.GraphTensor.from_pieces(node_sets=bare_graph_tensor.node_sets,

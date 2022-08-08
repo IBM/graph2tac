@@ -97,6 +97,14 @@ context {
       dtype: DT_INT64
     }
   }
+  
+  features {
+    key: "faithful"
+    value: {
+      description: "[METADATA] 1 if the proofstate action is faithful (action_text == action_interm_text), 0 otherwise."
+      dtype: DT_INT64
+    }
+  }
 }
 """
 

@@ -1,7 +1,7 @@
 """
 data server provides the class to serve data to training
  - from a collection of bin files in a filesystem
- - from messages in a stream in interactive session (to be implmeneted)
+ - from messages in a stream in interactive session (to be implemented)
 """
 from typing import List, Tuple, Callable, NewType
 
@@ -24,7 +24,7 @@ import tqdm
 LoaderGraph = NewType('LoaderGraph', Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray])
 
 # loader_graph, root, context_node_ids, (proofstate_name, proofstate_step)
-LoaderProofstate = NewType('LoaderProofstate', Tuple[LoaderGraph, int, np.ndarray, Tuple[bytes, int]])
+LoaderProofstate = NewType('LoaderProofstate', Tuple[LoaderGraph, int, np.ndarray, Tuple[bytes, int, bool]])
 
 # loader_graph, num_definitions, definition_names
 LoaderDefinition = NewType('LoaderDefinition', Tuple[LoaderGraph, int, np.ndarray])
@@ -429,8 +429,9 @@ class Data2:
 
     # REFACTOR CLIENTS
     def step_state(self, data_point_idx: int) -> LoaderProofstate:
-        proof_step = self.get_proof_step(data_point_idx, skip_text=True)
-        return LoaderProofstate( (proof_step.graph, proof_step.root, proof_step.context, (proof_step.def_name, proof_step.step_in_proof)) )
+        proof_step = self.get_proof_step(data_point_idx, skip_text=False)
+        metadata = (proof_step.def_name, proof_step.step_in_proof, proof_step.action_text==proof_step.action_interm_text)
+        return LoaderProofstate( (proof_step.graph, proof_step.root, proof_step.context, metadata) )
 
     def step_state_text(self, data_point_idx: int):
         return self.get_proof_step(data_point_idx).state_text
