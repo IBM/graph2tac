@@ -18,7 +18,7 @@ from pathlib import Path
 
 from graph2tac.common import uuid, logger
 from graph2tac.predict import Predict
-from graph2tac.loader.data_server import DataServer, build_def_index, get_global_def_table
+from graph2tac.loader.data_server import DataServer, build_def_index, get_global_def_table, LoaderGraph, LoaderProofstate, LoaderDefinition
 
 
 Tactic = NewType('Tactic', object)
@@ -367,7 +367,7 @@ def main_loop(reader, sock, predict: Predict, debug_dir, session_idx=0,
                 cluster_graph = train_node_labels, edges, edge_labels, edges_offset
 
                 # cluster_state = (train_node_labels, edges_grouped_by_label, len(def_cluster))
-                cluster_state = (cluster_graph, len(def_cluster))
+                cluster_state = LoaderDefinition( (cluster_graph, len(def_cluster), cluster_names) )
                 # print(cluster_state)
                 predict.compute_new_definitions([cluster_state])
             t1 = time.time()
@@ -422,7 +422,7 @@ def main_loop(reader, sock, predict: Predict, debug_dir, session_idx=0,
             eval_node_labels, edges, edge_labels, edges_offset, global_visited, _, _, _, _ = res
 
             train_node_labels = map_eval_label_to_train_label[eval_node_labels]
-            edges_grouped_by_label = np.split(edges, edges_offset)
+            # edges_grouped_by_label = np.split(edges, edges_offset)
             this_encoded_root, this_encoded_context, this_context = load_msg_online(msg_data, global_visited, data_msg_idx)
 
             logger.debug(f"this encoded root {this_encoded_root}")
@@ -436,14 +436,17 @@ def main_loop(reader, sock, predict: Predict, debug_dir, session_idx=0,
             for edge_idx in range(child_start, child_stop):
                 logger.debug(f"root 0 child {msg.predict.graph.edges[edge_idx]}")
 
-            online_graph = train_node_labels, edges, edge_labels, edges_offset
+            online_graph = LoaderGraph( (train_node_labels, edges, edge_labels, edges_offset) )
+
+            # FIDEL: is this information present? For now, just fill it in with dummy data
+            dummy_proofstate_info = ('dummy_proofstate_name', -1)
 
             logger.verbose(f"online_state: {online_graph}")
 
             t0 = time.time()
 
             online_actions, online_confidences = predict.ranked_predictions(
-                (online_graph, this_encoded_root, this_encoded_context),
+                LoaderProofstate( (online_graph, this_encoded_root, this_encoded_context, dummy_proofstate_info) ),
                 tactic_expand_bound=tactic_expand_bound,
                 total_expand_bound=total_expand_bound,
                 allowed_model_tactics=allowed_model_tactics,
