@@ -439,7 +439,7 @@ def main_loop(reader, sock, predict: Predict, debug_dir, session_idx=0,
             online_graph = LoaderGraph( (train_node_labels, edges, edge_labels, edges_offset) )
 
             # FIDEL: is this information present? For now, just fill it in with dummy data
-            dummy_proofstate_info = ('dummy_proofstate_name', -1)
+            dummy_proofstate_info = ('dummy_proofstate_name', -1, True)
 
             logger.verbose(f"online_state: {online_graph}")
 
