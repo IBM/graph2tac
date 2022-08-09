@@ -622,17 +622,24 @@ class GlobalArgumentPrediction(PredictionTask):
 
         global_arguments_logits = self.global_arguments_logits(hidden_state_sequences.to_tensor())   # noqa
 
+        # normalize logits making sure the log_softmax is numerically stable
+        local_arguments_max_logit = tf.reduce_max(local_arguments_logits, axis=-1)
+        global_arguments_max_logit = tf.reduce_max(global_arguments_logits, axis=-1)
+        arguments_max_logit = tf.reduce_max(tf.stack([local_arguments_max_logit, global_arguments_max_logit], axis=-1), axis=-1, keepdims=True)
+        local_arguments_logits -= arguments_max_logit
+        global_arguments_logits -= arguments_max_logit
+
         local_arguments_logits_norm = tf.reduce_sum(tf.exp(local_arguments_logits), axis=-1, keepdims=True)
         global_arguments_logits_norm = tf.reduce_sum(tf.exp(global_arguments_logits), axis=-1, keepdims=True)
         norm = -tf.math.log(local_arguments_logits_norm + global_arguments_logits_norm)
 
-        local_arguments_logits = self.local_arguments_logits_output(local_arguments_logits + norm)
-        global_arguments_logits = self.global_arguments_logits_output(global_arguments_logits + norm)
+        normalized_local_arguments_logits = self.local_arguments_logits_output(local_arguments_logits + norm)
+        normalized_global_arguments_logits = self.global_arguments_logits_output(global_arguments_logits + norm)
 
         return GlobalArgumentModel(inputs=proofstate_graph,
                                    outputs={self.TACTIC_LOGITS: tactic_logits,
-                                            self.LOCAL_ARGUMENTS_LOGITS: local_arguments_logits,
-                                            self.GLOBAL_ARGUMENTS_LOGITS: global_arguments_logits})
+                                            self.LOCAL_ARGUMENTS_LOGITS: normalized_local_arguments_logits,
+                                            self.GLOBAL_ARGUMENTS_LOGITS: normalized_global_arguments_logits})
 
     @staticmethod
     def create_input_output(graph_tensor: tfgnn.GraphTensor) -> Tuple[Any, Dict[str, Any]]:
