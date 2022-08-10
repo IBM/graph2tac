@@ -23,6 +23,7 @@ class Dataset:
         - _graph_constants
         - _total_proofstates
     """
+    MAX_LABEL_TOKENS = 128
     SHUFFLE_BUFFER_SIZE = int(1e4)
     STATISTICS_BATCH_SIZE = int(1e4)
 
@@ -39,6 +40,8 @@ class Dataset:
                  exclude_not_faithful: bool = False
                  ):
         """
+        This initialization method should be called *after* setting the _graph_constants attribute
+
         @param symmetrization: use BIDIRECTIONAL, UNDIRECTED or None
         @param add_self_edges: whether to add a self-loop to each node
         @param max_subgraph_size: the maximum size of the returned sub-graphs
@@ -52,8 +55,14 @@ class Dataset:
         self.max_subgraph_size = max_subgraph_size
         self.exclude_none_arguments = exclude_none_arguments
         self.exclude_not_faithful = exclude_not_faithful
-        self.options = tf.data.Options()
         self._stats = {}
+        self._label_tokenizer = tf.keras.layers.TextVectorization(standardize=None,
+                                                                  split='character',
+                                                                  ngrams=None,
+                                                                  output_mode='int',
+                                                                  max_tokens=self.MAX_LABEL_TOKENS,
+                                                                  ragged=True)
+        self._label_tokenizer.adapt(self._graph_constants.label_to_names)
 
     def get_config(self) -> dict:
         return {
@@ -100,9 +109,6 @@ class Dataset:
         # create a dataset of pairs (GraphTensor, label)
         pair_dataset = tf.data.Dataset.zip(datasets=(proofstate_dataset, label_dataset))
 
-        # apply options
-        pair_dataset = pair_dataset.with_options(self.options)
-
         # get train dataset (shuffling if necessary)
         train = pair_dataset.filter(lambda _, label: label == 0).map(lambda proofstate_graph, _: proofstate_graph)
         if shuffle:
@@ -113,7 +119,7 @@ class Dataset:
 
         return train.cache(), valid.cache()
 
-    def total_proofstates(self):
+    def total_proofstates(self) -> int:
         return self._total_proofstates
 
     def definitions(self, shuffle: bool = False) -> tf.data.Dataset:
@@ -128,8 +134,22 @@ class Dataset:
             definitions = definitions.shuffle(buffer_size=self.SHUFFLE_BUFFER_SIZE)
         return definitions.cache()
 
-    def total_definitions(self):
+    def total_definitions(self) -> int:
         return self._graph_constants.cluster_subgraphs_num
+
+    def tokenize_definition_graph(self, definition_graph: tfgnn.GraphTensor) -> tfgnn.GraphTensor:
+        """
+        Tokenizes the definition names in a definition graph, replacing the 'definition_names' context feature
+        with another 'vectorized_definition_names' feature.
+
+        @param definition_graph: a scalar GraphTensor conforming to the definition_graph_spec
+        @return: a scalar GraphTensor conforming to the vectorized_definition_graph_spec
+        """
+        context = dict(definition_graph.context.features)
+        definition_names = tf.squeeze(context.pop('definition_names'), axis=0)
+        vectorized_definition_names = self._label_tokenizer(definition_names)
+        context['definition_name_vectors'] = tf.expand_dims(vectorized_definition_names.with_row_splits_dtype(tf.int32), axis=0)
+        return definition_graph.replace_features(context=context)
 
     def graph_constants(self) -> GraphConstants:
         """
@@ -247,7 +267,7 @@ class Dataset:
         """
         Check whether a proof-state contains no `None` arguments.
 
-        @param graph_tensor: a scalar GraphTensor for a proof-state
+        @param proofstate_graph: a scalar GraphTensor for a proof-state
         @return: true if the proof-state does not contain any `None` arguments
         """
         return tf.reduce_all(tf.reduce_max(tf.stack([proofstate_graph.context['local_arguments'], proofstate_graph.context['global_arguments']], axis=-1), axis=-1) != -1)
@@ -477,33 +497,32 @@ class TFRecordDataset(Dataset):
         @param tfrecord_prefix: the prefix for the .tfrecord files containing the data
         @param kwargs: additional keyword arguments are passed on to the parent class
         """
-        super().__init__(**kwargs)
-
-        # check all required files exist
+        # load the graph constants
         graph_constants_filepath = self.graph_constants_filepath(tfrecord_prefix)
         if not graph_constants_filepath.exists():
             raise FileNotFoundError(f'{graph_constants_filepath} does not exist')
 
+        with graph_constants_filepath.open('r') as yml_file:
+            self._graph_constants = GraphConstants(**yaml.load(yml_file, Loader=yaml.UnsafeLoader))
+
+        # initialize other attributes of the parent class
+        super().__init__(**kwargs)
+
+        # load the proofstates
         proofstates_tfrecord_filepath = self.proofstates_tfrecord_filepath(tfrecord_prefix)
         if not proofstates_tfrecord_filepath.exists():
             raise FileNotFoundError(f'{proofstates_tfrecord_filepath} does not exist')
 
-        definitions_tfrecord_filepath = self.definitions_tfrecord_filepath(tfrecord_prefix)
-        if not definitions_tfrecord_filepath.exists():
-            raise FileNotFoundError(f'{definitions_tfrecord_filepath} does not exist')
-
-        # load the graph constants
-        with graph_constants_filepath.open('r') as yml_file:
-            self._graph_constants = GraphConstants(**yaml.load(yml_file, Loader=yaml.UnsafeLoader))
-
-        # load the proofstates
         self._proofstates_dataset = tf.data.TFRecordDataset(filenames=[str(proofstates_tfrecord_filepath.absolute())])
 
-        # compute the total number of proofstates
         logger.info('counting proofstates (this can take a while)...')
         self._total_proofstates = self._proofstates_dataset.reduce(0, lambda result, _: result + 1)
 
         # load the definitions
+        definitions_tfrecord_filepath = self.definitions_tfrecord_filepath(tfrecord_prefix)
+        if not definitions_tfrecord_filepath.exists():
+            raise FileNotFoundError(f'{definitions_tfrecord_filepath} does not exist')
+
         self._definitions_dataset = tf.data.TFRecordDataset(filenames=[str(definitions_tfrecord_filepath.absolute())])
 
     @classmethod
@@ -584,19 +603,21 @@ class DataServerDataset(Dataset):
     proofstate_data_spec = (state_spec, action_spec, graph_id_spec)
     definition_data_spec = (loader_graph_spec, num_definitions_spec, definition_names_spec)
 
-    def __init__(self, data_dir: Path, **kwargs):
+    def __init__(self, data_dir: Path, max_subgraph_size: int = 1024, **kwargs):
         """
         @param data_dir: the directory containing the data
+        @param max_subgraph_size: the maximum size of the returned sub-graphs
         @param kwargs: additional keyword arguments are passed on to the parent class
         """
-        super().__init__(**kwargs)
         self.data_server = DataServer(data_dir=data_dir,
-                                      max_subgraph_size=self.max_subgraph_size,
+                                      max_subgraph_size=max_subgraph_size,
                                       split=(1,0,0),
                                       split_random_seed=0)
 
         self._graph_constants = self.data_server.graph_constants()
         self._total_proofstates = self.data_server.total_proofstates()
+
+        super().__init__(max_subgraph_size=max_subgraph_size, **kwargs)
 
     @classmethod
     def from_yaml_config(cls, data_dir: Path, yaml_filepath: Path) -> "DataServerDataset":
