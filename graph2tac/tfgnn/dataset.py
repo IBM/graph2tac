@@ -20,8 +20,6 @@ class Dataset:
     Base class for TF-GNN datasets, subclasses should define:
         - _proofstates()
         - _definitions()
-        - _graph_constants
-        - _total_proofstates
     """
     MAX_LABEL_TOKENS = 128
     SHUFFLE_BUFFER_SIZE = int(1e4)
@@ -29,10 +27,9 @@ class Dataset:
 
     _proofstates: Callable[[], tf.data.Dataset]
     _definitions: Callable[[], tf.data.Dataset]
-    _graph_constants: GraphConstants
-    _total_proofstates: int
 
     def __init__(self,
+                 graph_constants: GraphConstants,
                  symmetrization: Optional[str] = None,
                  add_self_edges: bool = False,
                  max_subgraph_size: int = 1024,
@@ -55,6 +52,8 @@ class Dataset:
         self.max_subgraph_size = max_subgraph_size
         self.exclude_none_arguments = exclude_none_arguments
         self.exclude_not_faithful = exclude_not_faithful
+        self._graph_constants = graph_constants
+        self._total_proofstates = None
         self._stats = {}
         self._label_tokenizer = tf.keras.layers.TextVectorization(standardize=None,
                                                                   split='character',
@@ -62,7 +61,7 @@ class Dataset:
                                                                   output_mode='int',
                                                                   max_tokens=self.MAX_LABEL_TOKENS,
                                                                   ragged=True)
-        self._label_tokenizer.adapt(self._graph_constants.label_to_names)
+        self._label_tokenizer.adapt(graph_constants.label_to_names)
 
     def get_config(self) -> dict:
         return {
@@ -96,6 +95,11 @@ class Dataset:
         if self.exclude_none_arguments:
             proofstate_dataset = proofstate_dataset.filter(self._no_none_arguments)
 
+        # count remaining proofstates
+        if self._total_proofstates is None:
+            logger.info('counting proofstates (this can take a while)...')
+            self._total_proofstates = proofstate_dataset.reduce(0, lambda result, _: result + 1)
+
         # apply the symmetrization and self-edge transformations
         proofstate_dataset = proofstate_dataset.apply(self._preprocess)
 
@@ -120,6 +124,8 @@ class Dataset:
         return train.cache(), valid.cache()
 
     def total_proofstates(self) -> int:
+        if self._total_proofstates is None:
+            raise RuntimeError('Dataset.proofstates() needs to be called before Dataset.total_proofstates()')
         return self._total_proofstates
 
     def definitions(self, shuffle: bool = False) -> tf.data.Dataset:
@@ -503,10 +509,10 @@ class TFRecordDataset(Dataset):
             raise FileNotFoundError(f'{graph_constants_filepath} does not exist')
 
         with graph_constants_filepath.open('r') as yml_file:
-            self._graph_constants = GraphConstants(**yaml.load(yml_file, Loader=yaml.UnsafeLoader))
+            graph_constants = GraphConstants(**yaml.load(yml_file, Loader=yaml.UnsafeLoader))
 
-        # initialize other attributes of the parent class
-        super().__init__(**kwargs)
+        # initialize attributes of the parent class
+        super().__init__(graph_constants=graph_constants, **kwargs)
 
         # load the proofstates
         proofstates_tfrecord_filepath = self.proofstates_tfrecord_filepath(tfrecord_prefix)
@@ -514,9 +520,6 @@ class TFRecordDataset(Dataset):
             raise FileNotFoundError(f'{proofstates_tfrecord_filepath} does not exist')
 
         self._proofstates_dataset = tf.data.TFRecordDataset(filenames=[str(proofstates_tfrecord_filepath.absolute())])
-
-        logger.info('counting proofstates (this can take a while)...')
-        self._total_proofstates = self._proofstates_dataset.reduce(0, lambda result, _: result + 1)
 
         # load the definitions
         definitions_tfrecord_filepath = self.definitions_tfrecord_filepath(tfrecord_prefix)
@@ -614,10 +617,9 @@ class DataServerDataset(Dataset):
                                       split=(1,0,0),
                                       split_random_seed=0)
 
-        self._graph_constants = self.data_server.graph_constants()
-        self._total_proofstates = self.data_server.total_proofstates()
-
-        super().__init__(max_subgraph_size=max_subgraph_size, **kwargs)
+        super().__init__(graph_constants=self.data_server.graph_constants(),
+                         max_subgraph_size=max_subgraph_size,
+                         **kwargs)
 
     @classmethod
     def from_yaml_config(cls, data_dir: Path, yaml_filepath: Path) -> "DataServerDataset":

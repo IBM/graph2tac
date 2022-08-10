@@ -150,8 +150,7 @@ class TFGNNPredict(Predict):
 
         dataset_yaml_filepath = log_dir / 'config' / 'dataset.yaml'
         with dataset_yaml_filepath.open('r') as yml_file:
-            dataset = Dataset(**yaml.load(yml_file, Loader=yaml.SafeLoader))
-        dataset._graph_constants = graph_constants
+            dataset = Dataset(graph_constants=graph_constants, **yaml.load(yml_file, Loader=yaml.SafeLoader))
         self._preprocess = dataset._preprocess
 
         # call to parent constructor to defines self._graph_constants
