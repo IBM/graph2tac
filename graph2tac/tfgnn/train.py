@@ -10,7 +10,7 @@ from math import ceil
 
 from graph2tac.tfgnn.dataset import Dataset, DataServerDataset, TFRecordDataset
 from graph2tac.tfgnn.tasks import PredictionTask, DefinitionTask, DefinitionMeanSquaredError
-from graph2tac.tfgnn.graph_schema import definition_graph_spec, batch_graph_spec
+from graph2tac.tfgnn.graph_schema import vectorized_definition_graph_spec, batch_graph_spec
 from graph2tac.tfgnn.train_utils import QCheckpointManager, ExtendedTensorBoard, DefinitionLossScheduler
 from graph2tac.common import logger
 
@@ -49,6 +49,9 @@ class Trainer:
         """
         # dataset
         self.dataset = dataset
+        self.dataset_options = tf.data.Options()
+        if isinstance(prediction_task.prediction_model.distribute_strategy, tf.distribute.MirroredStrategy):
+            self.dataset_options.experimental_distribute.auto_shard_policy = tf.data.experimental.AutoShardPolicy.DATA
 
         # prediction task
         self.prediction_task = prediction_task
@@ -230,12 +233,12 @@ class Trainer:
         # add definitions if necessary
         if self.definition_task is not None:
             count = ceil(self.dataset.total_proofstates()/self.dataset.total_definitions())
-            definitions = self.dataset.definitions(shuffle=False)
+            definitions = self.dataset.definitions(shuffle=False).map(self.dataset.tokenize_definition_graph)
             definitions = definitions.repeat(count).shuffle(self.dataset.SHUFFLE_BUFFER_SIZE)
             dataset = tf.data.Dataset.zip(datasets=(dataset, definitions))
             dataset = dataset.map(self._input_output_mixing)
 
-        return dataset
+        return dataset.with_options(self.dataset_options)
 
     def _l2_regularization(self):
         return tf.reduce_sum([tf.keras.regularizers.l2(l2=self.l2_regularization_coefficient)(weight) for weight in self.train_model.trainable_weights])
@@ -252,7 +255,7 @@ class Trainer:
         prediction_outputs = self.prediction_task.prediction_model(proofstate_graph)
 
         # compute definition body embeddings
-        definition_graph = tf.keras.layers.Input(type_spec=batch_graph_spec(definition_graph_spec))
+        definition_graph = tf.keras.layers.Input(type_spec=batch_graph_spec(vectorized_definition_graph_spec))
         scalar_definition_graph = definition_graph.merge_batch_to_components()
         definition_body_embeddings = self.definition_task(scalar_definition_graph)  # noqa [ PyCallingNonCallable ]
 
@@ -405,9 +408,6 @@ def main():
 
         # fix a tf.distribute bug upon exiting training with MirroredStrategy
         atexit.register(strategy._extended._collective_ops._pool.close)
-
-        # set sharding policy for the dataset
-        dataset.options.experimental_distribute.auto_shard_policy = tf.data.experimental.AutoShardPolicy.DATA
     elif args.gpu is not None:
         strategy = tf.distribute.OneDeviceStrategy(args.gpu)
     else:

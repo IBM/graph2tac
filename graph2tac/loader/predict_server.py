@@ -6,6 +6,7 @@ from typing import NewType
 import sys
 import time
 import os
+import yaml
 import socket
 import pickle
 import pkg_resources
@@ -438,7 +439,7 @@ def main_loop(reader, sock, predict: Predict, debug_dir, session_idx=0,
             online_graph = LoaderGraph( (train_node_labels, edges, edge_labels, edges_offset) )
 
             # FIDEL: is this information present? For now, just fill it in with dummy data
-            dummy_proofstate_info = ('dummy_proofstate_name', -1)
+            dummy_proofstate_info = ('dummy_proofstate_name', -1, True)
 
             logger.verbose(f"online_state: {online_graph}")
 
@@ -624,6 +625,11 @@ def main():
                         default=None,
                         help="choose the checkpoint number to use (defaults to latest available checkpoint)")
 
+    parser.add_argument('--exclude-tactics',
+                        type=Path,
+                        default=None,
+                        help="a list of tactic names to exclude from predictions")
+
 
 
 
@@ -677,11 +683,19 @@ def main():
             tf.get_logger().setLevel(int(tf_log_levels[args.log_level]))
             tf.config.run_functions_eagerly(args.tf_eager)
 
+            if args.exclude_tactics is not None:
+                with Path(args.exclude_tactics).open('r') as yaml_file:
+                    exclude_tactics = yaml.load(yaml_file, Loader=yaml.SafeLoader)
+                logger.info(f'excluding tactics {exclude_tactics}')
+            else:
+                exclude_tactics = None
+
             logger.info("importing TFGNNPredict class...")
             from graph2tac.tfgnn.predict import TFGNNPredict
             predict = TFGNNPredict(log_dir=Path(args.model).expanduser().absolute(),
                                    debug_dir=args.debug_predict,
-                                   checkpoint_number=args.checkpoint_number)
+                                   checkpoint_number=args.checkpoint_number,
+                                   exclude_tactics=exclude_tactics)
         elif args.arch == 'hmodel':
             logger.info("importing HPredict class..")
             from graph2tac.loader.hmodel import HPredict

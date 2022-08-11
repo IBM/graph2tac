@@ -131,13 +131,15 @@ class TFGNNPredict(Predict):
                  log_dir: Path,
                  debug_dir: Optional[Path] = None,
                  checkpoint_number: Optional[int] = None,
+                 exclude_tactics: Optional[List[str]] = None,
                  numpy_output: bool = True
                  ):
         """
         @param log_dir: the directory for the checkpoint that is to be loaded (as passed to the Trainer class)
-        @param checkpoint_number: the checkpoint number we want to load (use `None` for the latest checkpoint)
-        @param numpy_output: set to True to return the predictions as a tuple of numpy arrays (for evaluation purposes)
         @param debug_dir: set to a directory to dump pickle files for every API call that is made
+        @param checkpoint_number: the checkpoint number we want to load (use `None` for the latest checkpoint)
+        @param exclude_tactics: a list of tactic names to exclude from all predictions
+        @param numpy_output: set to True to return the predictions as a tuple of numpy arrays (for evaluation purposes)
         """
         self.numpy_output = numpy_output
 
@@ -148,8 +150,7 @@ class TFGNNPredict(Predict):
 
         dataset_yaml_filepath = log_dir / 'config' / 'dataset.yaml'
         with dataset_yaml_filepath.open('r') as yml_file:
-            dataset = Dataset(**yaml.load(yml_file, Loader=yaml.SafeLoader))
-        dataset._graph_constants = graph_constants
+            dataset = Dataset(graph_constants=graph_constants, **yaml.load(yml_file, Loader=yaml.SafeLoader))
         self._preprocess = dataset._preprocess
 
         # call to parent constructor to defines self._graph_constants
@@ -160,6 +161,11 @@ class TFGNNPredict(Predict):
 
         # the decoding mechanism currently does not support tactics with more than NUMPY_NDIM_LIMIT
         self._tactic_mask = tf.constant(graph_constants.tactic_index_to_numargs<NUMPY_NDIM_LIMIT)
+
+        # mask tactics explicitly excluded from predictions
+        if exclude_tactics is not None:
+            exclude_tactics = set(exclude_tactics)
+            self._tactic_mask &= np.array([(tactic_name.decode() not in exclude_tactics) for tactic_name in graph_constants.tactic_index_to_string])
 
         # when doing local argument predictions, if the local context is empty we mask all tactics which take arguments
         self._tactic_mask_no_arguments = tf.constant(graph_constants.tactic_index_to_numargs == 0)
