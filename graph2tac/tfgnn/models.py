@@ -1,4 +1,5 @@
 from typing import Iterable, Dict, Any, Callable, Optional, Tuple
+from dataset import Dataset
 
 import tensorflow as tf
 import tensorflow_gnn as tfgnn
@@ -803,15 +804,10 @@ class DenseDefinitionHead(tf.keras.layers.Layer):
         super().__init__(name=name, **kwargs)
         self._hidden_size = hidden_size
 
-        encoder = tf.keras.layers.TextVectorization(
-            split = 'character',
-            vocabulary = [chr(x) for x in range(ord('a'), ord('z')+1)],
-        )
         self._name_layer = tf.keras.Sequential([
-            encoder,
             tf.keras.layers.Embedding(
-                input_dim=len(encoder.get_vocabulary()),
-                output_dim=64,
+                input_dim=Dataset.MAX_LABEL_TOKENS,
+                output_dim=hidden_size,
                 # Use masking to handle the variable sequence lengths
                 mask_zero=True,
             ),
@@ -833,14 +829,14 @@ class DenseDefinitionHead(tf.keras.layers.Layer):
              inputs: Tuple[tfgnn.GraphTensor, tf.RaggedTensor, tf.RaggedTensor],
              training: bool = False
              ) -> tf.Tensor:
-        hidden_graph, num_definitions, definition_names = inputs
+        hidden_graph, num_definitions, definition_name_vectors = inputs
 
         cumulative_sizes = tf.expand_dims(tf.cumsum(hidden_graph.node_sets['node'].sizes, exclusive=True), axis=-1)
         definition_nodes = tf.ragged.range(num_definitions) + tf.cast(cumulative_sizes, dtype=tf.int64)
 
         node_hidden_states = tf.gather(hidden_graph.node_sets['node']['hidden_state'], definition_nodes.flat_values)
         graph_hidden_states = tf.repeat(hidden_graph.context['hidden_state'], num_definitions, axis=0)
-        rnn_output = self._name_layer(definition_names.flat_values)
+        rnn_output = self._name_layer(definition_name_vectors.flat_values)
 
         hidden_state = tf.concat([node_hidden_states, graph_hidden_states, rnn_output], axis=-1)
 
