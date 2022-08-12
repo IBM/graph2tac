@@ -805,12 +805,12 @@ class DenseDefinitionHead(tf.keras.layers.Layer):
         self._hidden_size = hidden_size
 
         self._name_layer = tf.keras.Sequential([
+            tf.keras.layers.Input(shape=[None], dtype=tf.float32, ragged=True),
             tf.keras.layers.Embedding(
                 input_dim=Dataset.MAX_LABEL_TOKENS,
                 output_dim=hidden_size,
-                # Use masking to handle the variable sequence lengths
-                mask_zero=True,
             ),
+            tf.keras.layers.Lambda(lambda x: x.to_tensor()), # align ragged tensor
             tf.keras.layers.Bidirectional(tf.keras.layers.LSTM(hidden_size)),
         ])
 
@@ -836,7 +836,7 @@ class DenseDefinitionHead(tf.keras.layers.Layer):
 
         node_hidden_states = tf.gather(hidden_graph.node_sets['node']['hidden_state'], definition_nodes.flat_values)
         graph_hidden_states = tf.repeat(hidden_graph.context['hidden_state'], num_definitions, axis=0)
-        rnn_output = self._name_layer(definition_name_vectors.flat_values)
+        rnn_output = self._name_layer(definition_name_vectors.values)
 
         hidden_state = tf.concat([node_hidden_states, graph_hidden_states, rnn_output], axis=-1)
 
