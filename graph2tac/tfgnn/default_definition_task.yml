@@ -1,5 +1,8 @@
 definition_head_type: dense_definition
 definition_head_config:
+  name_network_type: rnn
+  name_network_config:
+    
   hidden_layers:
   - activation: relu
     units: 256

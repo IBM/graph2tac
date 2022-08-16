@@ -11,7 +11,7 @@ ATTENTION_GNN = 'attention_gnn'
 DENSE_TACTIC = 'dense_tactic'
 DENSE_DEFINITION = 'dense_definition'
 SIMPLE_RNN = 'simple_rnn'
-
+NAME_NETWORK_RNN = 'simple_rnn'
 
 class LogitsFromEmbeddings(tf.keras.layers.Layer):
     """
@@ -878,3 +878,9 @@ def get_definition_head_constructor(definition_head_type: str) -> Callable[..., 
         return DenseDefinitionHead
     else:
         raise ValueError(f'{definition_head_type} is not a valid definition head type')
+
+def get_name_network_type_constructor(name_network_type: str) -> Callable[..., tf.keras.layers.Layer]:
+    if name_network_type == NAME_NETWORK_RNN:
+        return NameNetworkRnn
+    else:
+        raise ValueError(f'{name_network_type} is not a valid name network type')
