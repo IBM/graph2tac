@@ -430,7 +430,8 @@ class Data2:
     # REFACTOR CLIENTS
     def step_state(self, data_point_idx: int) -> LoaderProofstate:
         proof_step = self.get_proof_step(data_point_idx, skip_text=False)
-        metadata = (proof_step.def_name, proof_step.step_in_proof, proof_step.action_text==proof_step.action_interm_text)
+        metadata = (proof_step.def_name, proof_step.step_in_proof,
+                    proof_step.action_text.replace('@', '')==proof_step.action_interm_text.replace('@', ''))
         return LoaderProofstate( (proof_step.graph, proof_step.root, proof_step.context, metadata) )
 
     def step_state_text(self, data_point_idx: int):
