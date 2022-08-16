@@ -791,7 +791,7 @@ class DenseDefinitionHead(tf.keras.layers.Layer):
     def __init__(self,
                  hidden_size: int,
                  hidden_layers: Iterable[dict] = (),
-                 name_layer: Optional[dict],
+                 name_layer: Optional[dict] = None,
                  name: str = 'dense_definition_head',
                  **kwargs):
         """

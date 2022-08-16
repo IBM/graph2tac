@@ -5,12 +5,8 @@ definition_head_config:
     config:
       layer:
         class_name: LSTM
-	config:
-	  units: 256
-  name_network_config:
-    bidirectional: true
-    rnn_type: lstm
-    units: 256
+        config:
+          units: 256
   hidden_layers:
   - activation: relu
     units: 256
