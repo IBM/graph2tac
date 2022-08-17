@@ -23,8 +23,14 @@ import tqdm
 # nodes, edges, edge_labels, edge_offsets
 LoaderGraph = NewType('LoaderGraph', Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray])
 
-# loader_graph, root, context_node_ids, (proofstate_name, proofstate_step)
-LoaderProofstate = NewType('LoaderProofstate', Tuple[LoaderGraph, int, np.ndarray, Tuple[bytes, int, bool]])
+# name, step, is_faithful
+ProofstateMetadata = NewType('ProofstateMetadata', Tuple[bytes, int, bool])
+
+# context_node_ids, available_global_context
+ProofstateContext = NewType('ProofstateContext', Tuple[np.ndarray, np.ndarray])
+
+# loader_graph, root, context, metadata
+LoaderProofstate = NewType('LoaderProofstate', Tuple[LoaderGraph, int, ProofstateContext, ProofstateMetadata])
 
 # loader_graph, num_definitions, definition_names
 LoaderDefinition = NewType('LoaderDefinition', Tuple[LoaderGraph, int, np.ndarray])
@@ -67,7 +73,8 @@ class GraphConstants:
 class DataPoint:
     proof_step_idx: int
     graph: LoaderGraph
-    context: np.ndarray
+    local_context: np.ndarray
+    available_global_context: np.ndarray
     root: int
     action: Tuple[np.ndarray, np.ndarray]
     state_text: bytes
@@ -183,7 +190,12 @@ def process_def_previouses(buf_list, message_type, def_idx_to_global_context,
     
     
 
-def build_def_index(global_def_table, global_nodes_in_spine: set[tuple[int,int]], buf_list, message_type, local_to_global) -> DefIndexTable:
+def build_def_index(global_def_table,
+                    global_nodes_in_spine: set[tuple[int,int]],
+                    buf_list,
+                    message_type,
+                    local_to_global
+                    ) -> DefIndexTable:
     def_idx_to_global_node = []
     def_idx_to_name = []
     def_idx_to_hash = []
@@ -247,6 +259,8 @@ class Data2:
     """
     this is low-level api for refactored online loader from mmaped capnp bin files
     """
+
+    # TODO (after TF2 deprecation): Remove data-splitting functionality, training logic should take care of this
     def __init__(self, data_dir, restrict_to_spine, bfs_option, max_subgraph_size, split=(8,1,1), split_random_seed=0):
         """
 
@@ -408,7 +422,6 @@ class Data2:
                               label_in_spine=label_in_spine,
                               max_subgraph_size=self.__max_subgraph_size)
 
-
     def def_index_table(self):
         return self.__def_index_table
     
@@ -442,8 +455,9 @@ class Data2:
 
         # TEXT ANNOTATION TO BE IMPLEMENTED
         return DataPoint(data_point_idx,
-                         graph = LoaderGraph( (nodes, edges, edge_labels, edges_offset) ),
-                         context = context,
+                         graph=LoaderGraph( (nodes, edges, edge_labels, edges_offset) ),
+                         local_context=context,
+                         available_global_context=self.step_global_context(data_point_idx),
                          root = root,
                          action=(tactic_index, args),
                          state_text=state_text,
@@ -454,6 +468,7 @@ class Data2:
                          step_in_proof=proof_step_idx.item(),
                          file_name=self.__fnames[file_idx])
 
+    # TODO (after TF2 deprecation): Remove data-splitting functionality, training logic should take care of this
     def select_data_points(self, split_fun: Callable[[...], int], label: int) -> List[int]:
         """
         returns a list of datapoint indices that have given label
@@ -465,38 +480,48 @@ class Data2:
         """
         return [i for i, tactical_point in enumerate(self.__tactical_data) if split_fun(tactical_point) == label]
 
+    # TODO (after TF2 deprecation): Remove data-splitting functionality, training logic should take care of this
     def data_train(self):
         return self.select_data_points(split_fun=lambda x: def_hash_split(x, self.__split, self.__split_random_seed),
                                        label=0)
 
+    # TODO (after TF2 deprecation): Remove data-splitting functionality, training logic should take care of this
     def data_valid(self):
         return self.select_data_points(split_fun=lambda x: def_hash_split(x, self.__split, self.__split_random_seed),
                                        label=1)
 
+    # TODO (after TF2 deprecation): Remove data-splitting functionality, training logic should take care of this
     def data_test(self):
         return self.select_data_points(split_fun=lambda x: def_hash_split(x, self.__split, self.__split_random_seed),
                                        label=2)
 
-    # REFACTOR CLIENTS
     def step_state(self, data_point_idx: int) -> LoaderProofstate:
         proof_step = self.get_proof_step(data_point_idx, skip_text=False)
-        metadata = (proof_step.def_name, proof_step.step_in_proof,
-                    proof_step.action_text.replace('@', '')==proof_step.action_interm_text.replace('@', ''))
-        return LoaderProofstate( (proof_step.graph, proof_step.root, proof_step.context, metadata) )
 
-    def step_global_context(self, data_point_idx: int):
+        loader_graph = proof_step.graph
+
+        root = proof_step.root
+
+        context_node_ids = proof_step.local_context
+        available_global_context = proof_step.available_global_context
+        context = ProofstateContext( (context_node_ids, available_global_context) )
+
+        name = proof_step.def_name
+        step = proof_step.step_in_proof
+        is_faithful = proof_step.action_text.replace(b'@', b'')==proof_step.action_interm_text.replace(b'@', b'')
+        metadata = ProofstateMetadata( (name, step, is_faithful) )
+
+        return LoaderProofstate( (loader_graph, root, context, metadata) )
+
+    def step_global_context(self, data_point_idx: int) -> np.ndarray:
         """
         return dynamic global context as a numpy array of indices into GraphConstants.global_context
-
-        when clients are ready to consume step_global_context, append the return of
-        this function to self.step_state() return
         """
         _, _, file_idx, def_node_idx, _, _, _, _  = self.__tactical_data[data_point_idx]
         def_idx = self.__def_index_table.global_node_to_idx[(file_idx, def_node_idx)]
         # def_name = self.__def_index_table.idx_to_name[def_idx]
         def_global_context = self.__def_index_table.idx_to_global_context[def_idx]
-        return def_global_context
-        
+        return np.array(list(def_global_context), dtype=np.uint32)
 
     def step_state_text(self, data_point_idx: int):
         return self.get_proof_step(data_point_idx).state_text
@@ -556,11 +581,11 @@ class DataServer:
     implements higher level api compatible with current train.py
     wrapping lower level of Data()
     """
+    # TODO (after TF2 deprecation): Remove data-splitting functionality, training logic should take care of this
     def __init__(self,
                  data_dir: Path,
                  max_subgraph_size,
                  split: Tuple[int, int, int] = (8, 1, 1),
-                 cross_valid_fold: int = 0,
                  bfs_option = True,
                  split_random_seed = 0,
                  restrict_to_spine: bool = False,
@@ -571,35 +596,20 @@ class DataServer:
         - split is a len 3 tuple of integers defining the relative
         proportion of split as (train, valid, test).
 
-        - cross_fold_level is an integer in the range [0, max_cross_fold)
-        where max_cross_fold = (split[0] + split[1]) // split[0]
-        with default split = [8, 1, 1] we have max_cross_fold = (8 + 1) // 1 = 9
-        and therefore cross_valid_fold can take values in range(9)
-        (that is from 0 to 8 including) --
-        NOT YET IMPLEMENTED
-
         - num_proc number of threads for the loader
             (if not passed or None then the optimal number of threads if computed by the loader)
 
         ignore_def_hash: used uint64 of (file_idx, node_idx) instead of def hash
         for internal def tables
         """
-        assert cross_valid_fold == 0, "cross_valid_fold is not yet implemented"
-
         self.__online_data = Data2(data_dir, restrict_to_spine, bfs_option, max_subgraph_size, split, split_random_seed=split_random_seed)
-
-
         self.__cluster_subgraphs = None
 
+    # TODO (after TF2 deprecation): Remove this API, data should be accessible in bulk, use Data2 for debugging
     def data_point(self, proof_step_idx: int):
         return self.__online_data.get_proof_step(proof_step_idx)
 
-    def total_proofstates(self) -> int:
-        """
-        @return: the total number of proofstates (in all splits)
-        """
-        return self.__online_data.tactical_data().shape[0]
-
+    # TODO (after TF2 deprecation): Remove shuffling from here, training logic should take care of this
     def data_train(self, shuffled: bool = False,  as_text: bool = False):
         """
         returns a stream of training data, optionally shuffled
@@ -631,6 +641,7 @@ class DataServer:
                             functools.partial(data.step_label),
                             lambda x: x)
 
+    # TODO (after TF2 deprecation): Remove train / validation split, training logic should take care of this
     def data_valid(self, as_text: bool = False):
         """
         returns a stream of validation data in the same format as  data_train
@@ -650,6 +661,7 @@ class DataServer:
                             functools.partial(data.step_label),
                             lambda x: x)
 
+    # TODO (after TF2 deprecation): Remove this API, data should be accessible in bulk, use Data2 for debugging
     def def_cluster_subgraph(self, cluster_idx: int):
         """
         returns a definition cluster with cluster_idx
