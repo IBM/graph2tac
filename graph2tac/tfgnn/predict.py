@@ -122,8 +122,9 @@ class PredictOutput:
         """
         Evaluate an action in tuple format.
         """
-        (loader_graph, root, context_node_ids, proofstate_info) = self.state
-        local_context_length = tf.shape(context_node_ids, out_type=tf.int64)[0]
+        loader_graph, root, context, proofstate_info = self.state
+        local_context_ids, global_context_ids = context
+        local_context_length = tf.shape(local_context_ids, out_type=tf.int64)[0]
 
         tactic_id, arguments_array = action
         tactic_id = tf.cast(tactic_id, dtype=tf.int64)
@@ -436,10 +437,10 @@ class TFGNNPredict(Predict):
         batch_size = scalar_proofstate_graph.num_components.numpy()
 
         # get the local context node ids from the input graph
-        context_node_ids = scalar_proofstate_graph.context['context_node_ids']
+        batch_local_context_ids = scalar_proofstate_graph.context['local_context_ids']
 
         # we should only use tactics with arguments when the local context is non-empty
-        mask_tactics_with_arguments = context_node_ids.row_lengths() == 0
+        mask_tactics_with_arguments = batch_local_context_ids.row_lengths() == 0
 
         # get the top tactic_expand_bound tactics and input/output graphs
         top_k, hidden_graph = self._top_k_tactics(scalar_proofstate_graph=scalar_proofstate_graph,
@@ -461,7 +462,7 @@ class TFGNNPredict(Predict):
 
                 # compute logits for all arguments while masking out non-local-context nodes
                 batch_arguments_logits = _local_arguments_logits(scalar_proofstate_graph, hidden_graph, hidden_state_sequences)
-                for state_prediction, tactic_id, tactic_value, num_arguments, arguments_logits, local_context_ids in zip(batch_predictions, batch_tactic, batch_tactic_logits, batch_num_arguments, batch_arguments_logits, context_node_ids):
+                for state_prediction, tactic_id, tactic_value, num_arguments, arguments_logits, local_context_ids in zip(batch_predictions, batch_tactic, batch_tactic_logits, batch_num_arguments, batch_arguments_logits, batch_local_context_ids):
                     local_context_length = tf.shape(local_context_ids)[0]
                     local_context_logits = arguments_logits[:num_arguments,:local_context_length]
                     arg_combinations, combination_values = self._logits_decoder(local_context_logits,
@@ -490,7 +491,7 @@ class TFGNNPredict(Predict):
         # get the batch size
         batch_size = scalar_proofstate_graph.num_components.numpy()
 
-        # we always have the option to choose global arguments
+        # TODO: Here we should check whether the local and global context are both empty (unlikely)
         mask_tactics_with_arguments = tf.zeros(shape=(scalar_proofstate_graph.num_components,), dtype=bool)
 
         # get the top tactic_expand_bound tactics and input/output graphs
@@ -500,7 +501,7 @@ class TFGNNPredict(Predict):
                                                   allowed_tactics=allowed_model_tactics)
 
         # get the local context node ids from the input graph
-        context_node_ids = scalar_proofstate_graph.context['context_node_ids']
+        batch_local_context_ids = scalar_proofstate_graph.context['local_context_ids']
 
         # get the number of arguments for each tactic (as with top_k elements, the shape is [batch_size, k])
         top_k_num_arguments = tf.gather(tf.constant(self.prediction_task._graph_constants.tactic_index_to_numargs, dtype=tf.int32), top_k.indices)
@@ -517,7 +518,7 @@ class TFGNNPredict(Predict):
 
                 batch_global_arguments_logits = self.prediction_task.global_arguments_logits(hidden_state_sequences.to_tensor())
                 global_context_size = int(tf.shape(batch_global_arguments_logits)[-1])
-                for state_prediction, tactic_id, tactic_value, num_arguments, local_arguments_logits, global_arguments_logits, local_context_ids in zip(batch_predictions, batch_tactic, batch_tactic_logits, batch_num_arguments, batch_local_arguments_logits, batch_global_arguments_logits, context_node_ids):
+                for state_prediction, tactic_id, tactic_value, num_arguments, local_arguments_logits, global_arguments_logits, local_context_ids in zip(batch_predictions, batch_tactic, batch_tactic_logits, batch_num_arguments, batch_local_arguments_logits, batch_global_arguments_logits, batch_local_context_ids):
                     local_context_length = tf.shape(local_context_ids)[0]
                     local_context_logits = local_arguments_logits[:num_arguments, :local_context_length]
                     logits = tf.concat([global_arguments_logits[:num_arguments,:], local_context_logits], axis=-1)
