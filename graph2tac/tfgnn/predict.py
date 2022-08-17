@@ -109,10 +109,16 @@ class PredictOutput:
         self.sort()
         return [pred.numpy() for pred in self.predictions], np.array([np.exp(pred.value) for pred in self.predictions])
 
-    def _evaluate(self, tactic_id: int, local_arguments: tf.Tensor, global_arguments: tf.Tensor):
-        return any(pred.evaluate(tactic_id, local_arguments, global_arguments) for pred in self.predictions)
+    def _evaluate(self,
+                  tactic_id: int,
+                  local_arguments: tf.Tensor,
+                  global_arguments: tf.Tensor,
+                  search_expand_bound: Optional[int] = None):
+        self.sort()
+        predictions = self.predictions[:search_expand_bound] if search_expand_bound is not None else self.predictions
+        return any(inference.evaluate(tactic_id, local_arguments, global_arguments) for inference in predictions)
 
-    def evaluate(self, action: Tuple) -> bool:
+    def evaluate(self, action: Tuple, search_expand_bound: Optional[int] = None) -> bool:
         """
         Evaluate an action in tuple format.
         """
@@ -123,7 +129,7 @@ class PredictOutput:
         tactic_id = tf.cast(tactic_id, dtype=tf.int64)
         arguments_array = tf.cast(arguments_array, dtype=tf.int64)
         action = DataServerDataset._action_to_arguments((tactic_id, arguments_array), local_context_length)
-        return self._evaluate(*action)
+        return self._evaluate(*action, search_expand_bound=search_expand_bound)
 
 
 class TFGNNPredict(Predict):
@@ -581,12 +587,14 @@ class TFGNNPredict(Predict):
                   batch_size: int,
                   tactic_expand_bound: int,
                   total_expand_bound: int,
+                  search_expand_bound: Optional[int] = None,
                   allowed_model_tactics: Optional[Iterable[int]] = None
-                  ) -> float:
+                  ) -> Tuple[float, float]:
         predictions = []
         tactic = []
         local_arguments = []
         global_arguments = []
+        names = []
         for proofstate_graph in iter(proofstate_graph_dataset.batch(batch_size)):
             scalar_proofstate_graph = proofstate_graph.merge_batch_to_components()
             batch_predict_output = self._batch_ranked_predictions(scalar_proofstate_graph=scalar_proofstate_graph,
@@ -597,23 +605,32 @@ class TFGNNPredict(Predict):
             tactic.append(scalar_proofstate_graph.context['tactic'])
             local_arguments.append(scalar_proofstate_graph.context['local_arguments'])
             global_arguments.append(scalar_proofstate_graph.context['global_arguments'])
+            names.append(scalar_proofstate_graph.context['name'])
 
         tactic = tf.concat(tactic, axis=0)
         local_arguments = tf.concat(local_arguments, axis=0)
         global_arguments = tf.concat(global_arguments, axis=0)
+        names = tf.concat(names, axis=0).numpy()
 
-        results = []
-        for tactic_id, local_arguments, global_arguments, predict_output in zip(tactic, local_arguments, global_arguments, predictions):
-            results.append(predict_output._evaluate(tactic_id, local_arguments, global_arguments))
-        return np.array(results).mean()
+        per_proofstate = []
+        per_lemma = {}
+        for action, name, predict_output in zip(zip(tactic, local_arguments, global_arguments), names, predictions):
+            result = predict_output._evaluate(*action, search_expand_bound=search_expand_bound)
+            per_proofstate.append(result)
+
+            per_lemma[name] = (per_lemma.get(name, True) and result)
+        per_proofstate_result = np.array(per_proofstate).mean()
+        per_lemma_result = np.array(list(per_lemma.values())).mean()
+        return per_proofstate_result, per_lemma_result
 
     def evaluate(self,
-                 state_action_pairs: Iterable[Tuple[Tuple, Tuple]],
+                 state_action_pairs: Iterable[Tuple[LoaderProofstate, Tuple]],
                  batch_size: int,
                  tactic_expand_bound: int,
                  total_expand_bound: int,
+                 search_expand_bound: Optional[int] = None,
                  allowed_model_tactics: Optional[Iterable[int]] = None
-                 ) -> float:
+                 ) -> Tuple[float, float]:
         states, actions = zip(*state_action_pairs)
         proofstate_graph_dataset = self._make_dummy_proofstate_dataset(states).batch(batch_size)
 
@@ -626,8 +643,15 @@ class TFGNNPredict(Predict):
                                                                   allowed_model_tactics=allowed_model_tactics)
             predictions.extend(batch_predict_output)
 
-        results = []
+        per_proofstate = []
+        per_lemma = {}
         for (state, action), predict_output in zip(state_action_pairs, predictions):
             predict_output.state = state
-            results.append(predict_output.evaluate(action))
-        return np.array(results).mean()
+            result = predict_output.evaluate(action, search_expand_bound=search_expand_bound)
+            per_proofstate.append(result)
+
+            _, _, _, (name, _, _) = state
+            per_lemma[name] = (per_lemma.get(name, True) and result)
+        per_proofstate_result = np.array(per_proofstate).mean()
+        per_lemma_result = np.array(list(per_lemma.values())).mean()
+        return per_proofstate_result, per_lemma_result
