@@ -40,9 +40,18 @@ edge_sets {
 _proofstate_context_schema = """
 context {
   features {
-    key: "context_node_ids"
+    key: "local_context_ids"
     value: {
       description: "[DATA] The ids of the nodes in the local context."
+      dtype: DT_INT64
+      shape { dim { size: -1 } }
+    }
+  }
+  
+  features {
+    key: "global_context_ids"
+    value: {
+      description: "[DATA] Pointers into the global context for the definitions that are actually available."
       dtype: DT_INT64
       shape { dim { size: -1 } }
     }

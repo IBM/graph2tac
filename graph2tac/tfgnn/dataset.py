@@ -585,14 +585,16 @@ class DataServerDataset(Dataset):
 
     root_spec = tf.TensorSpec(shape=(), dtype=tf.int64, name='root')
 
-    context_node_ids_spec = tf.TensorSpec(shape=(None,), dtype=tf.int64, name='context_node_ids')
+    local_context_ids_spec = tf.TensorSpec(shape=(None,), dtype=tf.int64, name='local_context_ids')
+    global_context_ids_spec = tf.TensorSpec(shape=(None,), dtype=tf.int64, name='global_context_ids')
+    context_spec = (local_context_ids_spec, global_context_ids_spec)
 
     name_spec = tf.TensorSpec(shape=(), dtype=tf.string, name='name')
     step_spec = tf.TensorSpec(shape=(), dtype=tf.int64, name='step')
     faithful_spec = tf.TensorSpec(shape=(), dtype=tf.int64, name='faithful')
     proofstate_info_spec = (name_spec, step_spec, faithful_spec)
 
-    state_spec = (loader_graph_spec, root_spec, context_node_ids_spec, proofstate_info_spec)
+    state_spec = (loader_graph_spec, root_spec, context_spec, proofstate_info_spec)
 
     tactic_id_spec = tf.TensorSpec(shape=(), dtype=tf.int64, name='tactic_id')
     arguments_array_spec = tf.TensorSpec(shape=(None, 2), dtype=tf.int64, name='arguments_array')
@@ -695,7 +697,8 @@ class DataServerDataset(Dataset):
         @param graph_id: the id of the graph
         @return: a GraphTensor object that is compatible with the `proofstate_graph_spec` in `graph_schema.py`
         """
-        loader_graph, root, context_node_ids, proofstate_info = state
+        loader_graph, root, context, proofstate_info = state
+        context_node_ids, available_global_context = context
         node_labels, sources, targets, edge_labels = graph_as("tf_gnn", loader_graph)
         proofstate_name, proofstate_step, proofstate_faithful = proofstate_info
 
@@ -706,8 +709,10 @@ class DataServerDataset(Dataset):
 
         context = tfgnn.Context.from_fields(features={
             'tactic': tf.expand_dims(tactic_id, axis=0),
-            'context_node_ids': tf.RaggedTensor.from_tensor(tensor=tf.expand_dims(context_node_ids, axis=0),
-                                                            row_splits_dtype=tf.int32),
+            'local_context_ids': tf.RaggedTensor.from_tensor(tensor=tf.expand_dims(context_node_ids, axis=0),
+                                                             row_splits_dtype=tf.int32),
+            'global_context_ids': tf.RaggedTensor.from_tensor(tensor=tf.expand_dims(available_global_context, axis=0),
+                                                              row_splits_dtype=tf.int32),
             'local_arguments': tf.RaggedTensor.from_tensor(tensor=tf.expand_dims(local_arguments, axis=0),
                                                            row_splits_dtype=tf.int32),
             'global_arguments': tf.RaggedTensor.from_tensor(tensor=tf.expand_dims(global_arguments, axis=0),
