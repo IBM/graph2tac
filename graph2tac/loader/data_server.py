@@ -523,6 +523,7 @@ class Data2:
         def_global_context = self.__def_index_table.idx_to_global_context[def_idx]
         return np.array(list(def_global_context), dtype=np.uint32)
 
+
     def step_state_text(self, data_point_idx: int):
         return self.get_proof_step(data_point_idx).state_text
 
