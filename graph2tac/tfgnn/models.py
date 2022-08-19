@@ -1,5 +1,5 @@
 from typing import Iterable, Dict, Any, Callable, Optional, Tuple
-from dataset import Dataset
+from graph2tac.tfgnn.dataset import Dataset
 
 import tensorflow as tf
 import tensorflow_gnn as tfgnn
