@@ -674,19 +674,12 @@ class DataServer:
 
     def def_cluster_subgraphs(self):
         """
-        returns a list of subgraphs for definition clusters
+        returns a generator of subgraphs for definition clusters
         in the same format as def_class_subgraph (see docstring there)
 
-        but also an integer K that denotes the number of definitions in this cluster
-        the entry points to the definition nodes are the first K in the list of returned nodes
-
+        NOTE: caching should take place somewhere else, if necessary
         """
-        print(f"LOADING | requested {self.graph_constants().cluster_subgraphs_num}")
-        if self.__cluster_subgraphs is None:
-            self.__cluster_subgraphs = []
-            for idx in tqdm.tqdm(range(self.graph_constants().cluster_subgraphs_num)):
-                self.__cluster_subgraphs.append(self.def_cluster_subgraph(idx))
-        return self.__cluster_subgraphs
+        return map(self.def_cluster_subgraph, range(self.graph_constants().cluster_subgraphs_num))
 
     def graph_constants(self):
         return self.__online_data.graph_constants()

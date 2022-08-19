@@ -22,6 +22,7 @@ class Dataset:
         - _definitions()
     """
     MAX_LABEL_TOKENS = 128
+    MAX_PROOFSTATES = int(1e7)
     SHUFFLE_BUFFER_SIZE = int(1e4)
     STATISTICS_BATCH_SIZE = int(1e4)
 
@@ -53,7 +54,6 @@ class Dataset:
         self.exclude_none_arguments = exclude_none_arguments
         self.exclude_not_faithful = exclude_not_faithful
         self._graph_constants = graph_constants
-        self._total_proofstates = None
         self._stats = {}
         self._label_tokenizer = tf.keras.layers.TextVectorization(standardize=None,
                                                                   split='character',
@@ -95,18 +95,13 @@ class Dataset:
         if self.exclude_none_arguments:
             proofstate_dataset = proofstate_dataset.filter(self._no_none_arguments)
 
-        # count remaining proofstates
-        if self._total_proofstates is None:
-            logger.info('counting proofstates (this can take a while)...')
-            self._total_proofstates = proofstate_dataset.reduce(0, lambda result, _: result + 1)
-
         # apply the symmetrization and self-edge transformations
         proofstate_dataset = proofstate_dataset.apply(self._preprocess)
 
         # create dataset of split labels
         split_logits = tf.math.log(tf.constant(split, dtype=tf.float32) / sum(split))
         labels = tf.random.stateless_categorical(logits=tf.expand_dims(split_logits, axis=0),
-                                                 num_samples=self._total_proofstates,
+                                                 num_samples=self.MAX_PROOFSTATES,
                                                  seed=[0, split_random_seed])[0]
         label_dataset = tf.data.Dataset.from_tensor_slices(labels)
 
@@ -123,11 +118,6 @@ class Dataset:
 
         return train.cache(), valid.cache()
 
-    def total_proofstates(self) -> int:
-        if self._total_proofstates is None:
-            raise RuntimeError('Dataset.proofstates() needs to be called before Dataset.total_proofstates()')
-        return self._total_proofstates
-
     def definitions(self, shuffle: bool = False) -> tf.data.Dataset:
         """
         Returns the definition dataset.
@@ -139,9 +129,6 @@ class Dataset:
         if shuffle:
             definitions = definitions.shuffle(buffer_size=self.SHUFFLE_BUFFER_SIZE)
         return definitions.cache()
-
-    def total_definitions(self) -> int:
-        return self._graph_constants.cluster_subgraphs_num
 
     def tokenize_definition_graph(self, definition_graph: tfgnn.GraphTensor) -> tfgnn.GraphTensor:
         """
