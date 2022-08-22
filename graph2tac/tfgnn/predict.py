@@ -302,7 +302,7 @@ class TFGNNPredict(Predict):
         dataset = dataset.apply(self._preprocess)
         return dataset
 
-    def _make_definition_batch(self, new_cluster_subgraphs: List[Tuple]) -> tfgnn.GraphTensor:
+    def _make_definition_batch(self, new_cluster_subgraphs: Iterable[LoaderDefinition]) -> tfgnn.GraphTensor:
         """
         Create a dataset of definition graphs.
 
@@ -313,7 +313,7 @@ class TFGNNPredict(Predict):
                                                  output_signature=DataServerDataset.definition_data_spec)
         dataset = dataset.map(DataServerDataset._make_definition_graph_tensor)
         dataset = self._preprocess(dataset)
-        return dataset.batch(len(new_cluster_subgraphs)).get_single_element()
+        return dataset.batch(Dataset.MAX_DEFINITIONS).get_single_element()
 
     @staticmethod
     def _logits_decoder(logits: tf.Tensor, total_expand_bound: int) -> Tuple[np.ndarray, np.ndarray]:
