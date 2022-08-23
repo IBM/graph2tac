@@ -232,9 +232,8 @@ class Trainer:
 
         # add definitions if necessary
         if self.definition_task is not None:
-            count = ceil(self.dataset.total_proofstates()/self.dataset.total_definitions())
             definitions = self.dataset.definitions(shuffle=False).map(self.dataset.tokenize_definition_graph)
-            definitions = definitions.repeat(count).shuffle(self.dataset.SHUFFLE_BUFFER_SIZE)
+            definitions = definitions.repeat().shuffle(self.dataset.SHUFFLE_BUFFER_SIZE)
             dataset = tf.data.Dataset.zip(datasets=(dataset, definitions))
             dataset = dataset.map(self._input_output_mixing)
 
