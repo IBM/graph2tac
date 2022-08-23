@@ -77,6 +77,16 @@ def _local_arguments_logits(scalar_proofstate_graph: tfgnn.GraphTensor,
     return arguments_logits + tf.expand_dims(context_mask, axis=1)
 
 
+def _global_arguments_logits_mask(scalar_proofstate_graph: tfgnn.GraphTensor, global_context_size: int) -> tf.Tensor:
+    """
+
+    @param scalar_proofstate_graph: the proofstate graph contains the ids of the global context available definitions
+    @param global_context_size: the size of the full global context
+    @return: a mask for logits of the global context, taking into account the definitions that are actually available
+    """
+    global_context_ids = scalar_proofstate_graph.context['global_context_ids']
+    return tf.math.log(tf.reduce_sum(tf.one_hot(global_context_ids, global_context_size, axis=-1), axis=-2))
+
 @tf.function
 def _local_arguments_pred(y_true: tf.Tensor, y_pred: tf.Tensor) -> tf.Tensor:
     return tf.argmax(y_pred, axis=-1) if tf.shape(y_pred)[-1] > 0 else tf.zeros_like(y_true)
@@ -553,13 +563,15 @@ class GlobalArgumentPrediction(PredictionTask):
     ARGUMENTS_SEQ_ACCURACY = 'arguments_seq_accuracy'
     STRICT_ACCURACY = 'strict_accuracy'
 
-    def __init__(self, arguments_loss_coefficient: float = 1.0, **kwargs):
+    def __init__(self, arguments_loss_coefficient: float = 1.0, dynamic_global_context: bool = False, **kwargs):
         """
         @param arguments_loss_coefficient: the weight of the loss term for the arguments (base tactic loss has weight 1)
+        @param dynamic_global_context: whether to restrict the global context to available definitions only
         @param kwargs: arguments to be passed to the PredictionTask constructor
         """
-        super().__init__(**kwargs)
         self._arguments_loss_coefficient = arguments_loss_coefficient
+        self._dynamic_global_context = dynamic_global_context
+        super().__init__(**kwargs)
 
     def get_config(self):
         config = super().get_config()
@@ -621,6 +633,10 @@ class GlobalArgumentPrediction(PredictionTask):
         local_arguments_logits = _local_arguments_logits(scalar_proofstate_graph, hidden_graph, hidden_state_sequences)
 
         global_arguments_logits = self.global_arguments_logits(hidden_state_sequences.to_tensor())   # noqa
+        if self._dynamic_global_context:
+            global_arguments_logits_mask = _global_arguments_logits_mask(scalar_proofstate_graph=scalar_proofstate_graph,
+                                                                         global_context_size=self._graph_constants.global_context.size)
+            global_arguments_logits += tf.expand_dims(global_arguments_logits_mask, axis=1)
 
         # normalize logits making sure the log_softmax is numerically stable
         local_arguments_max_logit = tf.reduce_max(local_arguments_logits, axis=-1)

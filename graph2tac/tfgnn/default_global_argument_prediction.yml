@@ -21,3 +21,4 @@ arguments_head_config:
   recurrent_activation: tanh
   recurrent_depth: 2
 arguments_loss_coefficient: 0.1
+dynamic_global_context: true
