@@ -166,7 +166,7 @@ class Trainer:
             'prediction_task': self.prediction_task.get_config(),
             'serialized_optimizer': tf.keras.optimizers.serialize(self.optimizer),
             'definition_task': self.definition_task.get_config() if self.definition_task is not None else None,
-            'definition_loss_coefficient': self.definition_loss_coefficient.value() if self.definition_loss_coefficient is not None else None,
+            'definition_loss_coefficient': float(self.definition_loss_coefficient.value().numpy()) if self.definition_loss_coefficient is not None else None,
             'definition_loss_schedule': self.definition_loss_schedule,
             'l2_regularization_coefficient': self.l2_regularization_coefficient,
             'max_to_keep': self.max_to_keep,
