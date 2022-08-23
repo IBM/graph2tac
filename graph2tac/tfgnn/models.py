@@ -804,10 +804,10 @@ class DenseDefinitionHead(tf.keras.layers.Layer):
         super().__init__(name=name, **kwargs)
         self._hidden_size = hidden_size
 
-        self._name_layer_config = name_layer
         if name_layer is None:
             self._name_layer = None
         else:
+            self._name_layer_core = tf.keras.layers.deserialize(name_layer)
             self._name_layer = tf.keras.Sequential([
                 tf.keras.layers.Input(shape=[None], dtype=tf.float32, ragged=True),
                 tf.keras.layers.Embedding(
@@ -815,8 +815,7 @@ class DenseDefinitionHead(tf.keras.layers.Layer):
                     output_dim=hidden_size,
                 ),
                 tf.keras.layers.Lambda(lambda x: x.to_tensor()), # align ragged tensor
-                tf.keras.layers.deserialize(name_layer),
-                #tf.keras.layers.Bidirectional(tf.keras.layers.LSTM(256)),
+                self._name_layer_core,
             ])
 
         self._hidden_layers = [tf.keras.layers.Dense.from_config(hidden_layer_config) for hidden_layer_config in hidden_layers]
@@ -827,7 +826,7 @@ class DenseDefinitionHead(tf.keras.layers.Layer):
         if self._name_layer is None:
             name_layer = None
         else:
-            name_layer = self._name_layer_config
+            name_layer = self._name_layer_core.get_config()
         config.update({
             'hidden_size': self._hidden_size,
             'hidden_layers': [hidden_layer.get_config() for hidden_layer in self._hidden_layers],
