@@ -804,6 +804,7 @@ class DenseDefinitionHead(tf.keras.layers.Layer):
         super().__init__(name=name, **kwargs)
         self._hidden_size = hidden_size
 
+        self._name_layer_config = name_layer
         if name_layer is None:
             self._name_layer = None
         else:
@@ -826,7 +827,7 @@ class DenseDefinitionHead(tf.keras.layers.Layer):
         if self._name_layer is None:
             name_layer = None
         else:
-            name_layer = self._name_layer.get_config()
+            name_layer = self._name_layer_config
         config.update({
             'hidden_size': self._hidden_size,
             'hidden_layers': [hidden_layer.get_config() for hidden_layer in self._hidden_layers],
