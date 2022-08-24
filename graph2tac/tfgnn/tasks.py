@@ -583,10 +583,10 @@ class GlobalArgumentPrediction(PredictionTask):
         config.update({
             'prediction_task_type': GLOBAL_ARGUMENT_PREDICTION,
             'arguments_loss_coefficient': self._arguments_loss_coefficient,
+            'dynamic_global_context': self._dynamic_global_context,
             'arguments_head_type': self._arguments_head_type,
             'arguments_head_config': arguments_head_config
         })
-
         return config
 
     def _create_prediction_model(self,
