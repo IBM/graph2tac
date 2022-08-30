@@ -248,7 +248,9 @@ class PredictionTask:
 
     Subclasses should implement the following methods:
         - create_input_output
+        - inference
         - _create_prediction_model
+        - _create_inference_model
         - _loss
         - _metrics
 
@@ -259,9 +261,12 @@ class PredictionTask:
     They can also implement any other methods that may be necessary (for prediction, see graph2tac.tfgnn. predict).
     """
     TACTIC_LOGITS = 'tactic_logits'
+    TACTICS: str = 'tactics'
+    LOGITS: str = 'logits'
 
     create_input_output: Callable[[tfgnn.GraphTensor], Tuple[tfgnn.GraphTensor, tf.Tensor]]
     _create_prediction_model: Callable[..., tf.keras.Model]
+    _create_inference_model: Callable[..., tf.keras.Model]
     _loss: Callable[[], Dict[str, tf.keras.losses.Loss]]
     _metrics: Callable[[], Dict[str, List[tf.keras.metrics.Metric]]]
 
@@ -317,9 +322,21 @@ class PredictionTask:
         tactic_head_constructor = get_tactic_head_constructor(tactic_head_type)
         self.tactic_head = tactic_head_constructor(tactic_embedding_size=tactic_embedding_size, **tactic_head_config)
 
-        self.prediction_model = self._create_prediction_model(**kwargs)
+        # self.prediction_model = self._create_prediction_model(**kwargs)
+        # self.inference_model = self._create_inference_model()
+        #
+        # self.checkpoint = tf.train.Checkpoint(prediction_model=self.prediction_model)
 
-        self.checkpoint = tf.train.Checkpoint(prediction_model=self.prediction_model)
+    def _tactic_logits_and_hidden_graph(self,
+                                        scalar_proofstate_graph: tfgnn.GraphTensor
+                                        ) -> Tuple[tf.Tensor, tfgnn.GraphTensor]:
+        bare_graph = strip_graph(scalar_proofstate_graph)
+        embedded_graph = self.graph_embedding(bare_graph)  # noqa [ PyCallingNonCallable ]
+        hidden_graph = self.gnn(embedded_graph)
+
+        tactic_embedding = self.tactic_head(hidden_graph)
+        tactic_logits = self.tactic_logits_from_embeddings(tactic_embedding)  # noqa [ PyCallingNonCallable ]
+        return tactic_logits, hidden_graph
 
     def get_config(self):
         gnn_config = self.gnn.get_config()
@@ -453,15 +470,29 @@ class LocalArgumentPrediction(PredictionTask):
     STRICT_ACCURACY = 'strict_accuracy'
 
     def __init__(self,
+                 arguments_head_type: str,
+                 arguments_head_config: dict,
                  arguments_loss_coefficient: float = 1.0,
                  **kwargs
                  ):
         """
         @param arguments_loss_coefficient: the weight of the loss term for the arguments (base tactic loss has weight 1)
+        @param arguments_head_type: the type of arguments head to use
+        @param arguments_head_config: the hyperparameters to be used for the arguments head
         @param kwargs: arguments to be passed to the PredictionTask constructor
         """
-        super().__init__(**kwargs)
+        self._arguments_head_type = arguments_head_type
+
+        arguments_head_constructor = get_arguments_head_constructor(arguments_head_type)
+        self.arguments_head = arguments_head_constructor(hidden_size=self._hidden_size,
+                                                         tactic_embedding_size=self._tactic_embedding_size,
+                                                         **arguments_head_config)
+
         self._arguments_loss_coefficient = arguments_loss_coefficient
+
+        self.arguments_logits = tf.keras.layers.Lambda(lambda inputs: _local_arguments_logits(*inputs),
+                                                       name=self.ARGUMENTS_LOGITS)
+        super().__init__(**kwargs)
 
     def get_config(self):
         config = super().get_config()
@@ -479,33 +510,17 @@ class LocalArgumentPrediction(PredictionTask):
 
         return config
 
-    def _create_prediction_model(self,
-                                 arguments_head_type: str,
-                                 arguments_head_config: dict
-                                 ) -> tf.keras.Model:
+    def _create_prediction_model(self) -> tf.keras.Model:
         """
         Combines a GNN component with a tactic head and an arguments head to produce an end-to-end model for the
         local argument prediction task. The resulting model is weakly autoregressive and for training purposes only,
         producing both tactic logits and argument logits for each local context node and argument position.
 
-        @param arguments_head_type: the type of arguments head to use
-        @param arguments_head_config: the hyperparameters to be used for the arguments head
         @return: a keras model consuming graphs and producing tactic logits and local arguments logits
         """
-        self._arguments_head_type = arguments_head_type
-
-        arguments_head_constructor = get_arguments_head_constructor(arguments_head_type)
-        self.arguments_head = arguments_head_constructor(hidden_size=self._hidden_size,
-                                                         tactic_embedding_size=self._tactic_embedding_size,
-                                                         **arguments_head_config)
-
-        self.arguments_logits = tf.keras.layers.Lambda(lambda inputs: _local_arguments_logits(*inputs),
-                                                       name=self.ARGUMENTS_LOGITS)
-
         proofstate_graph = tf.keras.layers.Input(type_spec=batch_graph_spec(proofstate_graph_spec),
                                                  name='proofstate_graph')
         scalar_proofstate_graph = proofstate_graph.merge_batch_to_components()
-        # in_context = _context_mask(scalar_proofstate_graph)
 
         bare_graph = strip_graph(scalar_proofstate_graph)
         embedded_graph = self.graph_embedding(bare_graph)  # noqa [ PyCallingNonCallable ]

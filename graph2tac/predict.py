@@ -1,5 +1,6 @@
 from typing import List, Tuple, Optional, Callable, Dict
 
+import time
 import pickle
 import numpy as np
 from pathlib import Path
@@ -35,7 +36,13 @@ def predict_api_debugging(api_call: Callable):
             with debug_message_file.open('wb') as pickle_jar:
                 pickle.dump((api_name, args, kwargs), pickle_jar)
             self._debug_message_number += 1
-        return api_call(self, *args, **kwargs)
+        start = time.time()
+        return_value = api_call(self, *args, **kwargs)
+        end = time.time()
+
+        total_time, num_calls = self._timings.get(api_name, (0.0, 0))
+        self._timings[api_name] = (total_time + end - start, num_calls+1)
+        return return_value
     return api_call_with_debug
 
 
@@ -53,6 +60,8 @@ class Predict:
         - `get_max_subgraph_size`: access the value of `max_subgraph_size` seen during training
     """
     _graph_constants: GraphConstants
+    _debug_dir: Optional[Path]
+    _timings: Dict[str, Tuple[float, int]]
 
     def __init__(self, graph_constants: GraphConstants, debug_dir: Optional[Path] = None):
         """
@@ -62,6 +71,7 @@ class Predict:
         """
         self._graph_constants = graph_constants
         self._debug_dir = debug_dir
+        self._timings = {}
         assert self._graph_constants is not None
 
         # if debug mode is on, initialize evaluation logging directory
