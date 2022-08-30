@@ -54,12 +54,12 @@ def _local_arguments_logits(scalar_proofstate_graph: tfgnn.GraphTensor,
 
     # the node ids for the local context nodes, shifted per components
     # [ batch_size, None(num_context_nodes) ]
-    context_node_ids = cumulative_sizes + scalar_proofstate_graph.context['context_node_ids']
+    local_context_ids = cumulative_sizes + scalar_proofstate_graph.context['local_context_ids']
 
     # the hidden states for the nodes in the local context
     # [ batch_size, None(num_context_nodes), hidden_size ]
     context_node_hidden_states = tf.gather(hidden_graph.node_sets['node']['hidden_state'],
-                                           context_node_ids).with_row_splits_dtype(tf.int64)
+                                           local_context_ids).with_row_splits_dtype(tf.int64)
 
     # the logits for each local context node to be each local argument
     # [ batch_size, max(num_arguments), max(num_context_nodes) ]
@@ -69,7 +69,7 @@ def _local_arguments_logits(scalar_proofstate_graph: tfgnn.GraphTensor,
 
     # a mask for the local context nodes that actually exist
     # [ batch_size,  max(num_context_nodes) ]
-    context_mask = tf.cast(tf.zeros_like(scalar_proofstate_graph.context['context_node_ids']),
+    context_mask = tf.cast(tf.zeros_like(scalar_proofstate_graph.context['local_context_ids']),
                            dtype=tf.float32).to_tensor(-float('inf'))
 
     # the masked logits

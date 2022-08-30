@@ -450,7 +450,6 @@ class TrainingLoop:
             data_dir,
             max_subgraph_size=params.data_params.max_subgraph_size,
             split=tuple(params.data_params.split),
-            cross_valid_fold=params.data_params.cv_fold,
             bfs_option=params.data_params.bfs_option,
             split_random_seed=params.data_params.split_seed,
             restrict_to_spine=params.data_params.restrict_to_spine
