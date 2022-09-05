@@ -1,4 +1,4 @@
-from typing import Iterable, Dict, Any, Callable, Optional, Tuple
+from typing import Iterable, Dict, Any, Callable, Optional, Tuple, Union
 
 import tensorflow as tf
 import tensorflow_gnn as tfgnn
@@ -10,6 +10,52 @@ ATTENTION_GNN = 'attention_gnn'
 DENSE_TACTIC = 'dense_tactic'
 DENSE_DEFINITION = 'dense_definition'
 SIMPLE_RNN = 'simple_rnn'
+
+
+class RepeatScalarGraph(tf.keras.layers.Layer):
+    def __init__(self, num_repetitions: int, name: str = "repeat_scalar_graph", **kwargs):
+        super().__init__(name=name, **kwargs)
+        self.num_repetitions = num_repetitions
+
+    def repeat_tensor(self, tensor: tf.Tensor):
+        return tf.repeat(tf.expand_dims(tensor, axis=0), self.num_repetitions, axis=0)
+
+    def repeat_ragged_tensor(self, ragged_tensor: tf.RaggedTensor):
+        flat_values = tf.repeat(ragged_tensor.flat_values, self.num_repetitions)
+        row_lengths = tf.repeat(ragged_tensor.row_lengths(), self.num_repetitions)
+        nrows = tf.fill(dims=(self.num_repetitions,), value=ragged_tensor.nrows())
+        return tf.RaggedTensor.from_nested_row_lengths(flat_values=flat_values, nested_row_lengths=(nrows, row_lengths))
+
+    def repeat_feature(self, feature: Union[tf.Tensor, tf.RaggedTensor]):
+        return self.repeat_ragged_tensor(feature) if isinstance(feature, tf.RaggedTensor) else self.repeat_tensor(
+            feature)
+
+    def call(self,
+             graph_tensor: tfgnn.GraphTensor,
+             training: bool = False
+             ) -> tfgnn.GraphTensor:
+        node_features = {feature_name: self.repeat_feature(feature_value) for feature_name, feature_value in
+                         graph_tensor.node_sets['node'].features.items()}
+        node_set = tfgnn.NodeSet.from_fields(features=node_features,
+                                             sizes=self.repeat_tensor(graph_tensor.node_sets['node'].sizes))
+
+        adjacency = tfgnn.Adjacency.from_indices(
+            source=('node', self.repeat_tensor(graph_tensor.edge_sets['edge'].adjacency.source)),
+            target=('node', self.repeat_tensor(graph_tensor.edge_sets['edge'].adjacency.target)))
+
+        edge_features = {feature_name: self.repeat_feature(feature_value) for feature_name, feature_value in
+                         graph_tensor.edge_sets['edge'].features.items()}
+        edge_set = tfgnn.EdgeSet.from_fields(features=edge_features,
+                                             sizes=self.repeat_tensor(graph_tensor.edge_sets['edge'].sizes),
+                                             adjacency=adjacency)
+
+        context_features = {feature_name: self.repeat_feature(feature_value) for feature_name, feature_value in
+                            graph_tensor.context.features.items()}
+        context = tfgnn.Context.from_fields(features=context_features,
+                                            sizes=self.repeat_tensor(graph_tensor.context.sizes))
+
+        return tfgnn.GraphTensor.from_pieces(node_sets={'node': node_set}, edge_sets={'edge': edge_set},
+                                             context=context).merge_batch_to_components()
 
 
 class LogitsFromEmbeddings(tf.keras.layers.Layer):
