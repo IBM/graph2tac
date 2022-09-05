@@ -22,6 +22,8 @@ class Dataset:
         - _definitions()
     """
     MAX_LABEL_TOKENS = 128
+    MAX_PROOFSTATES = int(1e7)
+    MAX_DEFINITIONS = int(1e7)
     SHUFFLE_BUFFER_SIZE = int(1e4)
     STATISTICS_BATCH_SIZE = int(1e4)
 
@@ -53,7 +55,6 @@ class Dataset:
         self.exclude_none_arguments = exclude_none_arguments
         self.exclude_not_faithful = exclude_not_faithful
         self._graph_constants = graph_constants
-        self._total_proofstates = None
         self._stats = {}
         self._label_tokenizer = tf.keras.layers.TextVectorization(standardize=None,
                                                                   split='character',
@@ -95,18 +96,13 @@ class Dataset:
         if self.exclude_none_arguments:
             proofstate_dataset = proofstate_dataset.filter(self._no_none_arguments)
 
-        # count remaining proofstates
-        if self._total_proofstates is None:
-            logger.info('counting proofstates (this can take a while)...')
-            self._total_proofstates = proofstate_dataset.reduce(0, lambda result, _: result + 1)
-
         # apply the symmetrization and self-edge transformations
         proofstate_dataset = proofstate_dataset.apply(self._preprocess)
 
         # create dataset of split labels
         split_logits = tf.math.log(tf.constant(split, dtype=tf.float32) / sum(split))
         labels = tf.random.stateless_categorical(logits=tf.expand_dims(split_logits, axis=0),
-                                                 num_samples=self._total_proofstates,
+                                                 num_samples=self.MAX_PROOFSTATES,
                                                  seed=[0, split_random_seed])[0]
         label_dataset = tf.data.Dataset.from_tensor_slices(labels)
 
@@ -123,11 +119,6 @@ class Dataset:
 
         return train.cache(), valid.cache()
 
-    def total_proofstates(self) -> int:
-        if self._total_proofstates is None:
-            raise RuntimeError('Dataset.proofstates() needs to be called before Dataset.total_proofstates()')
-        return self._total_proofstates
-
     def definitions(self, shuffle: bool = False) -> tf.data.Dataset:
         """
         Returns the definition dataset.
@@ -139,9 +130,6 @@ class Dataset:
         if shuffle:
             definitions = definitions.shuffle(buffer_size=self.SHUFFLE_BUFFER_SIZE)
         return definitions.cache()
-
-    def total_definitions(self) -> int:
-        return self._graph_constants.cluster_subgraphs_num
 
     def tokenize_definition_graph(self, definition_graph: tfgnn.GraphTensor) -> tfgnn.GraphTensor:
         """
@@ -585,14 +573,16 @@ class DataServerDataset(Dataset):
 
     root_spec = tf.TensorSpec(shape=(), dtype=tf.int64, name='root')
 
-    context_node_ids_spec = tf.TensorSpec(shape=(None,), dtype=tf.int64, name='context_node_ids')
+    local_context_ids_spec = tf.TensorSpec(shape=(None,), dtype=tf.int64, name='local_context_ids')
+    global_context_ids_spec = tf.TensorSpec(shape=(None,), dtype=tf.int64, name='global_context_ids')
+    context_spec = (local_context_ids_spec, global_context_ids_spec)
 
     name_spec = tf.TensorSpec(shape=(), dtype=tf.string, name='name')
     step_spec = tf.TensorSpec(shape=(), dtype=tf.int64, name='step')
     faithful_spec = tf.TensorSpec(shape=(), dtype=tf.int64, name='faithful')
     proofstate_info_spec = (name_spec, step_spec, faithful_spec)
 
-    state_spec = (loader_graph_spec, root_spec, context_node_ids_spec, proofstate_info_spec)
+    state_spec = (loader_graph_spec, root_spec, context_spec, proofstate_info_spec)
 
     tactic_id_spec = tf.TensorSpec(shape=(), dtype=tf.int64, name='tactic_id')
     arguments_array_spec = tf.TensorSpec(shape=(None, 2), dtype=tf.int64, name='arguments_array')
@@ -695,7 +685,8 @@ class DataServerDataset(Dataset):
         @param graph_id: the id of the graph
         @return: a GraphTensor object that is compatible with the `proofstate_graph_spec` in `graph_schema.py`
         """
-        loader_graph, root, context_node_ids, proofstate_info = state
+        loader_graph, root, context, proofstate_info = state
+        context_node_ids, available_global_context = context
         node_labels, sources, targets, edge_labels = graph_as("tf_gnn", loader_graph)
         proofstate_name, proofstate_step, proofstate_faithful = proofstate_info
 
@@ -706,8 +697,10 @@ class DataServerDataset(Dataset):
 
         context = tfgnn.Context.from_fields(features={
             'tactic': tf.expand_dims(tactic_id, axis=0),
-            'context_node_ids': tf.RaggedTensor.from_tensor(tensor=tf.expand_dims(context_node_ids, axis=0),
-                                                            row_splits_dtype=tf.int32),
+            'local_context_ids': tf.RaggedTensor.from_tensor(tensor=tf.expand_dims(context_node_ids, axis=0),
+                                                             row_splits_dtype=tf.int32),
+            'global_context_ids': tf.RaggedTensor.from_tensor(tensor=tf.expand_dims(available_global_context, axis=0),
+                                                              row_splits_dtype=tf.int32),
             'local_arguments': tf.RaggedTensor.from_tensor(tensor=tf.expand_dims(local_arguments, axis=0),
                                                            row_splits_dtype=tf.int32),
             'global_arguments': tf.RaggedTensor.from_tensor(tensor=tf.expand_dims(global_arguments, axis=0),

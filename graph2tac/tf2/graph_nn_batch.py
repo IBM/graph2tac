@@ -113,13 +113,15 @@ def make_flat_batch_np(batch: List[Tuple[LoaderProofstate, Any, int]],
 
     """
     assert len(batch) > 0
+    # each batch element is (state, action, graph_id)
     states, actions, _ = zip(*batch)
 
-    # states, actions, data_point_id = zip(*batch)
-    # then you can call DataServer.data_point(data_point_id) for debug information
+    # each state is (loader_graph, root, context, metadata)
+    graphs, roots, all_context, _ = zip(*states)
 
-    # nodes_c, edges, roots, context = zip(*states)
-    graphs, roots, context, _ = zip(*states)
+    # each context is (local_context, available_global_context)
+    context, _ = zip(*all_context)
+
     nodes_c, edges = zip(* map(lambda x: graph_as("tf2", x), graphs))
 
 

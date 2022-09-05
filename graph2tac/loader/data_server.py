@@ -23,8 +23,14 @@ import tqdm
 # nodes, edges, edge_labels, edge_offsets
 LoaderGraph = NewType('LoaderGraph', Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray])
 
-# loader_graph, root, context_node_ids, (proofstate_name, proofstate_step)
-LoaderProofstate = NewType('LoaderProofstate', Tuple[LoaderGraph, int, np.ndarray, Tuple[bytes, int, bool]])
+# name, step, is_faithful
+ProofstateMetadata = NewType('ProofstateMetadata', Tuple[bytes, int, bool])
+
+# context_node_ids, available_global_context
+ProofstateContext = NewType('ProofstateContext', Tuple[np.ndarray, np.ndarray])
+
+# loader_graph, root, context, metadata
+LoaderProofstate = NewType('LoaderProofstate', Tuple[LoaderGraph, int, ProofstateContext, ProofstateMetadata])
 
 # loader_graph, num_definitions, definition_names
 LoaderDefinition = NewType('LoaderDefinition', Tuple[LoaderGraph, int, np.ndarray])
@@ -33,6 +39,7 @@ LoaderDefinition = NewType('LoaderDefinition', Tuple[LoaderGraph, int, np.ndarra
 from graph2tac.loader.clib.loader import (
     files_get_scc_components,
     get_buf_def,
+    get_def_previouses,
     get_buf_tactics,
     build_data_online_from_buf,
     data_online_extend,
@@ -66,7 +73,8 @@ class GraphConstants:
 class DataPoint:
     proof_step_idx: int
     graph: LoaderGraph
-    context: np.ndarray
+    local_context: np.ndarray
+    available_global_context: np.ndarray
     root: int
     action: Tuple[np.ndarray, np.ndarray]
     state_text: bytes
@@ -85,6 +93,7 @@ class DefIndexTable:
     idx_to_name: list
     idx_to_hash: list
     idx_in_spine: list[bool]
+    idx_to_global_context: list[set] 
 
 
 def graph_as(model: str, graph: Tuple) -> Tuple:
@@ -127,15 +136,10 @@ def top_sort_dataset_modules(data_dir: Path) -> List[Path]:
 
 def get_global_def_table(buf_list, message_type: str, restrict_to_spine=False):
     """
-    returns a list of indexed by buffer index
-    each element in the above list is a list of tuples: (node_idx, def_hash, def_name)
+    returns a list of buffer_def_tables
+    buffer_def_table is ((node_idx_list, def_hash_list, def_name_list), representative)
     """
-    res = []
-    for buf_object in buf_list:
-        temp = get_buf_def(buf_object, message_type, restrict_to_spine)
-        res.append(temp)
-    return res
-
+    return [get_buf_def(buf_object, message_type, restrict_to_spine) for buf_object in buf_list]
 
 def local_to_global_file_idx(data_dir: Path, fnames: list[Path]):
     return get_local_to_global_file_idx(os.fsencode(data_dir), list(map(os.fsencode,fnames)))
@@ -144,28 +148,83 @@ def local_to_global_file_idx(data_dir: Path, fnames: list[Path]):
 def get_global_nodes_in_spine(buf_list, message_type):
     global_nodes_in_spine = set()
     global_def_table_spine = get_global_def_table(buf_list, message_type, restrict_to_spine=True)
-    for file_idx, file_table in enumerate(global_def_table_spine):
+    for file_idx, (file_table, representative) in enumerate(global_def_table_spine):
         for node_idx, def_hash, def_name in zip(*file_table):
             global_nodes_in_spine.add((file_idx,node_idx))
     return global_nodes_in_spine
 
 
-def build_def_index(global_def_table, global_nodes_in_spine: set[tuple[int,int]]) -> DefIndexTable:
+def process_def_previouses(buf_list, message_type, def_idx_to_global_context,
+                           def_idx_to_global_node, global_node_to_def_idx,  def_idx, local_to_global, representatives):
+    if def_idx_to_global_context[def_idx] is not None:
+        return
+            
+    def_global_node = def_idx_to_global_node[def_idx]
+
+    def_file_idx, def_node_idx = def_global_node
+
+    def_loc_previouses, def_ext_previouses = get_def_previouses(buf_list[def_file_idx], message_type, def_node_idx)
+
+
+    previous_nodes = []
+    for node_idx in def_loc_previouses:
+        previous_nodes.append((def_file_idx,  node_idx))
+    for dep_idx in def_ext_previouses:
+        p_file_idx = local_to_global[def_file_idx][dep_idx]
+        previous_nodes.append((p_file_idx, representatives[p_file_idx]))
+
+    def_global_context = set()
+
+    for previous_global_node in previous_nodes:
+
+        previous_idx = global_node_to_def_idx[previous_global_node]
+        
+        process_def_previouses(buf_list, message_type, def_idx_to_global_context,
+                               def_idx_to_global_node, global_node_to_def_idx, previous_idx, local_to_global, representatives)
+
+        def_global_context.add(previous_idx)
+        def_global_context.update(def_idx_to_global_context[previous_idx])
+
+    def_idx_to_global_context[def_idx] = def_global_context
+
+    
+    
+
+def build_def_index(global_def_table,
+                    global_nodes_in_spine: set[tuple[int,int]],
+                    buf_list,
+                    message_type,
+                    local_to_global
+                    ) -> DefIndexTable:
     def_idx_to_global_node = []
     def_idx_to_name = []
     def_idx_to_hash = []
     global_node_to_def_idx = {}
     def_idx_in_spine = []
-
-    for file_idx, (node_indexes, def_hashes, def_names) in enumerate(global_def_table):
-        for node_idx, def_hash, def_name in zip(node_indexes, def_hashes, def_names):
+    
+    representatives = []
+    for file_idx, (def_data, representative) in enumerate(global_def_table):
+        representatives.append(representative)
+        for node_idx, def_hash, def_name in zip(*def_data):
             global_node_id = (file_idx, node_idx)
             global_node_to_def_idx[global_node_id] = len(def_idx_to_global_node)
+            
             def_idx_to_global_node.append(global_node_id)
             def_idx_to_name.append(def_name)
             def_idx_to_hash.append(def_hash)
             def_idx_in_spine.append(global_node_id in global_nodes_in_spine)
-    return DefIndexTable(def_idx_to_global_node, global_node_to_def_idx, def_idx_to_name, def_idx_to_hash, def_idx_in_spine)
+
+    # in a second pass build global context per definition (need another pass because
+
+    def_idx_to_global_context = [None for _ in def_idx_to_global_node]
+    for (def_idx, def_global_node) in enumerate(def_idx_to_global_node):
+        process_def_previouses(buf_list, message_type, def_idx_to_global_context, def_idx_to_global_node, global_node_to_def_idx, def_idx, local_to_global, representatives)
+
+
+    return DefIndexTable(def_idx_to_global_node, global_node_to_def_idx, def_idx_to_name, def_idx_to_hash, def_idx_in_spine, def_idx_to_global_context)
+
+
+
 
 
 def def_hash_of_tactic_point(def_index_table, tactic_point):
@@ -200,6 +259,8 @@ class Data2:
     """
     this is low-level api for refactored online loader from mmaped capnp bin files
     """
+
+    # TODO (after TF2 deprecation): Remove data-splitting functionality, training logic should take care of this
     def __init__(self, data_dir, restrict_to_spine, bfs_option, max_subgraph_size, split=(8,1,1), split_random_seed=0):
         """
 
@@ -232,10 +293,11 @@ class Data2:
         self.__global_def_table = get_global_def_table(buf_list, "dataset", restrict_to_spine)
 
 
+
         global_nodes_in_spine = get_global_nodes_in_spine(buf_list, "dataset")
         print("LOADING | definitions in spine: {len(global_nodes_in_spine)}")
 
-        self.__def_index_table = build_def_index(self.__global_def_table, global_nodes_in_spine)
+        self.__def_index_table = build_def_index(self.__global_def_table, global_nodes_in_spine, buf_list, "dataset", self.__local_to_global_files)
 
         self.__def_idx_to_node = np.array(self.__def_index_table.idx_to_global_node, dtype=np.uint32)
         print(f"LOADING | definitions: {len(self.__def_idx_to_node)} ")
@@ -246,7 +308,7 @@ class Data2:
         print(f"LOADING | indexing all tactical action-outcomes in {len(self.__fnames)} files...", end='')
         t0 = time.time()
         self.__tactical_data = []
-        for file_idx, (buf_object, fname, def_table) in enumerate(zip(buf_list, map(os.fsencode, self.__fnames), self.__global_def_table)):
+        for file_idx, (buf_object, fname, (def_table, representative)) in enumerate(zip(buf_list, map(os.fsencode, self.__fnames), self.__global_def_table)):
             (tactic_hashes,
              number_arguments,
              def_node_indexes,
@@ -360,7 +422,9 @@ class Data2:
                               label_in_spine=label_in_spine,
                               max_subgraph_size=self.__max_subgraph_size)
 
-
+    def def_index_table(self):
+        return self.__def_index_table
+    
     def def_name_of_tactic_point(self, data_point_idx):
         return def_name_of_tactic_point(self.__def_index_table, self.__tactical_data[data_point_idx])
 
@@ -391,8 +455,9 @@ class Data2:
 
         # TEXT ANNOTATION TO BE IMPLEMENTED
         return DataPoint(data_point_idx,
-                         graph = LoaderGraph( (nodes, edges, edge_labels, edges_offset) ),
-                         context = context,
+                         graph=LoaderGraph( (nodes, edges, edge_labels, edges_offset) ),
+                         local_context=context,
+                         available_global_context=self.step_global_context(data_point_idx),
                          root = root,
                          action=(tactic_index, args),
                          state_text=state_text,
@@ -403,6 +468,7 @@ class Data2:
                          step_in_proof=proof_step_idx.item(),
                          file_name=self.__fnames[file_idx])
 
+    # TODO (after TF2 deprecation): Remove data-splitting functionality, training logic should take care of this
     def select_data_points(self, split_fun: Callable[[...], int], label: int) -> List[int]:
         """
         returns a list of datapoint indices that have given label
@@ -414,25 +480,49 @@ class Data2:
         """
         return [i for i, tactical_point in enumerate(self.__tactical_data) if split_fun(tactical_point) == label]
 
+    # TODO (after TF2 deprecation): Remove data-splitting functionality, training logic should take care of this
     def data_train(self):
         return self.select_data_points(split_fun=lambda x: def_hash_split(x, self.__split, self.__split_random_seed),
                                        label=0)
 
+    # TODO (after TF2 deprecation): Remove data-splitting functionality, training logic should take care of this
     def data_valid(self):
         return self.select_data_points(split_fun=lambda x: def_hash_split(x, self.__split, self.__split_random_seed),
                                        label=1)
 
+    # TODO (after TF2 deprecation): Remove data-splitting functionality, training logic should take care of this
     def data_test(self):
         return self.select_data_points(split_fun=lambda x: def_hash_split(x, self.__split, self.__split_random_seed),
                                        label=2)
 
-
-    # REFACTOR CLIENTS
     def step_state(self, data_point_idx: int) -> LoaderProofstate:
         proof_step = self.get_proof_step(data_point_idx, skip_text=False)
-        metadata = (proof_step.def_name, proof_step.step_in_proof,
-                    proof_step.action_text.replace(b'@', b'')==proof_step.action_interm_text.replace(b'@', b''))
-        return LoaderProofstate( (proof_step.graph, proof_step.root, proof_step.context, metadata) )
+
+        loader_graph = proof_step.graph
+
+        root = proof_step.root
+
+        context_node_ids = proof_step.local_context
+        available_global_context = proof_step.available_global_context
+        context = ProofstateContext( (context_node_ids, available_global_context) )
+
+        name = proof_step.def_name
+        step = proof_step.step_in_proof
+        is_faithful = proof_step.action_text.replace(b'@', b'')==proof_step.action_interm_text.replace(b'@', b'')
+        metadata = ProofstateMetadata( (name, step, is_faithful) )
+
+        return LoaderProofstate( (loader_graph, root, context, metadata) )
+
+    def step_global_context(self, data_point_idx: int) -> np.ndarray:
+        """
+        return dynamic global context as a numpy array of indices into GraphConstants.global_context
+        """
+        _, _, file_idx, def_node_idx, _, _, _, _  = self.__tactical_data[data_point_idx]
+        def_idx = self.__def_index_table.global_node_to_idx[(file_idx, def_node_idx)]
+        # def_name = self.__def_index_table.idx_to_name[def_idx]
+        def_global_context = self.__def_index_table.idx_to_global_context[def_idx]
+        return np.array(list(def_global_context), dtype=np.uint32)
+
 
     def step_state_text(self, data_point_idx: int):
         return self.get_proof_step(data_point_idx).state_text
@@ -492,11 +582,11 @@ class DataServer:
     implements higher level api compatible with current train.py
     wrapping lower level of Data()
     """
+    # TODO (after TF2 deprecation): Remove data-splitting functionality, training logic should take care of this
     def __init__(self,
                  data_dir: Path,
                  max_subgraph_size,
                  split: Tuple[int, int, int] = (8, 1, 1),
-                 cross_valid_fold: int = 0,
                  bfs_option = True,
                  split_random_seed = 0,
                  restrict_to_spine: bool = False,
@@ -507,35 +597,20 @@ class DataServer:
         - split is a len 3 tuple of integers defining the relative
         proportion of split as (train, valid, test).
 
-        - cross_fold_level is an integer in the range [0, max_cross_fold)
-        where max_cross_fold = (split[0] + split[1]) // split[0]
-        with default split = [8, 1, 1] we have max_cross_fold = (8 + 1) // 1 = 9
-        and therefore cross_valid_fold can take values in range(9)
-        (that is from 0 to 8 including) --
-        NOT YET IMPLEMENTED
-
         - num_proc number of threads for the loader
             (if not passed or None then the optimal number of threads if computed by the loader)
 
         ignore_def_hash: used uint64 of (file_idx, node_idx) instead of def hash
         for internal def tables
         """
-        assert cross_valid_fold == 0, "cross_valid_fold is not yet implemented"
-
         self.__online_data = Data2(data_dir, restrict_to_spine, bfs_option, max_subgraph_size, split, split_random_seed=split_random_seed)
-
-
         self.__cluster_subgraphs = None
 
+    # TODO (after TF2 deprecation): Remove this API, data should be accessible in bulk, use Data2 for debugging
     def data_point(self, proof_step_idx: int):
         return self.__online_data.get_proof_step(proof_step_idx)
 
-    def total_proofstates(self) -> int:
-        """
-        @return: the total number of proofstates (in all splits)
-        """
-        return self.__online_data.tactical_data().shape[0]
-
+    # TODO (after TF2 deprecation): Remove shuffling from here, training logic should take care of this
     def data_train(self, shuffled: bool = False,  as_text: bool = False):
         """
         returns a stream of training data, optionally shuffled
@@ -567,6 +642,7 @@ class DataServer:
                             functools.partial(data.step_label),
                             lambda x: x)
 
+    # TODO (after TF2 deprecation): Remove train / validation split, training logic should take care of this
     def data_valid(self, as_text: bool = False):
         """
         returns a stream of validation data in the same format as  data_train
@@ -586,6 +662,7 @@ class DataServer:
                             functools.partial(data.step_label),
                             lambda x: x)
 
+    # TODO (after TF2 deprecation): Remove this API, data should be accessible in bulk, use Data2 for debugging
     def def_cluster_subgraph(self, cluster_idx: int):
         """
         returns a definition cluster with cluster_idx
@@ -598,19 +675,12 @@ class DataServer:
 
     def def_cluster_subgraphs(self):
         """
-        returns a list of subgraphs for definition clusters
+        returns a generator of subgraphs for definition clusters
         in the same format as def_class_subgraph (see docstring there)
 
-        but also an integer K that denotes the number of definitions in this cluster
-        the entry points to the definition nodes are the first K in the list of returned nodes
-
+        NOTE: caching should take place somewhere else, if necessary
         """
-        print(f"LOADING | requested {self.graph_constants().cluster_subgraphs_num}")
-        if self.__cluster_subgraphs is None:
-            self.__cluster_subgraphs = []
-            for idx in tqdm.tqdm(range(self.graph_constants().cluster_subgraphs_num)):
-                self.__cluster_subgraphs.append(self.def_cluster_subgraph(idx))
-        return self.__cluster_subgraphs
+        return map(self.def_cluster_subgraph, range(self.graph_constants().cluster_subgraphs_num))
 
     def graph_constants(self):
         return self.__online_data.graph_constants()

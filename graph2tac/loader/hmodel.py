@@ -71,12 +71,13 @@ class Train:
         none_counter = 0
         for state, action, idx in tqdm.tqdm(self._data_server.data_train()):
             graph, root, context, _ = state
+            local_context, _ = context
             state_hash = my_hash_of(state, self._with_context)
 
             train_action = self._data.get(state_hash, [])
             try:
                 train_action.append(action_encode(action,
-                                              local_context=context,
+                                              local_context=local_context,
                                               global_context=self._global_context))
             except IndexError:
                 none_counter += 1
