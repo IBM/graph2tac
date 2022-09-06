@@ -654,11 +654,14 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
     GLOBAL_ARGUMENTS_LOGITS = 'global_arguments_logits'
 
     def __init__(self,
+                 dynamic_global_context: bool = False,
                  **kwargs):
         """
+        @param dynamic_global_context: whether to restrict the global context to available definitions only
         @param kwargs: arguments to be passed to the LocalArgumentPrediction constructor
         """
         super().__init__(**kwargs)
+        self._dynamic_global_context = dynamic_global_context
 
         # create a layer to extract logits from the node label embeddings
         self.global_arguments_logits = LogitsFromEmbeddings(
@@ -676,9 +679,21 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
         config = super().get_config()
 
         config.update({
-            'prediction_task_type': GLOBAL_ARGUMENT_PREDICTION
+            'prediction_task_type': GLOBAL_ARGUMENT_PREDICTION,
+            'dynamic_global_context': self._dynamic_global_context
         })
         return config
+
+    @staticmethod
+    def _global_arguments_logits_mask(scalar_proofstate_graph: tfgnn.GraphTensor,
+                                      global_context_size: int) -> tf.Tensor:
+        """
+        @param scalar_proofstate_graph: the proofstate graph containing ids for the available global context definitions
+        @param global_context_size: the size of the full global context
+        @return: a mask for logits of the global context, taking into account the definitions that are actually available
+        """
+        global_context_ids = scalar_proofstate_graph.context['global_context_ids']
+        return tf.math.log(tf.reduce_sum(tf.one_hot(global_context_ids, global_context_size, axis=-1), axis=-2))
 
     @staticmethod
     def _normalize_logits(local_arguments_logits: tf.Tensor, global_arguments_logits: tf.Tensor) -> Tuple[
@@ -718,10 +733,11 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
                                                               hidden_state_sequences)
 
         global_arguments_logits = self.global_arguments_logits(hidden_state_sequences.to_tensor())  # noqa
+        if self._dynamic_global_context:
+            global_arguments_logits_mask = self._global_arguments_logits_mask(scalar_proofstate_graph=scalar_proofstate_graph, global_context_size=self._graph_constants.global_context.size)
+            global_arguments_logits += tf.expand_dims(global_arguments_logits_mask, axis=1)
 
-        normalized_local_arguments_logits, normalized_global_arguments_logits = self._normalize_logits(
-            local_arguments_logits=local_arguments_logits,
-            global_arguments_logits=global_arguments_logits)
+        normalized_local_arguments_logits, normalized_global_arguments_logits = self._normalize_logits(local_arguments_logits=local_arguments_logits, global_arguments_logits=global_arguments_logits)
 
         local_arguments_logits_output = self.local_arguments_logits_output(normalized_local_arguments_logits)
         global_arguments_logits_output = self.global_arguments_logits_output(normalized_global_arguments_logits)
