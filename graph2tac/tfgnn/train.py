@@ -268,8 +268,6 @@ class Trainer:
             normalization = tf.sqrt(tf.cast(definition_graph.context['num_definitions'], dtype=tf.float32))
             embedding_difference = (definition_body_embeddings - definition_id_embeddings) / tf.expand_dims(normalization, axis=-1)
 
-            # this is an ugly hack to preserve the output names
-            # outputs = {name: tf.keras.layers.Lambda(lambda x: x, name=name)(output) for name, output in prediction_outputs.items()}
             outputs.update({self.DEFINITION_EMBEDDING: tf.keras.layers.Lambda(lambda x: x, name=self.DEFINITION_EMBEDDING)(embedding_difference)})
 
             # make sure we construct the correct type of model
@@ -360,7 +358,7 @@ def main():
 
     # task specification
     parser.add_argument("--prediction-task-config", metavar="PREDICTION_YAML", type=Path, required=True,
-                                    help="YAML file with the configuration for the prediction task")
+                        help="YAML file with the configuration for the prediction task")
     parser.add_argument("--definition-task-config", metavar="DEFINITION_YAML", type=Path,
                         help="YAML file with the configuration for the definition task")
 
@@ -433,11 +431,11 @@ def main():
                                            definition_task_config=args.definition_task_config,
                                            log_dir=args.log)
 
-    # training
-    trainer.run(total_epochs=run_config['total_epochs'],
-                batch_size=run_config['batch_size'],
-                split=run_config['split'],
-                split_random_seed=run_config['split_random_seed'])
+        # training happens inside the same distribution scope to ensure losses and metrics are created there
+        trainer.run(total_epochs=run_config['total_epochs'],
+                    batch_size=run_config['batch_size'],
+                    split=run_config['split'],
+                    split_random_seed=run_config['split_random_seed'])
 
 
 if __name__ == "__main__":
