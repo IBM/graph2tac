@@ -147,12 +147,12 @@ class LocalArgumentModel(tf.keras.Model):
         tactic_logits = y_pred[LocalArgumentPrediction.TACTIC_LOGITS]
         tactic_accuracy = tf.keras.metrics.sparse_categorical_accuracy(tactic, tactic_logits)
 
-        arguments = y[LocalArgumentPrediction.ARGUMENTS_LOGITS]
-        arguments_logits = y_pred[LocalArgumentPrediction.ARGUMENTS_LOGITS]
-        arguments_true = tf.squeeze(arguments.to_tensor(default_value=0), axis=1)
-        arguments_pred = _local_arguments_pred(arguments_true, arguments_logits)
-        arguments_seq_accuracy = tf.cast(tf.reduce_all(arguments_true == arguments_pred, axis=-1), dtype=tf.float32)
-        arguments_seq_mask = tf.cast(tf.reduce_min(arguments_true, axis=-1) > -1, dtype=tf.float32)
+        local_arguments = y[LocalArgumentPrediction.LOCAL_ARGUMENTS_LOGITS]
+        local_arguments_logits = y_pred[LocalArgumentPrediction.LOCAL_ARGUMENTS_LOGITS]
+        local_arguments_true = tf.squeeze(local_arguments.to_tensor(default_value=0), axis=1)
+        local_arguments_pred = _local_arguments_pred(local_arguments_true, local_arguments_logits)
+        arguments_seq_accuracy = tf.cast(tf.reduce_all(local_arguments_true == local_arguments_pred, axis=-1), dtype=tf.float32)
+        arguments_seq_mask = tf.cast(tf.reduce_min(local_arguments_true, axis=-1) > -1, dtype=tf.float32)
 
         self.arguments_seq_accuracy.update_state(arguments_seq_mask * arguments_seq_accuracy,
                                                  sample_weight=sample_weight)
@@ -453,7 +453,7 @@ class LocalArgumentPrediction(TacticPrediction):
     """
     Wrapper for the base tactic plus local argument prediction tasks.
     """
-    ARGUMENTS_LOGITS = 'arguments_logits'
+    LOCAL_ARGUMENTS_LOGITS = 'local_arguments_logits'
 
     ARGUMENTS_SEQ_ACCURACY = 'arguments_seq_accuracy'
     STRICT_ACCURACY = 'strict_accuracy'
@@ -481,7 +481,7 @@ class LocalArgumentPrediction(TacticPrediction):
                                                          **arguments_head_config)
 
         # we use trivial lambda layers to appropriately rename outputs
-        self.arguments_logits = tf.keras.layers.Lambda(lambda x: x, name=self.ARGUMENTS_LOGITS)
+        self.local_arguments_logits_output = tf.keras.layers.Lambda(lambda x: x, name=self.LOCAL_ARGUMENTS_LOGITS)
 
         # update checkpoint with new layers
         self.checkpoint.arguments_head = self.arguments_head
@@ -571,11 +571,11 @@ class LocalArgumentPrediction(TacticPrediction):
         local_arguments_logits = self._local_arguments_logits(scalar_proofstate_graph=scalar_proofstate_graph,
                                                               hidden_graph=hidden_graph,
                                                               hidden_state_sequences=hidden_state_sequences)
-        arguments_logits = self.arguments_logits(local_arguments_logits)
+        local_arguments_logits_output = self.local_arguments_logits_output(local_arguments_logits)
 
         return LocalArgumentModel(inputs=proofstate_graph,
-                                  outputs={LocalArgumentPrediction.TACTIC_LOGITS: tactic_logits,
-                                           LocalArgumentPrediction.ARGUMENTS_LOGITS: arguments_logits})
+                                  outputs={self.TACTIC_LOGITS: tactic_logits,
+                                           self.LOCAL_ARGUMENTS_LOGITS: local_arguments_logits_output})
 
     def create_inference_model(self, tactic_expand_bound: int) -> tf.keras.Model:
         """
@@ -614,34 +614,34 @@ class LocalArgumentPrediction(TacticPrediction):
         local_arguments_logits = self._local_arguments_logits(scalar_proofstate_graph, hidden_graph,
                                                               hidden_state_sequences)
 
-        arguments_logits = self._reshape_inference_logits(logits=local_arguments_logits,
-                                                          tactic_expand_bound=tactic_expand_bound)
+        local_arguments_logits_output = self._reshape_inference_logits(logits=local_arguments_logits,
+                                                                       tactic_expand_bound=tactic_expand_bound)
 
         return tf.keras.Model(inputs=proofstate_graph,
                               outputs={self.TACTIC: tf.transpose(top_k_indices),
                                        self.TACTIC_LOGITS: tf.transpose(top_k_values),
-                                       self.ARGUMENTS_LOGITS: arguments_logits
+                                       self.LOCAL_ARGUMENTS_LOGITS: local_arguments_logits_output
                                        })
 
     @staticmethod
     def create_input_output(graph_tensor: tfgnn.GraphTensor) -> Tuple[tfgnn.GraphTensor, Dict[str, Union[tf.Tensor, tf.RaggedTensor]]]:
         outputs = {LocalArgumentPrediction.TACTIC_LOGITS: graph_tensor.context['tactic'],
-                   LocalArgumentPrediction.ARGUMENTS_LOGITS: graph_tensor.context['local_arguments']}
+                   LocalArgumentPrediction.LOCAL_ARGUMENTS_LOGITS: graph_tensor.context['local_arguments']}
         return graph_tensor, outputs
 
     @staticmethod
     def loss() -> Dict[str, tf.keras.losses.Loss]:
         return {LocalArgumentPrediction.TACTIC_LOGITS: tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True),
-                LocalArgumentPrediction.ARGUMENTS_LOGITS: LocalArgumentSparseCategoricalCrossentropy()}
+                LocalArgumentPrediction.LOCAL_ARGUMENTS_LOGITS: LocalArgumentSparseCategoricalCrossentropy()}
 
     @staticmethod
     def metrics() -> Dict[str, Iterable[tf.keras.metrics.Metric]]:
         return {LocalArgumentPrediction.TACTIC_LOGITS: [tf.keras.metrics.SparseCategoricalAccuracy(name='accuracy')],
-                LocalArgumentPrediction.ARGUMENTS_LOGITS: [ArgumentSparseCategoricalAccuracy(name='accuracy')]}
+                LocalArgumentPrediction.LOCAL_ARGUMENTS_LOGITS: [ArgumentSparseCategoricalAccuracy(name='accuracy')]}
 
     def loss_weights(self) -> Dict[str, float]:
         return {LocalArgumentPrediction.TACTIC_LOGITS: 1.0,
-                LocalArgumentPrediction.ARGUMENTS_LOGITS: self._arguments_loss_coefficient}
+                LocalArgumentPrediction.LOCAL_ARGUMENTS_LOGITS: self._arguments_loss_coefficient}
 
     def callbacks(self) -> List[tf.keras.callbacks.Callback]:
         return [MixedMetricsCallback()]
@@ -651,7 +651,6 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
     """
     Wrapper for the base tactic plus local and global argument prediction tasks.
     """
-    LOCAL_ARGUMENTS_LOGITS = 'local_arguments_logits'
     GLOBAL_ARGUMENTS_LOGITS = 'global_arguments_logits'
 
     def __init__(self,
@@ -724,13 +723,13 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
             local_arguments_logits=local_arguments_logits,
             global_arguments_logits=global_arguments_logits)
 
-        normalized_local_arguments_logits = self.local_arguments_logits_output(normalized_local_arguments_logits)
-        normalized_global_arguments_logits = self.global_arguments_logits_output(normalized_global_arguments_logits)
+        local_arguments_logits_output = self.local_arguments_logits_output(normalized_local_arguments_logits)
+        global_arguments_logits_output = self.global_arguments_logits_output(normalized_global_arguments_logits)
 
         return GlobalArgumentModel(inputs=proofstate_graph,
                                    outputs={self.TACTIC_LOGITS: tactic_logits,
-                                            self.LOCAL_ARGUMENTS_LOGITS: normalized_local_arguments_logits,
-                                            self.GLOBAL_ARGUMENTS_LOGITS: normalized_global_arguments_logits})
+                                            self.LOCAL_ARGUMENTS_LOGITS: local_arguments_logits_output,
+                                            self.GLOBAL_ARGUMENTS_LOGITS: global_arguments_logits_output})
 
     def create_inference_model(self, tactic_expand_bound: int) -> tf.keras.Model:
         """
