@@ -6,7 +6,6 @@ import atexit
 import tensorflow as tf
 import tensorflow_gnn as tfgnn
 from pathlib import Path
-from math import ceil
 
 from graph2tac.tfgnn.dataset import Dataset, DataServerDataset, TFRecordDataset
 from graph2tac.tfgnn.tasks import PredictionTask, DefinitionTask, DefinitionMeanSquaredError
@@ -35,14 +34,18 @@ class Trainer:
                  keep_checkpoint_every_n_hours: Optional[int] = None,
                  qsaving: Optional[float] = None):
         """
+        The `Trainer` class should be instantiated under the same distribution scope as the prediction task (and the
+        definition task, if using). This is automatically the case when calling the `from_yaml_config` method, but
+        it is otherwise the end-user's responsibility.
+
         @param dataset: a `graph2tac.tfgnn.dataset.Dataset` object providing proof-states and definitions
         @param prediction_task: the `graph2tac.tfgnn.tasks.PredictionTask` to use for proofstates
         @param serialized_optimizer: the optimizer to use, as serialized by tf.keras.optimizers.serialize
         @param definition_task: the `graph2tac.tfgnn.tasks.DefinitionTask` to use for definitions (or `None` to skip)
         @param definition_loss_coefficient: the coefficient in front of the definition embeddings loss term
-        @param definition_loss_schedule: the parameters for the `DefinitionLossScheduler`, if using
-        @param l2_regularization_coefficient: the coefficient to use for L2 regularization
-        @param log_dir: the directory where TensorBoard logs and checkpoints should be saved
+        @param definition_loss_schedule: the parameters for the `DefinitionLossScheduler` (or `None` to skip scheduling)
+        @param l2_regularization_coefficient: the coefficient to use for L2 regularization (or `None` to not use it)
+        @param log_dir: the directory where TensorBoard logs and checkpoints should be saved (or `None` to skip logging)
         @param max_to_keep: the maximum number of checkpoints to keep (or `None` to keep all)
         @param keep_checkpoint_every_n_hours: optionally keep additional checkpoints every given number of hours
         @param qsaving: additionally keep checkpoints at epochs [qsaving^n] for n = 0, 1, 2, ...
@@ -50,7 +53,7 @@ class Trainer:
         # dataset
         self.dataset = dataset
         self.dataset_options = tf.data.Options()
-        if isinstance(prediction_task.prediction_model.distribute_strategy, tf.distribute.MirroredStrategy):
+        if isinstance(tf.distribute.get_strategy(), tf.distribute.MirroredStrategy):
             self.dataset_options.experimental_distribute.auto_shard_policy = tf.data.experimental.AutoShardPolicy.DATA
 
         # prediction task
@@ -88,14 +91,11 @@ class Trainer:
             self.checkpoint.definition_loss_coefficient = self.definition_loss_coefficient
 
         # train model
-        with prediction_task.prediction_model.distribute_strategy.scope():
-            if self.definition_task is not None:
-                self.train_model = self._create_train_model()
-            else:
-                self.train_model = self.prediction_task.prediction_model
+        self.train_model = self._create_train_model()
 
-            if self.l2_regularization_coefficient is not None:
-                self.train_model.add_loss(self._l2_regularization)
+        # regularization
+        if self.l2_regularization_coefficient is not None:
+            self.train_model.add_loss(self._l2_regularization)
 
         # logging
         self.log_dir = log_dir
@@ -160,6 +160,7 @@ class Trainer:
             logger.info(f'{filepath} already exists, renaming to {new_filepath}')
             filepath.rename(new_filepath)
         filepath.write_text(yaml.dump(config))
+
     def get_config(self):
         config = {
             'dataset': self.dataset.get_config(),
@@ -250,29 +251,31 @@ class Trainer:
         return defined_labels
 
     def _create_train_model(self):
-        (proofstate_graph,) = self.prediction_task.prediction_model.inputs
-        prediction_outputs = self.prediction_task.prediction_model(proofstate_graph)
+        train_model = self.prediction_task.create_train_model()
+        if self.definition_task is not None:
+            proofstate_graph = train_model.input
+            outputs = train_model.output
 
-        # compute definition body embeddings
-        definition_graph = tf.keras.layers.Input(type_spec=batch_graph_spec(vectorized_definition_graph_spec))
-        scalar_definition_graph = definition_graph.merge_batch_to_components()
-        definition_body_embeddings = self.definition_task(scalar_definition_graph)  # noqa [ PyCallingNonCallable ]
+            # compute definition body embeddings
+            definition_graph = tf.keras.layers.Input(type_spec=batch_graph_spec(vectorized_definition_graph_spec))
+            scalar_definition_graph = definition_graph.merge_batch_to_components()
+            definition_body_embeddings = self.definition_task(scalar_definition_graph)  # noqa [ PyCallingNonCallable ]
 
-        # get learned definition embeddings
-        defined_labels = self._get_defined_labels(definition_graph)
-        definition_id_embeddings = self.prediction_task.graph_embedding._node_embedding(defined_labels)
+            # get learned definition embeddings
+            defined_labels = self._get_defined_labels(definition_graph)
+            definition_id_embeddings = self.prediction_task.graph_embedding._node_embedding(defined_labels)
 
-        normalization = tf.sqrt(tf.cast(definition_graph.context['num_definitions'], dtype=tf.float32))
-        embedding_difference = (definition_body_embeddings - definition_id_embeddings) / tf.expand_dims(normalization, axis=-1)
+            normalization = tf.sqrt(tf.cast(definition_graph.context['num_definitions'], dtype=tf.float32))
+            embedding_difference = (definition_body_embeddings - definition_id_embeddings) / tf.expand_dims(normalization, axis=-1)
 
-        # this is an ugly hack to preserve the output names
-        outputs = {name: tf.keras.layers.Lambda(lambda x: x, name=name)(output) for name, output in prediction_outputs.items()}
-        outputs.update({self.DEFINITION_EMBEDDING: tf.keras.layers.Lambda(lambda x: x, name=self.DEFINITION_EMBEDDING)(embedding_difference)})
+            # this is an ugly hack to preserve the output names
+            # outputs = {name: tf.keras.layers.Lambda(lambda x: x, name=name)(output) for name, output in prediction_outputs.items()}
+            outputs.update({self.DEFINITION_EMBEDDING: tf.keras.layers.Lambda(lambda x: x, name=self.DEFINITION_EMBEDDING)(embedding_difference)})
 
-        # make sure we construct the correct type of model
-        model_constructor = type(self.prediction_task.prediction_model)
-        model = model_constructor(inputs=(proofstate_graph, definition_graph), outputs=outputs)
-        return model
+            # make sure we construct the correct type of model
+            model_constructor = type(train_model)
+            train_model = model_constructor(inputs=(proofstate_graph, definition_graph), outputs=outputs)
+        return train_model
 
     def _loss(self) -> Dict[str, tf.keras.losses.Loss]:
         loss = self.prediction_task.loss()
@@ -406,6 +409,7 @@ def main():
         strategy = tf.distribute.MirroredStrategy()
 
         # fix a tf.distribute bug upon exiting training with MirroredStrategy
+        # TODO: test whether this is still necessary in TF 2.9.1
         atexit.register(strategy._extended._collective_ops._pool.close)
     elif args.gpu is not None:
         strategy = tf.distribute.OneDeviceStrategy(args.gpu)
@@ -417,10 +421,10 @@ def main():
         parser.error(f'--prediction-task-config {args.prediction_task_config} must be a YAML file')
 
     if args.definition_task_config is not None and not args.definition_task_config.is_file():
-        parser.error(f'--definition-task-config {args.definition_task_config} should be a YAML file')
+        parser.error(f'--definition-task-config {args.definition_task_config} must be a YAML file')
 
     if not args.trainer_config.is_file():
-        parser.error(f'--trainer-config {args.trainer_config} should be a YAML file')
+        parser.error(f'--trainer-config {args.trainer_config} must be a YAML file')
 
     with strategy.scope():
         trainer = Trainer.from_yaml_config(dataset=dataset,
