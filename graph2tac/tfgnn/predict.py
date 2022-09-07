@@ -9,9 +9,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from graph2tac.loader.data_server import GraphConstants, LoaderProofstate, LoaderDefinition
-from graph2tac.tfgnn.graph_schema import strip_graph
 from graph2tac.tfgnn.dataset import Dataset, DataServerDataset
-from graph2tac.tfgnn.tasks import PredictionTask, GlobalArgumentPrediction, DefinitionTask, BASE_TACTIC_PREDICTION, LOCAL_ARGUMENT_PREDICTION, GLOBAL_ARGUMENT_PREDICTION
+from graph2tac.tfgnn.tasks import PredictionTask, TacticPrediction, DefinitionTask, GLOBAL_ARGUMENT_PREDICTION
 from graph2tac.tfgnn.models import GraphEmbedding, LogitsFromEmbeddings
 from graph2tac.tfgnn.train import Trainer
 from graph2tac.common import logger
@@ -74,8 +73,8 @@ class GlobalArgumentInference(Inference):
     global_arguments: tf.Tensor
 
     def numpy(self) -> np.ndarray:
-        top_row = np.insert(np.where(self.global_arguments==-1, 0, 1), 0, self.tactic_id)
-        bottom_row = np.insert(np.where(self.global_arguments==-1, self.local_arguments, self.global_arguments), 0, self.tactic_id)
+        top_row = np.insert(np.where(self.global_arguments == -1, 0, 1), 0, self.tactic_id)
+        bottom_row = np.insert(np.where(self.global_arguments == -1, self.local_arguments, self.global_arguments), 0, self.tactic_id)
         return np.stack([top_row, bottom_row], axis=-1).astype(np.uint32)
 
     def evaluate(self, tactic_id: int, local_arguments: tf.Tensor, global_arguments: tf.Tensor) -> bool:
@@ -150,6 +149,9 @@ class TFGNNPredict(Predict):
         """
         self.numpy_output = numpy_output
 
+        # initialize inference model cache (most of the time we always use one model for a fixed tactic_expand_bound)
+        self._inference_model_cache = {}
+
         # create dummy dataset for pre-processing purposes
         graph_constants_filepath = log_dir / 'config' / 'graph_constants.yaml'
         with graph_constants_filepath.open('r') as yml_file:
@@ -167,20 +169,18 @@ class TFGNNPredict(Predict):
         self._dummy_tactic_id = tf.argmin(graph_constants.tactic_index_to_numargs)  # num_arguments == 0
 
         # the decoding mechanism currently does not support tactics with more than NUMPY_NDIM_LIMIT
-        self._tactic_mask = tf.constant(graph_constants.tactic_index_to_numargs<NUMPY_NDIM_LIMIT)
+        self.fixed_tactic_mask = tf.constant(graph_constants.tactic_index_to_numargs < NUMPY_NDIM_LIMIT)
 
         # mask tactics explicitly excluded from predictions
         if exclude_tactics is not None:
             exclude_tactics = set(exclude_tactics)
-            self._tactic_mask &= np.array([(tactic_name.decode() not in exclude_tactics) for tactic_name in graph_constants.tactic_index_to_string])
-
-        # when doing local argument predictions, if the local context is empty we mask all tactics which take arguments
-        self._tactic_mask_no_arguments = tf.constant(graph_constants.tactic_index_to_numargs == 0)
+            self.fixed_tactic_mask &= tf.constant([(tactic_name.decode() not in exclude_tactics) for tactic_name in graph_constants.tactic_index_to_string])
 
         # create prediction task
         prediction_yaml_filepath = log_dir / 'config' / 'prediction.yaml'
         self.prediction_task = PredictionTask.from_yaml_config(graph_constants=dataset.graph_constants(),
                                                                yaml_filepath=prediction_yaml_filepath)
+        self.prediction_task_type = self.prediction_task.get_config()['prediction_task_type']
 
         # create definition task
         definition_yaml_filepath = log_dir / 'config' / 'definition.yaml'
@@ -215,17 +215,6 @@ class TFGNNPredict(Predict):
             load_status.expect_partial().assert_nontrivial_match().assert_existing_objects_matched().run_restore_ops()
             logger.info(f'restored checkpoint #{checkpoint_number}!')
 
-        # choose the prediction method according to the task type
-        prediction_task_type = self.prediction_task.get_config().get('prediction_task_type')
-        if prediction_task_type == BASE_TACTIC_PREDICTION:
-            self._batch_ranked_predictions = self._base_tactic_prediction
-        elif prediction_task_type == LOCAL_ARGUMENT_PREDICTION:
-            self._batch_ranked_predictions = self._local_argument_prediction
-        elif prediction_task_type == GLOBAL_ARGUMENT_PREDICTION:
-            self._batch_ranked_predictions = self._global_argument_prediction
-        else:
-            raise ValueError(f'{prediction_task_type} is not a supported prediction task type')
-
     @staticmethod
     def _extend_graph_embedding(graph_embedding: GraphEmbedding, new_node_label_num: int) -> GraphEmbedding:
         new_graph_embedding = GraphEmbedding(node_label_num=new_node_label_num,
@@ -242,6 +231,10 @@ class TFGNNPredict(Predict):
 
     @predict_api_debugging
     def initialize(self, global_context: Optional[List[int]] = None) -> None:
+        if self.prediction_task_type != GLOBAL_ARGUMENT_PREDICTION:
+            # no need to update anything if we are not going to use the global context
+            return
+
         if global_context is not None:
             # update the global context
             self._graph_constants.global_context = tf.constant(global_context, dtype=tf.int32)
@@ -257,12 +250,14 @@ class TFGNNPredict(Predict):
                     self.definition_task._graph_embedding = new_graph_embedding
                 self._graph_constants.node_label_num = new_node_label_num
 
-            # update the global arguments logits head (always necessary, because the local context may shrink!)
+            # update the global arguments logits head (always necessary, because the global context may shrink!)
             self.prediction_task.global_arguments_logits = LogitsFromEmbeddings(
                 embedding_matrix=self.prediction_task.graph_embedding._node_embedding.embeddings,
-                valid_indices=tf.constant(self._graph_constants.global_context, dtype=tf.int32),
-                name=GlobalArgumentPrediction.GLOBAL_ARGUMENTS_LOGITS
+                valid_indices=tf.constant(self._graph_constants.global_context, dtype=tf.int32)
             )
+
+            # clear the inference model cache to force re-creation of the inference models using the new layers
+            self._inference_model_cache = {}
 
     @predict_api_debugging
     def compute_new_definitions(self, new_cluster_subgraphs: List[LoaderDefinition]) -> None:
@@ -335,210 +330,90 @@ class TFGNNPredict(Predict):
         combination_values = np.sum(logits[first_index, arg_combinations], axis=1)
         return arg_combinations, combination_values
 
-    @staticmethod
-    def _expand_local_arguments_combinations(tactic_id: int,
-                                             arg_combinations: np.ndarray,
-                                             combination_values: np.ndarray
-                                             ) -> List[Inference]:
-        """
-        Produces a list of `Prediction` objects with various local argument combinations for a given tactic.
-        """
-        return [LocalArgumentInference(tactic_id=int(tactic_id),
-                                       local_arguments=tf.cast(arguments, dtype=tf.int64),
-                                       value=float(value))
-                for arguments, value in zip(arg_combinations, combination_values)]
+    @classmethod
+    def _expand_arguments_logits(cls,
+                                 total_expand_bound: int,
+                                 num_arguments: int,
+                                 local_context_size: int,
+                                 global_context_size: int,
+                                 tactic: tf.Tensor,
+                                 tactic_logits: tf.Tensor,
+                                 local_arguments_logits: Optional[tf.Tensor] = None,
+                                 global_arguments_logits: Optional[tf.Tensor] = None
+                                 ) -> List[Inference]:
+        if local_arguments_logits is None:
+            # this is a base tactic prediction
+            return [TacticInference(value=float(tactic_logits.numpy()), tactic_id=int(tactic.numpy()))]
+        elif global_arguments_logits is None:
+            # this is a base tactic plus local arguments prediction
+            logits = local_arguments_logits[:num_arguments, :local_context_size]
+            arg_combinations, combination_values = cls._logits_decoder(logits=logits,
+                                                                       total_expand_bound=total_expand_bound)
+            combination_values += tactic_logits.numpy()
+            return [LocalArgumentInference(value=float(value),
+                                           tactic_id=int(tactic.numpy()),
+                                           local_arguments=local_arguments)
+                    for local_arguments, value in zip(tf.cast(arg_combinations, dtype=tf.int64), combination_values)]
+        else:
+            # this is a base tactic plus local and global arguments prediction
+            combined_arguments_logits = tf.concat([global_arguments_logits[:num_arguments, :], local_arguments_logits[:num_arguments, :local_context_size]], axis=-1)
+            arg_combinations, combination_values = cls._logits_decoder(logits=combined_arguments_logits,
+                                                                       total_expand_bound=total_expand_bound)
+            combination_values += tactic_logits.numpy()
+            return [GlobalArgumentInference(value=float(value),
+                                            tactic_id=int(tactic.numpy()),
+                                            local_arguments=tf.where(arguments < global_context_size, -1, arguments - global_context_size),
+                                            global_arguments=tf.where(arguments < global_context_size, arguments, -1))
+                    for arguments, value in zip(tf.cast(arg_combinations, dtype=tf.int64), combination_values)]
 
-    @staticmethod
-    def _expand_global_arguments_combinations(tactic_id: int,
-                                              arg_combinations: np.ndarray,
-                                              combination_values: np.ndarray,
-                                              global_context_size: int
-                                              ):
-        """
-        Produces a list of `Prediction` objects with various local and global argument combinations for a given tactic.
-        """
-        return [GlobalArgumentInference(tactic_id=int(tactic_id),
-                                        local_arguments=tf.where(arguments < global_context_size, -1, arguments - global_context_size),
-                                        global_arguments=tf.where(arguments < global_context_size, arguments, -1),
-                                        value=float(value))
-                for arguments, value in zip(tf.cast(arg_combinations, dtype=tf.int64), combination_values)]
+    def _inference_model(self, tactic_expand_bound: int) -> tf.keras.Model:
+        if tactic_expand_bound not in self._inference_model_cache.keys():
+            inference_model = self.prediction_task.create_inference_model(tactic_expand_bound=tactic_expand_bound,
+                                                                          graph_constants=self._graph_constants)
+            self._inference_model_cache[tactic_expand_bound] = inference_model
+        return self._inference_model_cache[tactic_expand_bound]
 
-    def _top_k_tactics(self,
-                       scalar_proofstate_graph: tfgnn.GraphTensor,
-                       tactic_expand_bound: int,
-                       mask_tactics_with_arguments: tf.Tensor,
-                       allowed_tactics
-                       ):
-        """
-        Returns the top `tactic_expand_bound` tactics for each of the proof-states in the input.
-        This is the first stage of any  prediction process.
-        """
-        # get the graph tensor with hidden states
-        bare_graph = strip_graph(scalar_proofstate_graph)
-        embedded_graph = self.prediction_task.graph_embedding(bare_graph, training=False)
-        hidden_graph = self.prediction_task.gnn(embedded_graph, training=False)
+    def _batch_ranked_predictions(self,
+                                  proofstate_graph: tfgnn.GraphTensor,
+                                  tactic_expand_bound: int,
+                                  total_expand_bound: int,
+                                  tactic_mask: tf.Tensor
+                                  ) -> List[PredictOutput]:
 
-        # predict the tactic embedding and logits
-        tactic_embedding = self.prediction_task.tactic_head(hidden_graph, training=False)
-        tactic_logits = self.prediction_task.tactic_logits_from_embeddings(tactic_embedding, training=False)
+        inference_model = self._inference_model(tactic_expand_bound)
 
-        # mask and normalize the tactic logits
-        tactic_mask = tf.where(tf.expand_dims(mask_tactics_with_arguments, axis=1),
-                               tf.expand_dims(self._tactic_mask_no_arguments, axis=0),
-                               tf.expand_dims(self._tactic_mask, axis=0))
-        if allowed_tactics is not None:
-            tactic_num = self._graph_constants.tactic_num
-            allowed_tactics_mask = tf.reduce_any(tf.cast(tf.one_hot(allowed_tactics, tactic_num), tf.bool), axis=0)
-            tactic_mask &= tf.expand_dims(allowed_tactics_mask, axis=0)
+        inference_output = inference_model({self.prediction_task.PROOFSTATE_GRAPH: proofstate_graph,
+                                            self.prediction_task.TACTIC_MASK: tactic_mask})
 
-        tactic_expand_bound = min(tactic_expand_bound, tf.reduce_sum(tf.cast(tactic_mask, tf.int32)))
-        tactic_logits = tf.math.log_softmax(tactic_logits + tf.math.log(tf.cast(tactic_mask, tf.float32)), axis=-1)
+        _, local_context_sizes = proofstate_graph.context['local_context_ids'].nested_row_lengths()
 
-        # get the top tactic_expand_bound tactics, their logits and their number of arguments
-        top_k = tf.math.top_k(tactic_logits, k=tactic_expand_bound)
-        return top_k, hidden_graph
+        batch_size = int(proofstate_graph.total_num_components.numpy())
 
-    def _base_tactic_prediction(self,
-                                scalar_proofstate_graph: tfgnn.GraphTensor,
-                                tactic_expand_bound: int,
-                                total_expand_bound: int,
-                                allowed_model_tactics: Optional[Iterable[int]] = None
-                                ) -> List[PredictOutput]:
-        """
-        Produces base tactic predictions with no arguments (for the base tactic prediction task).
-        """
+        predict_outputs = [PredictOutput(state=None, predictions=[]) for _ in range(batch_size)]
 
-        # in principle, we should never predict tactics which require arguments
-        # mask_tactics_with_arguments = tf.ones(shape=(scalar_proofstate_graph.num_components,), dtype=tf.bool)
-        mask_tactics_with_arguments = tf.zeros(shape=(scalar_proofstate_graph.num_components,), dtype=tf.bool)
+        # go over the tactic_expand_bound batches
+        for proofstate_batch_output in zip(*inference_output.values()):
+            # go over the individual proofstates in a batch
+            for predict_output, proofstate_output, local_context_size in zip(predict_outputs,
+                                                                             zip(*proofstate_batch_output),
+                                                                             local_context_sizes):
+                inference_data = {output_name: output_value for output_name, output_value in zip(inference_output.keys(), proofstate_output)}
+                num_arguments = self._graph_constants.tactic_index_to_numargs[inference_data[TacticPrediction.TACTIC]]
+                predictions = self._expand_arguments_logits(total_expand_bound=total_expand_bound,
+                                                            num_arguments=num_arguments,
+                                                            local_context_size=local_context_size,
+                                                            global_context_size=self._graph_constants.global_context.size,
+                                                            **inference_data)
+                predict_output.predictions.extend(filter(lambda inference: inference.value > -float('inf'), predictions))
+        return predict_outputs
 
-        top_k, _ = self._top_k_tactics(scalar_proofstate_graph=scalar_proofstate_graph,
-                                       tactic_expand_bound=tactic_expand_bound,
-                                       mask_tactics_with_arguments=mask_tactics_with_arguments,
-                                       allowed_tactics=allowed_model_tactics)
-
-        batch_predictions = []
-        for top_k_tactics, top_k_logits in zip(top_k.indices, top_k.values):
-            predictions = [TacticInference(tactic_id=int(tactic_id), value=float(value))
-                           for tactic_id, value in zip(top_k_tactics, top_k_logits)]
-            batch_predictions.append(PredictOutput(state=None, predictions=predictions))
-        return batch_predictions
-
-    def _local_argument_prediction(self,
-                                   scalar_proofstate_graph: tfgnn.GraphTensor,
-                                   tactic_expand_bound: int,
-                                   total_expand_bound: int,
-                                   allowed_model_tactics: Optional[Iterable[int]] = None
-                                   ) -> List[PredictOutput]:
-        """
-        Produces base tactic and local argument predictions (for the local argument prediction task).
-        """
-        # get the batch size
-        batch_size = scalar_proofstate_graph.num_components.numpy()
-
-        # get the local context node ids from the input graph
-        batch_local_context_ids = scalar_proofstate_graph.context['local_context_ids']
-
-        # we should only use tactics with arguments when the local context is non-empty
-        mask_tactics_with_arguments = batch_local_context_ids.row_lengths() == 0
-
-        # get the top tactic_expand_bound tactics and input/output graphs
-        top_k, hidden_graph = self._top_k_tactics(scalar_proofstate_graph=scalar_proofstate_graph,
-                                                  tactic_expand_bound=tactic_expand_bound,
-                                                  mask_tactics_with_arguments=mask_tactics_with_arguments,
-                                                  allowed_tactics=allowed_model_tactics)
-
-        # get the number of arguments for each tactic (as with top_k elements, the shape is [batch_size, k])
-        top_k_num_arguments = tf.gather(tf.constant(self.prediction_task._graph_constants.tactic_index_to_numargs, dtype=tf.int32), top_k.indices)
-
-        batch_predictions = [PredictOutput(state=None, predictions=[]) for _ in range(batch_size)]
-        for batch_tactic, batch_tactic_logits, batch_num_arguments in zip(tf.unstack(top_k.indices, axis=1),
-                                                                          tf.unstack(top_k.values, axis=1),
-                                                                          tf.unstack(top_k_num_arguments, axis=1)):
-            if tf.reduce_sum(batch_num_arguments) > 0:
-                # obtain hidden states for all the arguments
-                tactic_embedding = self.prediction_task.tactic_embedding(batch_tactic)
-                hidden_state_sequences = self.prediction_task.arguments_head((hidden_graph, tactic_embedding, batch_num_arguments), training=False)
-
-                # compute logits for all arguments while masking out non-local-context nodes
-                batch_arguments_logits = _local_arguments_logits(scalar_proofstate_graph, hidden_graph, hidden_state_sequences)
-                for state_prediction, tactic_id, tactic_value, num_arguments, arguments_logits, local_context_ids in zip(batch_predictions, batch_tactic, batch_tactic_logits, batch_num_arguments, batch_arguments_logits, batch_local_context_ids):
-                    local_context_length = tf.shape(local_context_ids)[0]
-                    local_context_logits = arguments_logits[:num_arguments,:local_context_length]
-                    arg_combinations, combination_values = self._logits_decoder(local_context_logits,
-                                                                                total_expand_bound=total_expand_bound)
-                    combination_values += tactic_value.numpy()
-
-                    state_prediction.predictions.extend(
-                        self._expand_local_arguments_combinations(tactic_id=int(tactic_id),
-                                                                  arg_combinations=arg_combinations,
-                                                                  combination_values=combination_values)
-                    )
-            else:
-                for state_prediction, tactic_id, tactic_value in zip(batch_predictions, batch_tactic, batch_tactic_logits):
-                    prediction = LocalArgumentInference(tactic_id=int(tactic_id),
-                                                         local_arguments=tf.constant([], dtype=tf.int64),
-                                                         value=float(tactic_value))
-                    state_prediction.predictions.append(prediction)
-        return batch_predictions
-
-    def _global_argument_prediction(self,
-                                    scalar_proofstate_graph: tfgnn.GraphTensor,
-                                    tactic_expand_bound: int,
-                                    total_expand_bound: int,
-                                    allowed_model_tactics: Optional[Iterable[int]] = None
-                                    ) -> List[PredictOutput]:
-        # get the batch size
-        batch_size = scalar_proofstate_graph.num_components.numpy()
-
-        # TODO: Here we should check whether the local and global context are both empty (unlikely)
-        mask_tactics_with_arguments = tf.zeros(shape=(scalar_proofstate_graph.num_components,), dtype=bool)
-
-        # get the top tactic_expand_bound tactics and input/output graphs
-        top_k, hidden_graph = self._top_k_tactics(scalar_proofstate_graph=scalar_proofstate_graph,
-                                                  tactic_expand_bound=tactic_expand_bound,
-                                                  mask_tactics_with_arguments=mask_tactics_with_arguments,
-                                                  allowed_tactics=allowed_model_tactics)
-
-        # get the local context node ids from the input graph
-        batch_local_context_ids = scalar_proofstate_graph.context['local_context_ids']
-
-        # get the number of arguments for each tactic (as with top_k elements, the shape is [batch_size, k])
-        top_k_num_arguments = tf.gather(tf.constant(self.prediction_task._graph_constants.tactic_index_to_numargs, dtype=tf.int32), top_k.indices)
-
-        batch_predictions = [PredictOutput(state=None, predictions=[]) for _ in range(batch_size)]
-        for batch_tactic, batch_tactic_logits, batch_num_arguments in zip(tf.unstack(top_k.indices, axis=1),
-                                                                          tf.unstack(top_k.values, axis=1),
-                                                                          tf.unstack(top_k_num_arguments, axis=1)):
-            if tf.reduce_sum(batch_num_arguments) > 0:
-                tactic_embedding = self.prediction_task.tactic_embedding(batch_tactic)
-                hidden_state_sequences = self.prediction_task.arguments_head((hidden_graph, tactic_embedding, batch_num_arguments), training=False)
-
-                batch_local_arguments_logits = _local_arguments_logits(scalar_proofstate_graph, hidden_graph, hidden_state_sequences)
-
-                batch_global_arguments_logits = self.prediction_task.global_arguments_logits(hidden_state_sequences.to_tensor())
-                global_context_size = int(tf.shape(batch_global_arguments_logits)[-1])
-                for state_prediction, tactic_id, tactic_value, num_arguments, local_arguments_logits, global_arguments_logits, local_context_ids in zip(batch_predictions, batch_tactic, batch_tactic_logits, batch_num_arguments, batch_local_arguments_logits, batch_global_arguments_logits, batch_local_context_ids):
-                    local_context_length = tf.shape(local_context_ids)[0]
-                    local_context_logits = local_arguments_logits[:num_arguments, :local_context_length]
-                    logits = tf.concat([global_arguments_logits[:num_arguments,:], local_context_logits], axis=-1)
-                    arg_combinations, combination_values = self._logits_decoder(logits,
-                                                                                total_expand_bound=total_expand_bound)
-                    combination_values += tactic_value.numpy()
-                    state_prediction.predictions.extend(
-                        self._expand_global_arguments_combinations(tactic_id=int(tactic_id),
-                                                                   arg_combinations=arg_combinations,
-                                                                   combination_values=combination_values,
-                                                                   global_context_size=global_context_size)
-                    )
-            else:
-                for state_prediction, tactic_id, tactic_value in zip(batch_predictions, batch_tactic, batch_tactic_logits):
-                    prediction = GlobalArgumentInference(tactic_id=int(tactic_id),
-                                                         local_arguments=tf.constant([], dtype=tf.int64),
-                                                         global_arguments=tf.constant([], dtype=tf.int64),
-                                                         value=float(tactic_value))
-                    state_prediction.predictions.append(prediction)
-        return batch_predictions
+    def _tactic_mask_from_allowed_model_tactics(self, allowed_model_tactics: Optional[Iterable[int]]) -> tf.Tensor:
+        tactic_num = self._graph_constants.tactic_num
+        if allowed_model_tactics is not None:
+            tactic_mask = tf.reduce_any(tf.cast(tf.one_hot(allowed_model_tactics, tactic_num), tf.bool), axis=0)
+        else:
+            tactic_mask = tf.ones(shape=(tactic_num,), dtype=tf.bool)
+        return tactic_mask & self.fixed_tactic_mask
 
     def batch_ranked_predictions(self,
                                  states: List[LoaderProofstate],
@@ -546,19 +421,24 @@ class TFGNNPredict(Predict):
                                  total_expand_bound: int,
                                  allowed_model_tactics: Optional[Iterable[int]] = None
                                  ) -> List[Union[PredictOutput, Tuple[List[np.ndarray], np.ndarray]]]:
-        # convert the input to a batch of graph tensor (rank 1)
+        # convert the input to a batch of graph tensors (rank 1)
         proofstate_graph = self._make_dummy_proofstate_dataset(states).batch(len(states)).get_single_element()
 
-        # convert into a scalar graph (rank 0)
-        scalar_proofstate_graph = proofstate_graph.merge_batch_to_components()
+        # create the tactic mask input
+        tactic_mask = self._tactic_mask_from_allowed_model_tactics(allowed_model_tactics)
+        tactic_mask = tf.repeat(tf.expand_dims(tactic_mask, axis=0), repeats=len(states), axis=0)
 
-        batch_predict_output = self._batch_ranked_predictions(scalar_proofstate_graph=scalar_proofstate_graph,
+        # make predictions
+        batch_predict_output = self._batch_ranked_predictions(proofstate_graph=proofstate_graph,
                                                               tactic_expand_bound=tactic_expand_bound,
                                                               total_expand_bound=total_expand_bound,
-                                                              allowed_model_tactics=allowed_model_tactics)
+                                                              tactic_mask=tactic_mask)
+
+        # fill in the states in loader format
         for state, predict_output in zip(states, batch_predict_output):
             predict_output.state = state
 
+        # return predictions in the appropriate format
         if not self.numpy_output:
             return batch_predict_output
         else:
@@ -591,6 +471,9 @@ class TFGNNPredict(Predict):
                   search_expand_bound: Optional[int] = None,
                   allowed_model_tactics: Optional[Iterable[int]] = None
                   ) -> Tuple[float, float]:
+
+        tactic_mask = self._tactic_mask_from_allowed_model_tactics(allowed_model_tactics)
+
         predictions = []
         tactic = []
         local_arguments = []
@@ -598,10 +481,11 @@ class TFGNNPredict(Predict):
         names = []
         for proofstate_graph in iter(proofstate_graph_dataset.batch(batch_size)):
             scalar_proofstate_graph = proofstate_graph.merge_batch_to_components()
-            batch_predict_output = self._batch_ranked_predictions(scalar_proofstate_graph=scalar_proofstate_graph,
+            batch_tactic_mask = tf.repeat(tf.expand_dims(tactic_mask, axis=0), repeats=proofstate_graph.total_num_components, axis=0)
+            batch_predict_output = self._batch_ranked_predictions(proofstate_graph=proofstate_graph,
                                                                   tactic_expand_bound=tactic_expand_bound,
                                                                   total_expand_bound=total_expand_bound,
-                                                                  allowed_model_tactics=allowed_model_tactics)
+                                                                  tactic_mask=batch_tactic_mask)
             predictions.extend(batch_predict_output)
             tactic.append(scalar_proofstate_graph.context['tactic'])
             local_arguments.append(scalar_proofstate_graph.context['local_arguments'])
@@ -635,13 +519,15 @@ class TFGNNPredict(Predict):
         states, actions = zip(*state_action_pairs)
         proofstate_graph_dataset = self._make_dummy_proofstate_dataset(states).batch(batch_size)
 
+        tactic_mask = self._tactic_mask_from_allowed_model_tactics(allowed_model_tactics)
+
         predictions = []
         for proofstate_graph in iter(proofstate_graph_dataset):
-            scalar_proofstate_graph = proofstate_graph.merge_batch_to_components()
-            batch_predict_output = self._batch_ranked_predictions(scalar_proofstate_graph=scalar_proofstate_graph,
+            batch_tactic_mask = tf.repeat(tf.expand_dims(tactic_mask, axis=0), repeats=proofstate_graph.total_num_components, axis=0)
+            batch_predict_output = self._batch_ranked_predictions(proofstate_graph=proofstate_graph,
                                                                   tactic_expand_bound=tactic_expand_bound,
                                                                   total_expand_bound=total_expand_bound,
-                                                                  allowed_model_tactics=allowed_model_tactics)
+                                                                  tactic_mask=batch_tactic_mask)
             predictions.extend(batch_predict_output)
 
         per_proofstate = []

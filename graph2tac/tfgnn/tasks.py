@@ -227,9 +227,11 @@ class PredictionTask:
     """
     create_input_output: Callable[[tfgnn.GraphTensor], Tuple[tfgnn.GraphTensor, Union[tf.Tensor, tf.RaggedTensor]]]
     create_train_model: Callable[[], tf.keras.Model]
-    create_inference_model: Callable[[int], tf.keras.Model]
+    create_inference_model: Callable[..., tf.keras.Model]
     loss: Callable[[], Dict[str, tf.keras.losses.Loss]]
     metrics: Callable[[], Dict[str, List[tf.keras.metrics.Metric]]]
+
+    PROOFSTATE_GRAPH = 'proofstate_graph'
 
     def __init__(self,
                  graph_constants: GraphConstants,
@@ -276,7 +278,9 @@ class PredictionTask:
         }
 
     @staticmethod
-    def from_yaml_config(graph_constants: GraphConstants, yaml_filepath: Path) -> "PredictionTask":
+    def from_yaml_config(graph_constants: GraphConstants,
+                         yaml_filepath: Path
+                         ) -> Union["TacticPrediction", "LocalArgumentPrediction", "GlobalArgumentPrediction"]:
         """
         Create an instance of this class from a YAML configuration file.
 
@@ -321,8 +325,9 @@ class TacticPrediction(PredictionTask):
     """
     Wrapper for the base tactic prediction task.
     """
-    TACTIC_LOGITS = 'tactic_logits'
     TACTIC: str = 'tactic'
+    TACTIC_LOGITS = 'tactic_logits'
+    TACTIC_MASK = 'tactic_mask'
 
     def __init__(self,
                  tactic_embedding_size: int,
@@ -403,36 +408,41 @@ class TacticPrediction(PredictionTask):
         """
 
         proofstate_graph = tf.keras.layers.Input(type_spec=batch_graph_spec(proofstate_graph_spec),
-                                                 name='proofstate_graph')
+                                                 name=self.PROOFSTATE_GRAPH)
         scalar_proofstate_graph = proofstate_graph.merge_batch_to_components()
 
         tactic_logits, _ = self._tactic_logits_and_hidden_graph(scalar_proofstate_graph)
 
         return tf.keras.Model(inputs=proofstate_graph, outputs={TacticPrediction.TACTIC_LOGITS: tactic_logits})
 
-    def create_inference_model(self, tactic_expand_bound: int):
+    def create_inference_model(self, tactic_expand_bound: int, graph_constants: GraphConstants) -> tf.keras.Model:
         """
         Combines a GNN component with a tactic head to produce an end-to-end model for the base tactic prediction task.
         The resulting model is for inference purposes, and produces tactic predictions and logits.
 
+        @warning: we do not use the GraphConstants saved in this task since during inference these may not be up-to-date
         @tactic_expand_bound: the number of base tactic predictions to produce for each proofstate
+        @graph_constants: the graph constants to use during inference (with a possibly updated global context)
         @return: a keras model consuming proof-state graphs and producing tactic predictions and logits
         """
         proofstate_graph = tf.keras.layers.Input(type_spec=batch_graph_spec(proofstate_graph_spec),
-                                                 name='proofstate_graph')
+                                                 name=self.PROOFSTATE_GRAPH)
         scalar_proofstate_graph = proofstate_graph.merge_batch_to_components()
+
+        tactic_mask = tf.keras.Input(shape=(graph_constants.tactic_num,), dtype=tf.bool, name=self.TACTIC_MASK)
 
         tactic_logits, _ = self._tactic_logits_and_hidden_graph(scalar_proofstate_graph)
 
-        # TODO: introduce allowed tactics
-        no_argument_tactics_mask = self._graph_constants.tactic_index_to_numargs == 0
-        tactic_mask = tf.repeat(tf.expand_dims(no_argument_tactics_mask, axis=0), proofstate_graph.total_num_components,
-                                axis=0)
+        # [tactic_num, ]
+        no_argument_tactics_mask = graph_constants.tactic_index_to_numargs == 0
+
+        # [batch_size, tactic_num]
+        proofstate_tactic_mask = tf.repeat(tf.expand_dims(no_argument_tactics_mask, axis=0), proofstate_graph.total_num_components, axis=0)
 
         top_k_indices, top_k_values = self._top_k_tactics(tactic_logits=tactic_logits,
-                                                          tactic_mask=tactic_mask,
+                                                          tactic_mask=proofstate_tactic_mask & tactic_mask,
                                                           tactic_expand_bound=tactic_expand_bound)
-        return tf.keras.Model(inputs=proofstate_graph,
+        return tf.keras.Model(inputs={self.PROOFSTATE_GRAPH: proofstate_graph, self.TACTIC_MASK: tactic_mask},
                               outputs={self.TACTIC: tf.transpose(top_k_indices),
                                        self.TACTIC_LOGITS: tf.transpose(top_k_values)})
 
@@ -560,7 +570,7 @@ class LocalArgumentPrediction(TacticPrediction):
         @return: a keras model consuming graphs and producing tactic logits and local arguments logits
         """
         proofstate_graph = tf.keras.layers.Input(type_spec=batch_graph_spec(proofstate_graph_spec),
-                                                 name='proofstate_graph')
+                                                 name=self.PROOFSTATE_GRAPH)
         scalar_proofstate_graph = proofstate_graph.merge_batch_to_components()
 
         tactic_logits, hidden_graph = self._tactic_logits_and_hidden_graph(scalar_proofstate_graph)
@@ -577,30 +587,39 @@ class LocalArgumentPrediction(TacticPrediction):
                                   outputs={self.TACTIC_LOGITS: tactic_logits,
                                            self.LOCAL_ARGUMENTS_LOGITS: local_arguments_logits_output})
 
-    def create_inference_model(self, tactic_expand_bound: int) -> tf.keras.Model:
+    def create_inference_model(self, tactic_expand_bound: int, graph_constants: GraphConstants) -> tf.keras.Model:
         """
         Combines a GNN component with a tactic head and an arguments head to produce an end-to-end model for the
         local argument prediction task. The resulting model is weakly autoregressive and for inference purposes only,
         producing base tactic, their logits and argument logits for each local context node and argument position.
 
+        @warning: we do not use the GraphConstants saved in this task since during inference these may not be up-to-date
         @param tactic_expand_bound: the number of base tactic predictions to produce for each proofstate
+        @param graph_constants: the graph constants to use during inference (with a possibly updated global context)
         @return: a keras model consuming graphs and producing tactic logits and local arguments logits
         """
         proofstate_graph = tf.keras.layers.Input(type_spec=batch_graph_spec(proofstate_graph_spec),
-                                                 name='proofstate_graph')
+                                                 name=self.PROOFSTATE_GRAPH)
         scalar_proofstate_graph = proofstate_graph.merge_batch_to_components()
+
+        tactic_mask = tf.keras.Input(shape=(graph_constants.tactic_num,), dtype=tf.bool, name=self.TACTIC_MASK)
 
         tactic_logits, hidden_graph = self._tactic_logits_and_hidden_graph(scalar_proofstate_graph)
 
-        # TODO: introduce allowed tactics
-        no_argument_tactics_mask = self._graph_constants.tactic_index_to_numargs == 0
-        all_tactics_mask = tf.ones(self._graph_constants.tactic_num, dtype=tf.bool)
-        tactic_mask = tf.where(
-            tf.expand_dims(scalar_proofstate_graph.context['context_node_ids'].row_lengths() == 0, axis=-1),
-            tf.expand_dims(no_argument_tactics_mask, axis=0), tf.expand_dims(all_tactics_mask, axis=0))
+        # [tactic_num, ]
+        no_argument_tactics_mask = graph_constants.tactic_index_to_numargs == 0
+        all_tactics_mask = tf.ones(graph_constants.tactic_num, dtype=tf.bool)
+
+        # [batch_size, ]
+        no_context_proofstates = scalar_proofstate_graph.context['local_context_ids'].row_lengths() == 0
+
+        # [batch_size, tactic_num]
+        proofstate_tactic_mask = tf.where(tf.expand_dims(no_context_proofstates, axis=-1),
+                                 tf.expand_dims(no_argument_tactics_mask, axis=0),
+                                 tf.expand_dims(all_tactics_mask, axis=0))
 
         top_k_indices, top_k_values = self._top_k_tactics(tactic_logits=tactic_logits,
-                                                          tactic_mask=tactic_mask,
+                                                          tactic_mask=proofstate_tactic_mask & tactic_mask,
                                                           tactic_expand_bound=tactic_expand_bound)
 
         tactic = tf.reshape(tf.transpose(top_k_indices), shape=(tf.size(top_k_indices),))
@@ -617,7 +636,7 @@ class LocalArgumentPrediction(TacticPrediction):
         local_arguments_logits_output = self._reshape_inference_logits(logits=local_arguments_logits,
                                                                        tactic_expand_bound=tactic_expand_bound)
 
-        return tf.keras.Model(inputs=proofstate_graph,
+        return tf.keras.Model(inputs={self.PROOFSTATE_GRAPH: proofstate_graph, self.TACTIC_MASK: tactic_mask},
                               outputs={self.TACTIC: tf.transpose(top_k_indices),
                                        self.TACTIC_LOGITS: tf.transpose(top_k_values),
                                        self.LOCAL_ARGUMENTS_LOGITS: local_arguments_logits_output
@@ -666,7 +685,8 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
         # create a layer to extract logits from the node label embeddings
         self.global_arguments_logits = LogitsFromEmbeddings(
             embedding_matrix=self.graph_embedding._node_embedding.embeddings,
-            valid_indices=tf.constant(self._graph_constants.global_context, dtype=tf.int32))
+            valid_indices=tf.constant(self._graph_constants.global_context, dtype=tf.int32)
+        )
 
         # we use trivial lambda layers to appropriately rename outputs
         self.local_arguments_logits_output = tf.keras.layers.Lambda(lambda x: x, name=self.LOCAL_ARGUMENTS_LOGITS)
@@ -722,7 +742,7 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
         @return: a keras model consuming graphs and producing tactic and local/global arguments logits
         """
         proofstate_graph = tf.keras.layers.Input(type_spec=batch_graph_spec(proofstate_graph_spec),
-                                                 name='proofstate_graph')
+                                                 name=self.PROOFSTATE_GRAPH)
         scalar_proofstate_graph = proofstate_graph.merge_batch_to_components()
 
         tactic_logits, hidden_graph = self._tactic_logits_and_hidden_graph(scalar_proofstate_graph)
@@ -747,29 +767,42 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
                                             self.LOCAL_ARGUMENTS_LOGITS: local_arguments_logits_output,
                                             self.GLOBAL_ARGUMENTS_LOGITS: global_arguments_logits_output})
 
-    def create_inference_model(self, tactic_expand_bound: int) -> tf.keras.Model:
+    def create_inference_model(self, tactic_expand_bound: int, graph_constants: GraphConstants) -> tf.keras.Model:
         """
         Combines a GNN component with a tactic head and an arguments head to produce an end-to-end model for the
         global argument prediction task. The resulting model is for inference purposes, and produces tactics, their logits
         and argument logits (for each local context node / global context id per argument position).
 
+        @warning: we do not use the GraphConstants saved in this task since during inference these may not be up-to-date
         @param tactic_expand_bound: the number of base tactic predictions to produce for each proofstate
+        @param graph_constants: the graph constants to use during inference (with a possibly updated global context)
         @return: a keras model consuming graphs and producing tactic and local/global arguments logits
         """
         proofstate_graph = tf.keras.layers.Input(type_spec=batch_graph_spec(proofstate_graph_spec),
-                                                 name='proofstate_graph')
+                                                 name=self.PROOFSTATE_GRAPH)
         scalar_proofstate_graph = proofstate_graph.merge_batch_to_components()
+
+        tactic_mask = tf.keras.Input(shape=(graph_constants.tactic_num,), dtype=tf.bool, name=self.TACTIC_MASK)
 
         tactic_logits, hidden_graph = self._tactic_logits_and_hidden_graph(scalar_proofstate_graph)
 
-        # TODO: introduce allowed tactics and dynamic global context
-        # no_argument_tactics_mask = self._graph_constants.tactic_index_to_numargs == 0
-        all_tactics_mask = tf.ones(self._graph_constants.tactic_num, dtype=tf.bool)
-        # tactic_mask = tf.where(tf.expand_dims(scalar_proofstate_graph.context['context_node_ids'].row_lengths() == 0, axis=-1), tf.expand_dims(no_argument_tactics_mask, axis=0), tf.expand_dims(all_tactics_mask, axis=0))
-        tactic_mask = tf.repeat(tf.expand_dims(all_tactics_mask, axis=0), proofstate_graph.total_num_components, axis=0)
+        # [tactic_num, ]
+        no_argument_tactics_mask = graph_constants.tactic_index_to_numargs == 0
+        all_tactics_mask = tf.ones(graph_constants.tactic_num, dtype=tf.bool)
+
+        # [batch_size, ]
+        no_local_context_proofstates = scalar_proofstate_graph.context['local_context_ids'].row_lengths() == 0
+        no_global_context_proofstates = tf.fill(dims=(proofstate_graph.total_num_components,),
+                                                value=graph_constants.global_context.size == 0)
+        no_context_proofstates = no_local_context_proofstates & no_global_context_proofstates
+
+        # [batch_size, tactic_num]
+        proofstate_tactic_mask = tf.where(tf.expand_dims(no_context_proofstates, axis=-1),
+                                          tf.expand_dims(no_argument_tactics_mask, axis=0),
+                                          tf.expand_dims(all_tactics_mask, axis=0))
 
         top_k_indices, top_k_values = self._top_k_tactics(tactic_logits=tactic_logits,
-                                                          tactic_mask=tactic_mask,
+                                                          tactic_mask=proofstate_tactic_mask & tactic_mask,
                                                           tactic_expand_bound=tactic_expand_bound)
 
         tactic = tf.reshape(tf.transpose(top_k_indices), shape=(tf.size(top_k_indices),))
@@ -793,7 +826,7 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
         normalized_global_arguments_logits = self._reshape_inference_logits(logits=normalized_global_arguments_logits,
                                                                             tactic_expand_bound=tactic_expand_bound)
 
-        return tf.keras.Model(inputs=proofstate_graph,
+        return tf.keras.Model(inputs={self.PROOFSTATE_GRAPH: proofstate_graph, self.TACTIC_MASK: tactic_mask},
                               outputs={self.TACTIC: tf.transpose(top_k_indices),
                                        self.TACTIC_LOGITS: tf.transpose(top_k_values),
                                        self.LOCAL_ARGUMENTS_LOGITS: normalized_local_arguments_logits,
@@ -903,7 +936,8 @@ class DefinitionTask(tf.keras.layers.Layer):
         return definition_body_embeddings
 
 
-def get_prediction_task_constructor(prediction_task_type: str) -> Callable[..., PredictionTask]:
+def get_prediction_task_constructor(prediction_task_type: str
+                                    ) -> Callable[..., Union[TacticPrediction, LocalArgumentPrediction, GlobalArgumentPrediction]]:
     if prediction_task_type == BASE_TACTIC_PREDICTION:
         return TacticPrediction
     elif prediction_task_type == LOCAL_ARGUMENT_PREDICTION:
