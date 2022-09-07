@@ -692,8 +692,7 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
         self.local_arguments_logits_output = tf.keras.layers.Lambda(lambda x: x, name=self.LOCAL_ARGUMENTS_LOGITS)
         self.global_arguments_logits_output = tf.keras.layers.Lambda(lambda x: x, name=self.GLOBAL_ARGUMENTS_LOGITS)
 
-        # update checkpoint  with new layers
-        self.checkpoint.global_arguments_logits = self.global_arguments_logits
+        # no need to update checkpoint with new layers, because there are no new trainable weights
 
     def get_config(self):
         config = super().get_config()
@@ -864,8 +863,7 @@ class DefinitionTask(tf.keras.layers.Layer):
     """
     A layer to compute definition embeddings from definition cluster graphs. The input graphs should:
         - be scalar graphs
-        - follow the schema for `definition_graph_spec` in `graph2tac.tfgnn.graph_schema`
-        - have the node labels for the definitions being defined masked to -1
+        - follow the schema for `vectorized_definition_graph_spec` in `graph2tac.tfgnn.graph_schema`
     """
     def __init__(self,
                  graph_embedding: tf.keras.layers.Layer,
@@ -889,13 +887,19 @@ class DefinitionTask(tf.keras.layers.Layer):
         self._gnn = gnn
 
         definition_head_constructor = get_definition_head_constructor(definition_head_type)
-        self._definition_head = definition_head_constructor(hidden_size=graph_embedding._hidden_size,
-                                                            **definition_head_config)
+        self.definition_head = definition_head_constructor(hidden_size=graph_embedding._hidden_size,
+                                                           **definition_head_config)
+
+    def get_checkpoint(self) -> tf.train.Checkpoint:
+        """
+        @return: a checkpoint tracking any **new** variables created by this layer
+        """
+        return tf.train.Checkpoint(definition_head=self.definition_head)
 
     def get_config(self):
         config = super().get_config()
 
-        definition_head_config = self._definition_head.get_config()
+        definition_head_config = self.definition_head.get_config()
         definition_head_config.pop('hidden_size')
 
         config.update({
@@ -932,7 +936,7 @@ class DefinitionTask(tf.keras.layers.Layer):
         hidden_graph = self._gnn(masked_embedded_graph, training=training)
 
         num_definitions = scalar_definition_graph.context['num_definitions']
-        definition_body_embeddings = self._definition_head((hidden_graph, num_definitions), training=training)
+        definition_body_embeddings = self.definition_head((hidden_graph, num_definitions), training=training)
         return definition_body_embeddings
 
 

@@ -87,7 +87,7 @@ class Trainer:
                                               trained_epochs=self.trained_epochs,
                                               num_runs=self.run_counter)
         if definition_task is not None:
-            self.checkpoint.definition_task = definition_task
+            self.checkpoint.definition_task = definition_task.get_checkpoint()
             self.checkpoint.definition_loss_coefficient = self.definition_loss_coefficient
 
         # train model
