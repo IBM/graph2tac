@@ -69,7 +69,7 @@ class Trainer:
                 raise ValueError('the definition_loss_coefficient should be set whenever using a definition_task')
             else:
                 self.definition_loss_coefficient = tf.Variable(initial_value=definition_loss_coefficient,
-                                                               dtype=tf.float32)
+                                                               dtype=tf.float32, trainable=False)
 
             self.definition_loss_schedule = definition_loss_schedule
         else:
@@ -80,8 +80,8 @@ class Trainer:
         self.l2_regularization_coefficient = l2_regularization_coefficient
 
         # checkpoint
-        self.trained_epochs = tf.Variable(initial_value=0, trainable=False)
-        self.run_counter = tf.Variable(initial_value=0, trainable=False, dtype=tf.int64)
+        self.trained_epochs = tf.Variable(initial_value=0, dtype=tf.int64, trainable=False)
+        self.run_counter = tf.Variable(initial_value=0, dtype=tf.int64, trainable=False)
         self.checkpoint = tf.train.Checkpoint(prediction_task=prediction_task.checkpoint,
                                               optimizer=self.optimizer,
                                               trained_epochs=self.trained_epochs,
