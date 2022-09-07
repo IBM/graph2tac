@@ -133,11 +133,28 @@ def get_train_name_to_label(train_node_label_to_name, train_node_label_in_spine)
     logger.verbose(f"train names in spine: {len(train_name_to_label)}")
     return train_name_to_label
 
-def get_def_idx_to_node__train_to_eval__eval_to_train__eval_names(msg_data, train_node_label_to_name, train_node_label_in_spine, message_type):
+
+def get_def_idx_to_node__train_to_eval__eval_to_train__eval_names(msg_data,
+                                                                  train_node_label_to_name,
+                                                                  train_node_label_in_spine,
+                                                                  message_type,
+                                                                  local_to_global):
     train_name_to_label = get_train_name_to_label(train_node_label_to_name, train_node_label_in_spine)
-    (node_indexes, def_hashes, def_idx_to_name), _  = get_global_def_table([msg_data], message_type, restrict_to_spine=False)[0]
+
+    # in evaluation or checkAlignment message type the representative is dummy = UINT32_MAX
+    # it is not supposed to be used by the following processing
+
+    (node_indexes, def_hashes, def_idx_to_name), dummy_representative  = get_global_def_table([msg_data], message_type, restrict_to_spine=False)[0]
+
     eval_names = BASE_NAMES + def_idx_to_name
-    def_index_table = build_def_index([(node_indexes, def_hashes, eval_names)], set())
+    buf_list = [msg_data]
+    def_index_table = build_def_index(
+        [((node_indexes, def_hashes, eval_names), dummy_representative)],
+        set(),
+        buf_list,
+        message_type,
+        local_to_global
+    )
     def_idx_to_node =  np.array(def_index_table.idx_to_global_node, dtype=np.uint32)
     train_label_to_eval_label, eval_label_to_train_label = get_train_eval_alignment(train_name_to_label, eval_names, len(train_node_label_to_name))
     return def_idx_to_node, train_label_to_eval_label, eval_label_to_train_label, eval_names
@@ -179,8 +196,9 @@ def process_alignment_request(
         msg,
         train_node_label_to_name,
         train_node_label_in_spine):
+    local_to_global = [np.array([0], dtype=np.uint32)]
     al_def_idx_to_node, al_train_label_to_eval_label, al_eval_label_to_train_label, al_eval_names = get_def_idx_to_node__train_to_eval__eval_to_train__eval_names(
-        al_msg_data, train_node_label_to_name, train_node_label_in_spine, "request.checkAlignment")
+        al_msg_data, train_node_label_to_name, train_node_label_in_spine, "request.checkAlignment", local_to_global)
     al_def_idx_to_name = al_eval_names[len(BASE_NAMES):]
     unaligned_nodes = get_unaligned_nodes(al_def_idx_to_node,
                                           al_def_idx_to_name,
@@ -279,8 +297,10 @@ def main_loop(reader, sock, predict: Predict, debug_dir, session_idx=0,
 
             msg_data = msg.as_builder().to_bytes()
 
+            local_to_global = [np.array([0], dtype=np.uint32)]
+
             def_idx_to_node, train_label_to_eval_label, eval_label_to_train_label, eval_names = get_def_idx_to_node__train_to_eval__eval_to_train__eval_names(
-                msg_data, train_node_label_to_name, train_node_label_in_spine, "request.initialize")
+                msg_data, train_node_label_to_name, train_node_label_in_spine, "request.initialize", local_to_global)
 
             logger.verbose(f"train_label_to_eval_label {train_label_to_eval_label}")
             logger.verbose(f"eval_label_to_train_label {eval_label_to_train_label}")
@@ -296,8 +316,6 @@ def main_loop(reader, sock, predict: Predict, debug_dir, session_idx=0,
                                                        network_tactic_index_to_hash,
                                                        np.arange(len(network_tactic_index_to_hash), dtype=np.uint32))
 
-
-            local_to_global = [np.array([0], dtype=np.uint32)]
             n_msg_recorded = data_online_extend(c_data_online,
                                                 [msg_data],
                                                 [b'.initalization_graph'],
@@ -401,7 +419,8 @@ def main_loop(reader, sock, predict: Predict, debug_dir, session_idx=0,
             msg_data = msg.as_builder().to_bytes()
 
             data_online_resize(c_data_online, 1)
-            local_to_global = [np.array([1, 0], dtype=np.uint32)]
+            local_to_global = [np.array([1, 0], dtype=np.uint32)]     # for proof-state buffer
+                                                                      # [0, [1,0]] for [theorem-def, proof-state] buf-list
 
             num_messages_stored = data_online_extend(c_data_online,
                                                 [msg_data],
@@ -445,8 +464,13 @@ def main_loop(reader, sock, predict: Predict, debug_dir, session_idx=0,
 
             t0 = time.time()
 
+            dynamic_global_context = list(range(len(global_context)))
+
             online_actions, online_confidences = predict.ranked_predictions(
-                LoaderProofstate( (online_graph, this_encoded_root, this_encoded_context, dummy_proofstate_info) ),
+                LoaderProofstate((online_graph,
+                                  this_encoded_root,
+                                  (this_encoded_context, dynamic_global_context),
+                                  dummy_proofstate_info)),
                 tactic_expand_bound=tactic_expand_bound,
                 total_expand_bound=total_expand_bound,
                 allowed_model_tactics=allowed_model_tactics,
@@ -463,7 +487,7 @@ def main_loop(reader, sock, predict: Predict, debug_dir, session_idx=0,
             top_online_actions = online_actions[:search_expand_bound]
             top_online_confidences = new_online_confidences[:search_expand_bound]
             top_online_encoded_actions = encode_prediction_online(c_data_online,
-                                                                  top_online_actions,
+                                                                  list(top_online_actions),
                                                                   top_online_confidences,
                                                               this_context,  sock.fileno(), eval_names[len(BASE_NAMES):])
             for action_idx, (online_encoded_action, online_confidence) in enumerate(
@@ -537,7 +561,7 @@ def main():
 
     parser.add_argument('--arch', type=str,
                         default='tf2',
-                        help='the model architecture tfgnn or tf2 (current default is tf2)')
+                        help='the model architecture tfgnn or tf2 or hmodel (current default is tf2)')
 
     parser.add_argument('--test', type=str,
                         default=None,
