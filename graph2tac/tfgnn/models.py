@@ -861,7 +861,7 @@ class DenseDefinitionHead(tf.keras.layers.Layer):
         return config
 
     def call(self,
-             inputs: Tuple[tfgnn.GraphTensor, tf.RaggedTensor],
+             inputs: Tuple[tfgnn.GraphTensor, tf.Tensor],
              training: bool = False
              ) -> tf.Tensor:
         hidden_graph, num_definitions = inputs

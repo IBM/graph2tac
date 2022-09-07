@@ -194,7 +194,7 @@ class TFGNNPredict(Predict):
         # load training checkpoint
         checkpoint = tf.train.Checkpoint(prediction_task=self.prediction_task.checkpoint)
         if self.definition_task is not None:
-            checkpoint.definition_task = self.definition_task
+            checkpoint.definition_task = self.definition_task.get_checkpoint()
 
         checkpoints_path = log_dir / 'ckpt'
         available_checkpoints = {int(re.search('ckpt-(\d+).index', str(ckpt)).group(1)): ckpt.with_suffix('')
