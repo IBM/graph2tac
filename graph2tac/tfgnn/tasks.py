@@ -936,7 +936,8 @@ class DefinitionTask(tf.keras.layers.Layer):
         hidden_graph = self._gnn(masked_embedded_graph, training=training)
 
         num_definitions = scalar_definition_graph.context['num_definitions']
-        definition_body_embeddings = self.definition_head((hidden_graph, num_definitions), training=training)
+        definition_name_vectors = scalar_definition_graph.context['definition_name_vectors']
+        definition_body_embeddings = self._definition_head((hidden_graph, num_definitions, definition_name_vectors), training=training)
         return definition_body_embeddings
 
 

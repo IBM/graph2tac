@@ -161,6 +161,7 @@ class TFGNNPredict(Predict):
         with dataset_yaml_filepath.open('r') as yml_file:
             dataset = Dataset(graph_constants=graph_constants, **yaml.load(yml_file, Loader=yaml.SafeLoader))
         self._preprocess = dataset._preprocess
+        self._tokenize_definition_graph = dataset.tokenize_definition_graph
 
         # call to parent constructor to defines self._graph_constants
         super().__init__(graph_constants=graph_constants, debug_dir=debug_dir)
@@ -307,7 +308,7 @@ class TFGNNPredict(Predict):
         dataset = tf.data.Dataset.from_generator(lambda: new_cluster_subgraphs,
                                                  output_signature=DataServerDataset.definition_data_spec)
         dataset = dataset.map(DataServerDataset._make_definition_graph_tensor)
-        dataset = self._preprocess(dataset)
+        dataset = self._preprocess(dataset).map(self._tokenize_definition_graph)
         return dataset.batch(Dataset.MAX_DEFINITIONS).get_single_element()
 
     @staticmethod
