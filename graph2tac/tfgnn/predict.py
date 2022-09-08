@@ -237,7 +237,7 @@ class TFGNNPredict(Predict):
 
         if global_context is not None:
             # update the global context
-            self._graph_constants.global_context = tf.constant(global_context, dtype=tf.int32)
+            self._graph_constants.global_context = np.array(global_context, dtype=np.uint32)
 
             # extend the embedding table if necessary
             new_node_label_num = max(global_context)+1
