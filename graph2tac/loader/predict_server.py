@@ -552,7 +552,7 @@ def main():
                         default=33333,
                         help='run python server on this port')
     parser.add_argument('--host', type=str,
-                        default='127.0.0.1',
+                        default='',
                         help='run python server on this local ip')
 
     parser.add_argument('--model', type=str,
@@ -746,9 +746,15 @@ def main():
         )
     else:
         logger.info(f"starting tcp/ip server on port {args.port}")
-        server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        server_sock.bind((args.host, args.port))
+        addr = (args.host, args.port)
+        if socket.has_dualstack_ipv6():
+            try:
+                server_sock = socket.create_server(addr,
+                                                   family=socket.AF_INET6, dualstack_ipv6=True)
+            except OSError:
+                server_sock = socket.create_server(addr)
+        else:
+            server_sock = socket.create_server(addr)
         try:
             server_sock.listen(1)
             logger.info(f"tcp/ip server is listening on {args.port}")
