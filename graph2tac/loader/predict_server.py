@@ -20,6 +20,9 @@ from graph2tac.common import uuid, logger
 from graph2tac.predict import Predict
 from graph2tac.loader.data_server import DataServer, build_def_index, get_global_def_table, LoaderGraph, LoaderProofstate, LoaderDefinition
 
+import json
+import psutil
+from pympler import tracker
 
 Tactic = NewType('Tactic', object)
 
@@ -244,8 +247,26 @@ def main_loop(reader, sock, predict: Predict, debug_dir, session_idx=0,
     update_def_time = 0
     n_def_clusters_updated = 0
 
+    memory_tracker = tracker.SummaryTracker()
+    process = psutil.Process(os.getpid())
+    mem = process.memory_info()
+    prev_mem = mem
     for msg in decorated_reader:
+        print("A: Loop complete")
+        #memory_tracker.print_diff()
+        #mem_diff = memory_tracker.diff()
+        #process = psutil.Process(os.getpid())
+        mem = process.memory_info()
+        #print(mem_diff)
+        #print("tracker_diff:", sum(x[2] for x in mem_diff))
+        #print("rss_diff    :", mem.rss - prev_mem.rss)
+        #print("vms_diff    :", mem.vms - prev_mem.vms)
+        prev_mem = mem
+        
         msg_type = msg.which()
+        print()
+        print("Message type", msg_type)
+        print()
         logger.verbose(f"message: {msg.which()}")
         if msg_type == "synchronize":
             process_synchronize(sock, msg)
@@ -445,13 +466,39 @@ def main_loop(reader, sock, predict: Predict, debug_dir, session_idx=0,
 
             t0 = time.time()
 
-            online_actions, online_confidences = predict.ranked_predictions(
-                LoaderProofstate( (online_graph, this_encoded_root, this_encoded_context, dummy_proofstate_info) ),
-                tactic_expand_bound=tactic_expand_bound,
-                total_expand_bound=total_expand_bound,
-                allowed_model_tactics=allowed_model_tactics,
-                available_global=None
-            )
+            # # nodes, edges, edge_labels, edge_offsets
+            # LoaderGraph = NewType('LoaderGraph', Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray])
+
+            # # loader_graph, root, context_node_ids, (proofstate_name, proofstate_step)
+            # LoaderProofstate = NewType('LoaderProofstate', Tuple[LoaderGraph, int, np.ndarray, Tuple[bytes, int, bool]])
+            #print("Before predict")
+            #memory_tracker.print_diff()
+            #b_memory_tracker = tracker.SummaryTracker()
+            for _ in range(1000):
+                old_online_graph = [a.copy() for a in online_graph]
+                old_this_encoded_context = this_encoded_context.copy()
+                old_dummy_proofstate_info_str = dummy_proofstate_info[0]
+                old_allowed_model_tactics = allowed_model_tactics.copy()
+
+                print("Tight Loop")
+                #b_memory_tracker.print_diff()
+                print(process.memory_info())
+                online_actions, online_confidences = predict.ranked_predictions(
+                    LoaderProofstate( (online_graph, this_encoded_root, this_encoded_context, dummy_proofstate_info) ),
+                    tactic_expand_bound=tactic_expand_bound,
+                    total_expand_bound=total_expand_bound,
+                    allowed_model_tactics=allowed_model_tactics,
+                    available_global=None
+                )
+
+                for i, (a, b) in enumerate(zip(old_online_graph, online_graph)):
+                    assert np.array_equal(a, b), (i, a, b)
+                assert np.array_equal(old_this_encoded_context, this_encoded_context)
+                assert old_allowed_model_tactics == allowed_model_tactics, (old_allowed_model_tactics, allowed_model_tactics)
+
+                
+                print("B: online_actions    ", len(online_actions), type(online_actions[0]))
+                print("B: online_confidences", len(online_confidences), type(online_confidences[0]))
             # FIDEL: why was this here? Does not conform to the API!
             #                 annotation = msg_idx - 1,
             #                 debug = (LOG_LEVEL <= logging.INFO)
@@ -459,6 +506,9 @@ def main_loop(reader, sock, predict: Predict, debug_dir, session_idx=0,
             # apply the temperature (assuming the truncated tail of the probability distribution is clustered in one unseen element)
             new_online_confidences = np.array(online_confidences, np.float64)**(1/temperature)
             new_online_confidences /= new_online_confidences.sum() + (1-sum(online_confidences))**(1/temperature)
+
+            #print("Predict")
+            #memory_tracker.print_diff()
 
             top_online_actions = online_actions[:search_expand_bound]
             top_online_confidences = new_online_confidences[:search_expand_bound]

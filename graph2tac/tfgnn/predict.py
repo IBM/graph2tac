@@ -17,6 +17,9 @@ from graph2tac.tfgnn.train import Trainer
 from graph2tac.common import logger
 from graph2tac.predict import Predict, predict_api_debugging, cartesian_product, NUMPY_NDIM_LIMIT
 
+from pympler import tracker
+import psutil
+import os
 
 class Inference:
     """
@@ -366,10 +369,18 @@ class TFGNNPredict(Predict):
         Returns the top `tactic_expand_bound` tactics for each of the proof-states in the input.
         This is the first stage of any  prediction process.
         """
-        # get the graph tensor with hidden states
         bare_graph = strip_graph(scalar_proofstate_graph)
         embedded_graph = self.prediction_task.graph_embedding(bare_graph, training=False)
-        hidden_graph = self.prediction_task.gnn(embedded_graph, training=False)
+        c_memory_tracker = tracker.SummaryTracker()
+        for i in range(10000):
+            tf.keras.backend.clear_session()
+            if i % 10 == 0:
+                print("Tight x 5 Loop")
+                #c_memory_tracker.print_diff()
+                process = psutil.Process(os.getpid())
+                print(process.memory_info())
+            # get the graph tensor with hidden states
+            hidden_graph = self.prediction_task.gnn2(embedded_graph, training=False)
 
         # predict the tactic embedding and logits
         tactic_embedding = self.prediction_task.tactic_head(hidden_graph, training=False)
@@ -487,11 +498,16 @@ class TFGNNPredict(Predict):
         # we always have the option to choose global arguments
         mask_tactics_with_arguments = tf.zeros(shape=(scalar_proofstate_graph.num_components,), dtype=bool)
 
-        # get the top tactic_expand_bound tactics and input/output graphs
-        top_k, hidden_graph = self._top_k_tactics(scalar_proofstate_graph=scalar_proofstate_graph,
-                                                  tactic_expand_bound=tactic_expand_bound,
-                                                  mask_tactics_with_arguments=mask_tactics_with_arguments,
-                                                  allowed_tactics=allowed_model_tactics)
+        for _ in range(1000):
+            print("Tight Tight Tight Tight Loop")
+            #b_memory_tracker.print_diff()
+            process = psutil.Process(os.getpid())
+            print(process.memory_info())
+            # get the top tactic_expand_bound tactics and input/output graphs
+            top_k, hidden_graph = self._top_k_tactics(scalar_proofstate_graph=scalar_proofstate_graph,
+                                                tactic_expand_bound=tactic_expand_bound,
+                                                mask_tactics_with_arguments=mask_tactics_with_arguments,
+                                                allowed_tactics=allowed_model_tactics)
 
         # get the local context node ids from the input graph
         context_node_ids = scalar_proofstate_graph.context['context_node_ids']
@@ -539,19 +555,34 @@ class TFGNNPredict(Predict):
                                  total_expand_bound: int,
                                  allowed_model_tactics: Optional[Iterable[int]] = None
                                  ) -> List[Union[PredictOutput, Tuple[List[np.ndarray], np.ndarray]]]:
+
+        #memory_tracker = tracker.SummaryTracker()
+        
+        #print("C: Proofstate graph")
         # convert the input to a batch of graph tensor (rank 1)
         proofstate_graph = self._make_dummy_proofstate_dataset(states).batch(len(states)).get_single_element()
 
+        #memory_tracker.print_diff()
+        #print("C: Merge components")
         # convert into a scalar graph (rank 0)
         scalar_proofstate_graph = proofstate_graph.merge_batch_to_components()
 
-        batch_predict_output = self._batch_ranked_predictions(scalar_proofstate_graph=scalar_proofstate_graph,
+        #memory_tracker.print_diff()
+        #print("C: batch ranked predictions")
+        for _ in range(1000):
+            print("Tight Tight Tight Loop")
+            #b_memory_tracker.print_diff()
+            process = psutil.Process(os.getpid())
+            print(process.memory_info())
+            batch_predict_output = self._batch_ranked_predictions(scalar_proofstate_graph=scalar_proofstate_graph,
                                                               tactic_expand_bound=tactic_expand_bound,
                                                               total_expand_bound=total_expand_bound,
                                                               allowed_model_tactics=allowed_model_tactics)
         for state, predict_output in zip(states, batch_predict_output):
             predict_output.state = state
 
+        #memory_tracker.print_diff()
+        
         if not self.numpy_output:
             return batch_predict_output
         else:
@@ -568,13 +599,21 @@ class TFGNNPredict(Predict):
         """
         Produces predictions for a single proof-state.
         """
+        #memory_tracker = tracker.SummaryTracker()
         if available_global is not None:
             raise NotImplementedError('available_global is not supported yet')
-
-        return self.batch_ranked_predictions(states=[state],
+ 
+        for _ in range(1000):
+            print("Tight Tight Loop")
+            #b_memory_tracker.print_diff()
+            process = psutil.Process(os.getpid())
+            print(process.memory_info())
+            x = self.batch_ranked_predictions(states=[state],
                                              allowed_model_tactics=allowed_model_tactics,
                                              tactic_expand_bound=tactic_expand_bound,
                                              total_expand_bound=total_expand_bound)[0]
+        #memory_tracker.print_diff()
+        return x
 
     def _evaluate(self,
                   proofstate_graph_dataset: tf.data.Dataset,

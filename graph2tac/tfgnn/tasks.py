@@ -313,6 +313,18 @@ class PredictionTask:
 
         gnn_constructor = get_gnn_constructor(gnn_type)
         self.gnn = gnn_constructor(hidden_size=hidden_size, **gnn_config)
+        gnn = self.gnn
+        class MyModel(tf.keras.Model):
+
+            def __init__(self, hidden_size, **gnn_config):
+                super().__init__()
+                self.gnn = gnn
+
+            def call(self, input):
+                x = self.gnn(input, training=False)
+                return x
+
+        self.gnn2 = MyModel(hidden_size=hidden_size, **gnn_config)
 
         tactic_head_constructor = get_tactic_head_constructor(tactic_head_type)
         self.tactic_head = tactic_head_constructor(tactic_embedding_size=tactic_embedding_size, **tactic_head_config)

@@ -4,6 +4,8 @@ import tensorflow as tf
 import tensorflow_gnn as tfgnn
 from tensorflow_gnn.models.gat_v2 import GATv2GraphUpdate, GATv2Conv
 
+import psutil, os
+
 SIMPLE_CONVOLUTION_GNN = 'simple_convolution_gnn'
 GCN_CONVOLUTION_GNN = 'gcn_convolution_gnn'
 ATTENTION_GNN = 'attention_gnn'
