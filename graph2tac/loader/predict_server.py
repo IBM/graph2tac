@@ -1,7 +1,7 @@
 """
 python prediction server to interact with coq-tactician-reinforce
 """
-from typing import NewType
+from typing import Generator, Iterator, NewType
 
 import sys
 import time
@@ -15,6 +15,7 @@ import capnp
 import argparse
 import numpy as np
 from pathlib import Path
+import signal
 
 from graph2tac.common import uuid, logger
 from graph2tac.predict import Predict
@@ -253,7 +254,23 @@ def main_loop(reader, sock, predict: Predict, debug_dir, session_idx=0,
     t_predict = 0
     t_coq = 0
     n_coq = 0
-    decorated_reader = tqdm.tqdm(reader) if with_meter else reader
+    
+    def killable_reader(reader: Iterator) -> Generator:
+        """
+        The reader iterator, but with adjustments so it can be stopped from the command line.
+        
+        Without this, the reader will block and can't be killed with Cntl+C
+        until it receives a message.  This works by disabling Python's catching of SIGINT
+        when calling the reader, but enabling it before yielding the message.
+        """
+        signal.signal(signal.SIGINT, signal.SIG_DFL)  # SIGINT catching OFF
+        for msg in reader:
+            signal.signal(signal.SIGINT, signal.default_int_handler)  # SIGINT catching ON
+            yield msg
+            signal.signal(signal.SIGINT, signal.SIG_DFL)  # SIGINT catching OFF
+        signal.signal(signal.SIGINT, signal.default_int_handler)  # SIGINT catching ON
+
+    decorated_reader = tqdm.tqdm(killable_reader(reader)) if with_meter else killable_reader(reader)
 
 
     msg_idx = -1
