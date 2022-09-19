@@ -51,6 +51,3 @@ def uuid(data_dir: Path):
 logger = logging.getLogger('graph2tac')
 logger.verbose = lambda message: logger.log(level=15, msg=message)
 logger.setLevel(logging.INFO)
-handler = logging.StreamHandler(sys.stdout)
-handler.setFormatter(logging.Formatter('%(name)s:%(levelname)s - %(message)s'))
-logger.addHandler(handler)
