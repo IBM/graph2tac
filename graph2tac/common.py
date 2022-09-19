@@ -48,6 +48,12 @@ def uuid(data_dir: Path):
     m.update(os.fsencode(data_dir.expanduser().resolve()))
     return m.hexdigest()[:6]
 
+logging.basicConfig(
+    stream=sys.stdout,
+    level = logging.DEBUG,
+    format = '%(name)s:%(levelname)s - %(message)s'
+)
+logging.getLogger().setLevel(logging.INFO)
 logger = logging.getLogger('graph2tac')
 logger.verbose = lambda message: logger.log(level=15, msg=message)
 logger.setLevel(logging.INFO)
