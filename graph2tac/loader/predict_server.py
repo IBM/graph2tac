@@ -1,6 +1,7 @@
 """
 python prediction server to interact with coq-tactician-reinforce
 """
+from dataclasses import dataclass
 from typing import Generator, Iterator, NewType
 
 import sys
@@ -15,7 +16,9 @@ import capnp
 import argparse
 import numpy as np
 from pathlib import Path
+import logging
 import signal
+import psutil
 
 from graph2tac.common import uuid, logger
 from graph2tac.predict import Predict
@@ -218,6 +221,92 @@ def process_alignment_request(
     logger.verbose(f"checkAlignment unaligned tactics: {unaligned_tactics}")
     return unaligned_tactics, unaligned_nodes
 
+def killable_reader(reader: Iterator) -> Generator:
+    """
+    The reader iterator, but with adjustments so it can be stopped from the command line.
+    
+    Without this, the reader will block and can't be killed with Cntl+C
+    until it receives a message.  This works by disabling Python's catching of SIGINT
+    when calling the reader, but enabling it before yielding the message.
+    """
+    signal.signal(signal.SIGINT, signal.SIG_DFL)  # SIGINT catching OFF
+    for msg in reader:
+        signal.signal(signal.SIGINT, signal.default_int_handler)  # SIGINT catching ON
+        yield msg
+        signal.signal(signal.SIGINT, signal.SIG_DFL)  # SIGINT catching OFF
+    signal.signal(signal.SIGINT, signal.default_int_handler)  # SIGINT catching ON
+
+@dataclass
+class LoggingCounters:
+    """
+    The counters recorded in the logs and debug output.
+    """
+    session_idx: int
+    """Index for the current session"""
+    thm_idx: int = -1
+    """Index of the current theorem (based on number of `initialization` messages seen)"""
+    msg_idx: int = -1
+    """Number of 'prediction' messages recieved since last 'intitialize' message"""
+    t_predict: float = 0.0
+    """Total time (in seconds) spent on predict since last 'initialize'"""
+    n_predict: int = 0
+    """Number of 'prediction' messages recieved since last 'intialize'"""
+    max_t_predict: float = 0.0
+    """Max time (in seconds) spent on single predict since last 'initialize'"""
+    argmax_t_predict: int = -1
+    """Index of last maximum time single predict since last 'initialize'"""
+    t_coq: int = 0
+    """Total time (in seconds) spent waiting on Coq since last 'initialize'"""
+    n_coq: int = 0
+    """Number of 'prediction' requests made by Coq"""
+    init_data_online_size: int = 0
+    """Data size in bytes for 'intitialize' message"""
+    predict_data_online_size: int = 0
+    """Total data size in bytes for 'predict' messages since last 'intitialize' message"""
+    total_data_online_size: int = 0
+    """Total data size in bytes for all messages since last 'intitialize' message"""
+    build_network_time: float = 0.0
+    """Time (in seconds) to build network when processing most recent 'intitialize' message"""
+    update_def_time: float = 0.0
+    """Time (in seconds) to update the definitions processing most recent 'intitialize' message"""
+    n_def_clusters_updated: int = 0
+    """Number of definition clusters updated when processing most recent 'initialize' message"""
+    total_mem: float = 0.0
+    """Total memory (in bytes) at time of most recent 'initialize' message"""
+    physical_mem: float = 0.0
+    """Total physical memory (in bytes) at time of most recent 'initialize' message"""
+
+    def update_mem(self):
+        """
+        Record the current process memory.
+        """
+        mem = psutil.Process(os.getpid()).memory_info()
+        self.total_mem = mem.vms
+        self.physical_mem = mem.rss
+
+    def summary_log_message(self) -> str:
+        mem = psutil.Process(os.getpid()).memory_info()
+        total_mem = mem.vms
+        physical_mem = mem.rss
+        return (
+            f"Session {self.session_idx}, Theorem {self.thm_idx} summary:\n"
+            f"  Initialization:\n"
+            f"    Initial message: {self.init_data_online_size} B\n"
+            f"    Build network: {self.build_network_time:6f} s\n"
+            f"    Update defs: {self.update_def_time:6f} s to update {self.n_def_clusters_updated} def clusters\n"
+            f"  Predict:\n"
+            f"    Messages: {self.msg_idx} calls\n"
+            f"    Ave message size: {self.init_data_online_size / self.msg_idx} B\n"
+            f"    Avg predict step: {self.t_predict/self.n_predict:6f} s/call\n"
+            f"    Longest predict step: {self.max_t_predict:6f} s on message {self.argmax_t_predict}\n"
+            f"    Waiting for Coq: {self.t_coq/self.n_coq:6f} s/call\n"
+            f"  Data and Memory:\n"
+            f"    Total message sizes: {self.total_data_online_size/10**6:.3f} MB\n"
+            f"    Current Total Memory: {total_mem/10**6:.3f} MB\n"
+            f"    Current Physical Memory: {physical_mem/10**6:.3f} MB\n"
+            f"    Diff Total Memory: {(total_mem - self.total_mem)/10**6:.3f} MB\n"
+            f"    Diff Physical Memory: {(physical_mem - self.physical_mem)/10**6:.3f} MB\n"
+        )
 
 def main_loop(reader, sock, predict: Predict, debug_dir, session_idx=0,
               bfs_option=True,
@@ -249,35 +338,9 @@ def main_loop(reader, sock, predict: Predict, debug_dir, session_idx=0,
     logger.debug(f"network tactic hash to numargs {network_tactic_hash_to_numargs}")
     network_tactic_hash_to_index = {tactic_hash : idx for idx, tactic_hash in enumerate(network_tactic_index_to_hash)}
 
-    context_cnt = -1
-    n_predict = 0
-    t_predict = 0
-    t_coq = 0
-    n_coq = 0
-    
-    def killable_reader(reader: Iterator) -> Generator:
-        """
-        The reader iterator, but with adjustments so it can be stopped from the command line.
-        
-        Without this, the reader will block and can't be killed with Cntl+C
-        until it receives a message.  This works by disabling Python's catching of SIGINT
-        when calling the reader, but enabling it before yielding the message.
-        """
-        signal.signal(signal.SIGINT, signal.SIG_DFL)  # SIGINT catching OFF
-        for msg in reader:
-            signal.signal(signal.SIGINT, signal.default_int_handler)  # SIGINT catching ON
-            yield msg
-            signal.signal(signal.SIGINT, signal.SIG_DFL)  # SIGINT catching OFF
-        signal.signal(signal.SIGINT, signal.default_int_handler)  # SIGINT catching ON
-
     decorated_reader = tqdm.tqdm(killable_reader(reader)) if with_meter else killable_reader(reader)
 
-
-    msg_idx = -1
-    total_data_online_size = 0
-    build_network_time = 0
-    update_def_time = 0
-    n_def_clusters_updated = 0
+    log_cnts = LoggingCounters(session_idx=session_idx)
 
     for msg in decorated_reader:
         msg_type = msg.which()
@@ -302,15 +365,17 @@ def main_loop(reader, sock, predict: Predict, debug_dir, session_idx=0,
 
 
         elif msg_type == "initialize":
-            if context_cnt >= 0:
-                logger.info(f'theorem {context_cnt} had {msg_idx} messages received of total size (unpacked) {total_data_online_size} bytes, with network compiled in {build_network_time:.6f} s, with {n_def_clusters_updated} def clusters updated in {update_def_time:.6f} s')
+            if log_cnts.thm_idx >= 0:
+                logger.info(f'theorem {log_cnts.thm_idx} had {log_cnts.msg_idx} messages received of total size (unpacked) {log_cnts.total_data_online_size} bytes, with network compiled in {log_cnts.build_network_time:.6f} s, with {log_cnts.n_def_clusters_updated} def clusters updated in {log_cnts.update_def_time:.6f} s')
+                logger.info(log_cnts.summary_log_message())
 
 
-            context_cnt += 1
+            log_cnts.thm_idx += 1
+            log_cnts.update_mem()
 
-            logger.info(f'session {session_idx} theorem idx={context_cnt}, annotation={msg.initialize.logAnnotation} started.')
+            logger.info(f'session {session_idx} theorem idx={log_cnts.thm_idx}, annotation={msg.initialize.logAnnotation} started.')
 
-            wrap_debug_record(debug_dir, msg, context_cnt)
+            wrap_debug_record(debug_dir, msg, log_cnts.thm_idx)
 
             msg_data = msg.as_builder().to_bytes()
 
@@ -339,7 +404,8 @@ def main_loop(reader, sock, predict: Predict, debug_dir, session_idx=0,
                                                 local_to_global,
                                                 "request.initialize",
                                                 )
-            total_data_online_size = len(msg_data)
+            log_cnts.init_data_online_size = len(msg_data)
+            log_cnts.total_data_online_size = len(msg_data)
 
             logger.info(f"c_data_online references {n_msg_recorded} msg")
 
@@ -381,10 +447,10 @@ def main_loop(reader, sock, predict: Predict, debug_dir, session_idx=0,
 
             predict.initialize(global_context)
             t1 = time.time()
-            build_network_time = t1-t0
-            logger.info(f"Building network model completed in {build_network_time:.6f} seconds")
+            log_cnts.build_network_time = t1-t0
+            logger.info(f"Building network model completed in {log_cnts.build_network_time:.6f} seconds")
 
-            logger.info(f"Updating  definition clusters...")
+            logger.info(f"Updating definition clusters...")
 
 
             decorated_iterator = tqdm.tqdm(def_clusters_for_update) if progress_bar else def_clusters_for_update
@@ -406,8 +472,10 @@ def main_loop(reader, sock, predict: Predict, debug_dir, session_idx=0,
                 # print(cluster_state)
                 predict.compute_new_definitions([cluster_state])
             t1 = time.time()
-            n_def_clusters_updated = len(def_clusters_for_update)
-            update_def_time = t1 - t0
+            log_cnts.n_def_clusters_updated = len(def_clusters_for_update)
+            log_cnts.update_def_time = t1 - t0
+
+            logger.info(f"Definition clusters updated.")
 
             tacs, tac_numargs = process_initialize(sock, msg)
             evaluation_tactic_hash_to_numargs = {k:v for k,v in zip(tacs, tac_numargs)}
@@ -417,20 +485,26 @@ def main_loop(reader, sock, predict: Predict, debug_dir, session_idx=0,
                 if tac_hash in network_tactic_hash_to_index.keys():
                     allowed_model_tactics.append(network_tactic_hash_to_index[tac_hash])
 
-            msg_idx = 0
+            log_cnts.msg_idx = 0
+            log_cnts.t_predict = 0.0
+            log_cnts.n_predict = 0
+            log_cnts.max_t_predict = 0.0
+            log_cnts.argmax_t_predict = -1
+            log_cnts.t_coq = 0.0
+            log_cnts.n_coq = 0
             t0_coq = time.time()
         elif msg_type == "predict":
-            t_coq += (time.time() - t0_coq)
-            n_coq += 1
-            if n_coq != 0 and n_coq % 10 == 0:
-                logger.info(f'Coq requests {t_coq/n_coq:.6f} second/request')
+            log_cnts.t_coq += (time.time() - t0_coq)
+            log_cnts.n_coq += 1
+            if log_cnts.n_coq != 0 and log_cnts.n_coq % 10 == 0:
+                logger.verbose(f'Coq requests {log_cnts.t_coq/log_cnts.n_coq:.6f} second/request')
 
 
 
-            msg_idx += 1
+            log_cnts.msg_idx += 1
 
             if debug_dir is not None:
-                fname = os.path.join(debug_dir, f'msg_predict.{context_cnt}.{msg_idx}.bin')
+                fname = os.path.join(debug_dir, f'msg_predict.{log_cnts.thm_idx}.{msglog_cnts.msg_idx_idx}.bin')
                 debug_record(msg, fname=fname)
 
             msg_data = msg.as_builder().to_bytes()
@@ -445,8 +519,9 @@ def main_loop(reader, sock, predict: Predict, debug_dir, session_idx=0,
                                                 local_to_global,
                                                 "request.predict",
                                                 )
-            total_data_online_size += len(msg_data)
-            logger.info(f"num_messages_stored {num_messages_stored}")
+            log_cnts.total_data_online_size += len(msg_data)
+            log_cnts.predict_data_online_size += len(msg_data)
+            logger.verbose(f"num_messages_stored {num_messages_stored}")
             data_msg_idx = num_messages_stored - 1
             roots = np.array( [(data_msg_idx, msg.predict.state.root)], dtype=np.uint32)
 
@@ -509,22 +584,28 @@ def main_loop(reader, sock, predict: Predict, debug_dir, session_idx=0,
                                                               this_context,  sock.fileno(), eval_names[len(BASE_NAMES):])
             for action_idx, (online_encoded_action, online_confidence) in enumerate(
                     zip(top_online_encoded_actions, top_online_confidences)):
-                logger.info(f"sending to coq the action {action_idx}, prob = {online_confidence:.6f}, {online_encoded_action}")
+                logger.verbose(f"sending to coq the action {action_idx}, prob = {online_confidence:.6f}, {online_encoded_action}")
 
             t1 = time.time()
-            t_predict += (t1 - t0)
-            n_predict += 1
+            # the index of which message has the longest time.  By measuring this we will know if there is heavy recompilation.
+            if t1-t0 > log_cnts.max_t_predict:
+                log_cnts.max_t_predict = t1-t0
+                log_cnts.argmax_t_predict = log_cnts.msg_idx - 1  
+
+            log_cnts.t_predict += (t1 - t0)
+            log_cnts.n_predict += 1
 
             logger.verbose(f'Process predict this call {t1-t0:.6f} seconds')
-            if n_predict != 0 and n_predict % 10 == 0:
-                logger.info(f'Network predicts {t_predict/n_predict:.6f} second/call')
+            if log_cnts.n_predict != 0 and log_cnts.n_predict % 10 == 0:
+                logger.verbose(f'Network predicts {log_cnts.t_predict/log_cnts.n_predict:.6f} second/call')
             t0_coq = time.time()
         else:
             raise Exception("Capnp protocol error in prediction_loop: "
                             "msg type is not 'predict', 'synchronize', or 'initialize'")
 
 
-    logger.info(f'(final): theorem {context_cnt} had {msg_idx} messages received of total size (unpacked) {total_data_online_size} bytes, with network compiled in {build_network_time:.6f} s, with {n_def_clusters_updated} def clusters updated in {update_def_time:.6f} s')
+    logger.info(f'(final): theorem {log_cnts.thm_idx} had {log_cnts.msg_idx} messages received of total size (unpacked) {log_cnts.total_data_online_size} bytes, with network compiled in {log_cnts.build_network_time:.6f} s, with {log_cnts.n_def_clusters_updated} def clusters updated in {log_cnts.update_def_time:.6f} s')
+    logger.info(f"(final) " + log_cnts.summary_log_message())
 
 
 
@@ -695,7 +776,7 @@ def main():
                   'error':'40',
                   'critical':'50'}
 
-    tf_log_levels={'debug':'0',
+    tf_env_log_levels={'debug':'0',
                    'verbose':'0',
                    'info':'0',
                    'warning':'1',
@@ -708,11 +789,16 @@ def main():
 
     predict = None
     if not args.model is None:
-        os.environ['TF_CPP_MIN_LOG_LEVEL'] = tf_log_levels[args.tf_log_level]
+        # TF sometimes uses the warnings module.
+        # Here we redirect them to the "py.warnings" logger.
+        logging.captureWarnings(True)
+        logging.getLogger("py.warnings").setLevel(int(log_levels[args.tf_log_level]))
+        # Turn off (or on) TF logging BEFORE importing tensorflow
+        os.environ['TF_CPP_MIN_LOG_LEVEL'] = tf_env_log_levels[args.tf_log_level]
         if args.arch == 'tf2':
             logger.info("importing tensorflow...")
             import tensorflow as tf
-            tf.get_logger().setLevel(int(tf_log_levels[args.log_level]))
+            tf.get_logger().setLevel(int(log_levels[args.tf_log_level]))
             tf.config.run_functions_eagerly(args.tf_eager)
 
             logger.info("importing TF2Predict class..")
@@ -721,7 +807,7 @@ def main():
         elif args.arch == 'tfgnn':
             logger.info("importing tensorflow...")
             import tensorflow as tf
-            tf.get_logger().setLevel(int(tf_log_levels[args.log_level]))
+            tf.get_logger().setLevel(int(log_levels[args.tf_log_level]))
             tf.config.run_functions_eagerly(args.tf_eager)
 
             if args.exclude_tactics is not None:
