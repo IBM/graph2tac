@@ -244,7 +244,9 @@ class LoggingCounters:
     session_idx: int
     """Index for the current session"""
     thm_idx: int = -1
-    """Index of the current theorem (based on number of `initialization` messages seen)"""
+    """Index of the current theorem (based on number of `initialization` messages seen)"""    
+    thm_annotation: str = ""
+    """A theorem identifier (including file and linenumber if Coq is using coqc)"""
     msg_idx: int = -1
     """Number of 'prediction' messages recieved since last 'intitialize' message"""
     t_predict: float = 0.0
@@ -288,24 +290,32 @@ class LoggingCounters:
         mem = psutil.Process(os.getpid()).memory_info()
         total_mem = mem.vms
         physical_mem = mem.rss
+        summary_data = {
+            "Session" : f"{self.session_idx}",
+            "Theorem" : f"{self.thm_idx}",
+            "Annotation" : f"{self.thm_annotation}",
+            "Initialize|Message size (B)" : f"{self.init_data_online_size}",
+            "Initialize|Network build time (s)" : f"{self.build_network_time:.6f}",
+            "Initialize|Def clusters to update" : f"{self.n_def_clusters_updated}",
+            "Initialize|Def update time (s)" : f"{self.update_def_time:.6f}",
+            "Predict|Messages cnt" : f"{self.msg_idx}",
+            "Predict|Avg message size (B/msg)" : 
+                f"{self.init_data_online_size/self.msg_idx:.1f}" if self.msg_idx else "NA",
+            "Predict|Avg predict time (s/msg)" : 
+                f"{self.t_predict/self.n_predict:.6f}" if self.n_predict else "NA",
+            "Predict|Max predict time (s/msg)" : f"{self.max_t_predict:.6f}",
+            "Predict|Max time predict msg ix" : f"{self.argmax_t_predict}",
+            "Predict|Avg Coq wait time (s/msg)":
+                f"{self.t_coq/self.n_coq:.6f}" if self.n_coq else "NA",
+            "Memory|Total data in msgs (MB)" : f"{self.total_data_online_size/10**6:.3f}",
+            "Memory|Total memory (MB)": f"{total_mem/10**6:.3f}",
+            "Memory|Physical memory (MB)": f"{physical_mem/10**6:.3f}",
+            "Memory|Total mem diff (MB)": f"{(total_mem - self.total_mem)/10**6:.3f}",
+            "Memory|Physical mem diff (MB)":f"{(physical_mem - self.physical_mem)/10**6:.3f}",
+        }
         return (
-            f"Session {self.session_idx}, Theorem {self.thm_idx} summary:\n"
-            f"  Initialization:\n"
-            f"    Initial message size: {self.init_data_online_size} B\n"
-            f"    Build network: {self.build_network_time:.6f} s\n"
-            f"    Update defs: {self.update_def_time:.6f} s to update {self.n_def_clusters_updated} def clusters\n"
-            f"  Predict:\n"
-            f"    Messages: {self.msg_idx} calls\n"
-            f"    Ave message size: {self.init_data_online_size / self.msg_idx:.1f} B/call\n"
-            f"    Avg predict step: {self.t_predict/self.n_predict:.6f} s/call\n"
-            f"    Longest predict step: {self.max_t_predict:.6f} s on message {self.argmax_t_predict}\n"
-            f"    Waiting for Coq: {self.t_coq/self.n_coq:.6f} s/call\n"
-            f"  Data and Memory:\n"
-            f"    Total message sizes: {self.total_data_online_size/10**6:.3f} MB\n"
-            f"    Current Total Memory: {total_mem/10**6:.3f} MB\n"
-            f"    Current Physical Memory: {physical_mem/10**6:.3f} MB\n"
-            f"    Diff Total Memory: {(total_mem - self.total_mem)/10**6:.3f} MB\n"
-            f"    Diff Physical Memory: {(physical_mem - self.physical_mem)/10**6:.3f} MB\n"
+            f"Thm Summary:\n" +
+            "\n".join(f"[g2t-sum] {k}\t{v}" for k, v in summary_data.items())
         )
 
 def main_loop(reader, sock, predict: Predict, debug_dir, session_idx=0,
@@ -372,6 +382,7 @@ def main_loop(reader, sock, predict: Predict, debug_dir, session_idx=0,
 
             log_cnts.thm_idx += 1
             log_cnts.update_mem()
+            log_cnts.thm_annotation = msg.initialize.logAnnotation
 
             logger.info(f'session {session_idx} theorem idx={log_cnts.thm_idx}, annotation={msg.initialize.logAnnotation} started.')
 
