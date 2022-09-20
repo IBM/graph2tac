@@ -376,7 +376,6 @@ def main_loop(reader, sock, predict: Predict, debug_dir, session_idx=0,
 
         elif msg_type == "initialize":
             if log_cnts.thm_idx >= 0:
-                logger.info(f'theorem {log_cnts.thm_idx} had {log_cnts.msg_idx} messages received of total size (unpacked) {log_cnts.total_data_online_size} bytes, with network compiled in {log_cnts.build_network_time:.6f} s, with {log_cnts.n_def_clusters_updated} def clusters updated in {log_cnts.update_def_time:.6f} s')
                 logger.info(log_cnts.summary_log_message())
 
 
@@ -384,7 +383,7 @@ def main_loop(reader, sock, predict: Predict, debug_dir, session_idx=0,
             log_cnts.update_mem()
             log_cnts.thm_annotation = msg.initialize.logAnnotation
 
-            logger.info(f'session {session_idx} theorem idx={log_cnts.thm_idx}, annotation={msg.initialize.logAnnotation} started.')
+            logger.verbose(f'session {session_idx} theorem idx={log_cnts.thm_idx}, annotation={msg.initialize.logAnnotation} started.')
 
             wrap_debug_record(debug_dir, msg, log_cnts.thm_idx)
 
@@ -615,7 +614,6 @@ def main_loop(reader, sock, predict: Predict, debug_dir, session_idx=0,
                             "msg type is not 'predict', 'synchronize', or 'initialize'")
 
 
-    logger.info(f'(final): theorem {log_cnts.thm_idx} had {log_cnts.msg_idx} messages received of total size (unpacked) {log_cnts.total_data_online_size} bytes, with network compiled in {log_cnts.build_network_time:.6f} s, with {log_cnts.n_def_clusters_updated} def clusters updated in {log_cnts.update_def_time:.6f} s')
     logger.info(f"(final) " + log_cnts.summary_log_message())
 
 
