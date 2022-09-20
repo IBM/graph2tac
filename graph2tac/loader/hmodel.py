@@ -34,7 +34,7 @@ def action_encode(action,
 
 def my_hash_of(state: LoaderProofstate, with_context: bool):
     graph, root, context, _ = state
-    what_to_hash = (*graph, context) if with_context else graph
+    what_to_hash = (*graph, context[0]) if with_context else graph
     state_hash = my_hash(''.join(hash_nparray(x) for x in what_to_hash).encode())
     return state_hash
 
@@ -132,7 +132,7 @@ class HPredict(Predict):
                            annotation: str = "",
                            debug: bool = False
                            ) -> Tuple[np.ndarray, List]:
-        graph, root, context, _ = state
+        graph, root, (context, dynamic_global_context), _ = state
         state_hash = my_hash_of(state, self._with_context)
         inverse_local_context = dict()
         for (i, node_idx) in enumerate(context):
