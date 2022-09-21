@@ -56,13 +56,21 @@ class Dataset:
         self.exclude_not_faithful = exclude_not_faithful
         self._graph_constants = graph_constants
         self._stats = {}
+        vocabulary = [
+            chr(i) for i in range(ord('a'), ord('z')+1)
+        ] + [
+            chr(i) for i in range(ord('A'), ord('Z')+1)
+        ] + [
+            chr(i) for i in range(ord('0'), ord('9')+1)
+        ] + ["_", "'", "."]
         self._label_tokenizer = tf.keras.layers.TextVectorization(standardize=None,
                                                                   split='character',
                                                                   ngrams=None,
                                                                   output_mode='int',
                                                                   max_tokens=self.MAX_LABEL_TOKENS,
+                                                                  vocabulary = vocabulary,
                                                                   ragged=True)
-        self._label_tokenizer.adapt(graph_constants.label_to_names)
+        #self._label_tokenizer.adapt(graph_constants.label_to_names)
 
     def get_config(self) -> dict:
         return {

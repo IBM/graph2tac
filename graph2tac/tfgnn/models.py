@@ -1,4 +1,5 @@
 from typing import Iterable, Dict, Any, Callable, Optional, Tuple, Union
+from graph2tac.tfgnn.dataset import Dataset
 
 import tensorflow as tf
 import tensorflow_gnn as tfgnn
@@ -10,7 +11,6 @@ ATTENTION_GNN = 'attention_gnn'
 DENSE_TACTIC = 'dense_tactic'
 DENSE_DEFINITION = 'dense_definition'
 SIMPLE_RNN = 'simple_rnn'
-
 
 class RepeatScalarGraph(tf.keras.layers.Layer):
     def __init__(self, num_repetitions: int, name: str = "repeat_scalar_graph", **kwargs):
@@ -837,6 +837,7 @@ class DenseDefinitionHead(tf.keras.layers.Layer):
     def __init__(self,
                  hidden_size: int,
                  hidden_layers: Iterable[dict] = (),
+                 name_layer: Optional[dict] = None,
                  name: str = 'dense_definition_head',
                  **kwargs):
         """
@@ -849,29 +850,53 @@ class DenseDefinitionHead(tf.keras.layers.Layer):
         super().__init__(name=name, **kwargs)
         self._hidden_size = hidden_size
 
+        if name_layer is None:
+            self._name_layer = None
+        else:
+            self._name_layer_core = tf.keras.layers.deserialize(name_layer)
+            self._name_layer = tf.keras.Sequential([
+                tf.keras.layers.Input(shape=[None], dtype=tf.float32, ragged=True),
+                tf.keras.layers.Embedding(
+                    input_dim=Dataset.MAX_LABEL_TOKENS,
+                    output_dim=hidden_size,
+                ),
+                tf.keras.layers.Lambda(lambda x: x.to_tensor()), # align ragged tensor
+                self._name_layer_core,
+            ])
+
         self._hidden_layers = [tf.keras.layers.Dense.from_config(hidden_layer_config) for hidden_layer_config in hidden_layers]
         self._final_layer = tf.keras.layers.Dense(units=hidden_size)
 
     def get_config(self) -> dict:
         config = super().get_config()
+        if self._name_layer is None:
+            name_layer = None
+        else:
+            name_layer = tf.keras.layers.serialize(self._name_layer_core)
         config.update({
             'hidden_size': self._hidden_size,
-            'hidden_layers': [hidden_layer.get_config() for hidden_layer in self._hidden_layers]
+            'hidden_layers': [hidden_layer.get_config() for hidden_layer in self._hidden_layers],
+            'name_layer': name_layer,
         })
         return config
 
     def call(self,
-             inputs: Tuple[tfgnn.GraphTensor, tf.Tensor],
+             inputs: Tuple[tfgnn.GraphTensor, tf.RaggedTensor, tf.RaggedTensor],
              training: bool = False
              ) -> tf.Tensor:
-        hidden_graph, num_definitions = inputs
+        hidden_graph, num_definitions, definition_name_vectors = inputs
 
         cumulative_sizes = tf.expand_dims(tf.cumsum(hidden_graph.node_sets['node'].sizes, exclusive=True), axis=-1)
         definition_nodes = tf.ragged.range(num_definitions) + tf.cast(cumulative_sizes, dtype=tf.int64)
 
         node_hidden_states = tf.gather(hidden_graph.node_sets['node']['hidden_state'], definition_nodes.flat_values)
         graph_hidden_states = tf.repeat(hidden_graph.context['hidden_state'], num_definitions, axis=0)
-        hidden_state = tf.concat([node_hidden_states, graph_hidden_states], axis=-1)
+
+        hidden_state = [node_hidden_states, graph_hidden_states]
+        if self._name_layer is not None:
+            rnn_output = self._name_layer(definition_name_vectors.values)
+            hidden_state.append(rnn_output)
+        hidden_state = tf.concat(hidden_state, axis=-1)
 
         for hidden_layer in self._hidden_layers:
             hidden_state = hidden_layer(hidden_state, training=training)

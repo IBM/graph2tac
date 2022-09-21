@@ -1,5 +1,12 @@
 definition_head_type: dense_definition
 definition_head_config:
+  name_layer:
+    class_name: Bidirectional
+    config:
+      layer:
+        class_name: LSTM
+        config:
+          units: 256
   hidden_layers:
   - activation: relu
     units: 256
