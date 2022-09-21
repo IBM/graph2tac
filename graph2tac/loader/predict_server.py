@@ -273,23 +273,36 @@ class LoggingCounters:
     """Time (in seconds) to update the definitions processing most recent 'intitialize' message"""
     n_def_clusters_updated: int = 0
     """Number of definition clusters updated when processing most recent 'initialize' message"""
+    proc = psutil.Process()
+    """This process, used to get memory and cpu statistics."""
     total_mem: float = 0.0
     """Total memory (in bytes) at time of most recent 'initialize' message"""
     physical_mem: float = 0.0
     """Total physical memory (in bytes) at time of most recent 'initialize' message"""
+    total_mem_diff: float = 0.0
+    """Difference in memory (in bytes) since last 'initialize' message"""
+    physical_mem_diff: float = 0.0
+    """Difference in physical memory (in bytes) since last 'initialize' message"""
+    cpu_pct = 0.0
+    """
+    CPU utilization since the last 'initialize' message.
 
-    def update_mem(self):
+    Can be > 100% if using multiple cores (same as in htop).
+    May incorrectly be 0.0 if there isn't enough time between 'initialize' calls.
+    """
+
+    def update_process_stats(self):
         """
-        Record the current process memory.
+        Update the CPU and memory statistics recording the difference 
         """
-        mem = psutil.Process(os.getpid()).memory_info()
-        self.total_mem = mem.vms
-        self.physical_mem = mem.rss
+        self.cpu_pct = self.proc.cpu_percent()
+        new_mem = self.proc.memory_info()
+        self.total_mem_diff = new_mem.vms - self.total_mem
+        self.physical_mem_diff = new_mem.rss - self.physical_mem
+        self.total_mem = new_mem.vms
+        self.physical_mem = new_mem.rss
 
     def summary_log_message(self) -> str:
-        mem = psutil.Process(os.getpid()).memory_info()
-        total_mem = mem.vms
-        physical_mem = mem.rss
         summary_data = {
             "Session" : f"{self.session_idx}",
             "Theorem" : f"{self.thm_idx}",
@@ -308,10 +321,11 @@ class LoggingCounters:
             "Predict|Avg Coq wait time (s/msg)":
                 f"{self.t_coq/self.n_coq:.6f}" if self.n_coq else "NA",
             "Memory|Total data in msgs (MB)" : f"{self.total_data_online_size/10**6:.3f}",
-            "Memory|Total memory (MB)": f"{total_mem/10**6:.3f}",
-            "Memory|Physical memory (MB)": f"{physical_mem/10**6:.3f}",
-            "Memory|Total mem diff (MB)": f"{(total_mem - self.total_mem)/10**6:.3f}",
-            "Memory|Physical mem diff (MB)":f"{(physical_mem - self.physical_mem)/10**6:.3f}",
+            "Memory|Total memory (MB)": f"{self.total_mem/10**6:.3f}",
+            "Memory|Physical memory (MB)": f"{self.physical_mem/10**6:.3f}",
+            "Memory|Total mem diff (MB)": f"{self.total_mem_diff/10**6:.3f}",
+            "Memory|Physical mem diff (MB)": f"{self.physical_mem_diff/10**6:.3f}",
+            "Avg CPU (%)": f"{self.cpu_pct}"
         }
         return (
             f"Thm Summary:\n" +
@@ -375,12 +389,12 @@ def main_loop(reader, sock, predict: Predict, debug_dir, session_idx=0,
 
 
         elif msg_type == "initialize":
+            log_cnts.update_process_stats()
             if log_cnts.thm_idx >= 0:
                 logger.info(log_cnts.summary_log_message())
 
 
             log_cnts.thm_idx += 1
-            log_cnts.update_mem()
             log_cnts.thm_annotation = msg.initialize.logAnnotation
 
             logger.verbose(f'session {session_idx} theorem idx={log_cnts.thm_idx}, annotation={msg.initialize.logAnnotation} started.')
@@ -613,7 +627,7 @@ def main_loop(reader, sock, predict: Predict, debug_dir, session_idx=0,
             raise Exception("Capnp protocol error in prediction_loop: "
                             "msg type is not 'predict', 'synchronize', or 'initialize'")
 
-
+    log_cnts.update_process_stats()
     logger.info(f"(final) " + log_cnts.summary_log_message())
 
 
