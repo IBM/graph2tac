@@ -134,7 +134,7 @@ class TF2Predict(Predict):
         model_input = np_to_tensor(make_flat_batch_np(batch, len(self.dataset_consts.global_context),
                                                       self.dataset_consts.tactic_max_arg_num))
         _, arg_nums, arg_logits = self.pred_fn(model_input)
-        _, _, context, _ = state
+        _, _, (context, _), _ = state
         cxt_len = len(context)  # this is how many local context elements there are
         arg_cnt = sum(arg_nums)
         local_context_arg_cnt = arg_cnt * cxt_len  # how many logits there are for local context elements in all arguments
