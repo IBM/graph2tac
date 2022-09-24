@@ -19,8 +19,10 @@ from pathlib import Path
 import logging
 import signal
 import psutil
+import uuid
 
-from graph2tac.common import uuid, logger
+import graph2tac.common
+from graph2tac.common import logger
 from graph2tac.predict import Predict
 from graph2tac.loader.data_server import DataServer, build_def_index, get_global_def_table, LoaderGraph, LoaderProofstate, LoaderDefinition
 
@@ -241,6 +243,12 @@ class LoggingCounters:
     """
     The counters recorded in the logs and debug output.
     """
+    process_uuid: uuid.UUID
+    """
+    UUID for the process.
+    
+    Used to distinguish logs when multiple processes get logged to the same file.
+    """
     session_idx: int
     """Index for the current session"""
     thm_idx: int = -1
@@ -304,6 +312,7 @@ class LoggingCounters:
 
     def summary_log_message(self) -> str:
         summary_data = {
+            "UUID" : f"{self.process_uuid}",
             "Session" : f"{self.session_idx}",
             "Theorem" : f"{self.thm_idx}",
             "Annotation" : f"{self.thm_annotation}",
@@ -332,7 +341,7 @@ class LoggingCounters:
             "\n".join(f"[g2t-sum] {k}\t{v}" for k, v in summary_data.items())
         )
 
-def main_loop(reader, sock, predict: Predict, debug_dir, session_idx=0,
+def main_loop(reader, sock, predict: Predict, debug_dir, process_uuid, session_idx=0,
               bfs_option=True,
               with_meter=False,
               tactic_expand_bound=8,
@@ -364,7 +373,7 @@ def main_loop(reader, sock, predict: Predict, debug_dir, session_idx=0,
 
     decorated_reader = tqdm.tqdm(killable_reader(reader)) if with_meter else killable_reader(reader)
 
-    log_cnts = LoggingCounters(session_idx=session_idx)
+    log_cnts = LoggingCounters(process_uuid=process_uuid, session_idx=session_idx)
 
     for msg in decorated_reader:
         msg_type = msg.which()
@@ -391,7 +400,7 @@ def main_loop(reader, sock, predict: Predict, debug_dir, session_idx=0,
         elif msg_type == "initialize":
             log_cnts.update_process_stats()
             if log_cnts.thm_idx >= 0:
-                logger.info(log_cnts.summary_log_message())
+                logger.summary(log_cnts.summary_log_message())
 
 
             log_cnts.thm_idx += 1
@@ -634,16 +643,16 @@ def main_loop(reader, sock, predict: Predict, debug_dir, session_idx=0,
 
 
 def test_record(data_dir):
-    os.makedirs(uuid(data_dir), exist_ok=True)
-    fname = Path(uuid(data_dir)).joinpath('check_dataset.out')
+    os.makedirs(graph2tac.common.uuid(data_dir), exist_ok=True)
+    fname = Path(graph2tac.common.uuid(data_dir)).joinpath('check_dataset.out')
     d = DataServer(data_dir=data_dir, bfs_option=True, max_subgraph_size=512)
     dataset_recorded = [d.data_point(idx) for idx in range(d._debug_data().proof_steps_size())]
     cluster_subgraphs = d.def_cluster_subgraphs()
     pickle.dump((dataset_recorded, cluster_subgraphs), open(fname,'wb'))
 
 def test_check(data_dir):
-    os.makedirs(uuid(data_dir), exist_ok=True)
-    fname = Path(uuid(data_dir)).joinpath('check_dataset.out')
+    os.makedirs(graph2tac.common.uuid(data_dir), exist_ok=True)
+    fname = Path(graph2tac.common.uuid(data_dir)).joinpath('check_dataset.out')
     d = DataServer(data_dir=data_dir, bfs_option=True, max_subgraph_size=512)
     dataset = [d.data_point(idx) for idx in range(d._debug_data().proof_steps_size())]
     cluster_subgraphs = d.def_cluster_subgraphs()
@@ -694,11 +703,11 @@ def main():
 
     parser.add_argument('--log_level', type=str,
                         default='info',
-                        help='debug | verbose | info | warning | error | critical')
+                        help='debug | verbose | info | summary | warning | error | critical')
 
     parser.add_argument('--tf_log_level', type=str,
                         default='info',
-                        help='debug | verbose | info | warning | error | critical')
+                        help='debug | verbose | info | summary | warning | error | critical')
 
     parser.add_argument('--debug_dir', type=str,
                         default = None,
@@ -795,6 +804,7 @@ def main():
     log_levels = {'debug':'10',
                   'verbose':'15',
                   'info':'20',
+                  'summary':'25',
                   'warning':'30',
                   'error':'40',
                   'critical':'50'}
@@ -802,6 +812,7 @@ def main():
     tf_env_log_levels={'debug':'0',
                    'verbose':'0',
                    'info':'0',
+                   'summary':'1',
                    'warning':'1',
                    'error':'2',
                    'critical':'3'}
@@ -809,6 +820,11 @@ def main():
 
     os.environ['G2T_LOG_LEVEL'] = log_levels[args.log_level]
     logger.setLevel(int(log_levels[args.log_level]))
+
+    # This process uuid is used in logging as an identifier for this process.
+    # There is a small probability of a collision with another process, but it is unlikely.
+    process_uuid = uuid.uuid1()
+    logger.info(f"UUID: {process_uuid}")
 
     predict = None
     if not args.model is None:
@@ -859,16 +875,19 @@ def main():
         logger.info("starting stdin server")
         sock = socket.socket(fileno=sys.stdin.fileno())
         reader = graph_api_capnp.PredictionProtocol.Request.read_multiple_packed(sock, traversal_limit_in_words=2**64-1)
-        main_loop(reader, sock, predict, args.debug_dir,
-                  session_idx=0,
-                  with_meter=args.with_meter,
-                  tactic_expand_bound=args.tactic_expand_bound,
-                  total_expand_bound=args.total_expand_bound,
-                  search_expand_bound=args.search_expand_bound,
-                  update_all_definitions=args.update_all_definitions,
-                  update_new_definitions=args.update_new_definitions,
-                  progress_bar=args.progress_bar,
-                  temperature=args.temperature
+        main_loop(
+            reader=reader, sock=sock, predict=predict,
+            debug_dir=args.debug_dir,
+            process_uuid=process_uuid,
+            session_idx=0,
+            with_meter=args.with_meter,
+            tactic_expand_bound=args.tactic_expand_bound,
+            total_expand_bound=args.total_expand_bound,
+            search_expand_bound=args.search_expand_bound,
+            update_all_definitions=args.update_all_definitions,
+            update_new_definitions=args.update_new_definitions,
+            progress_bar=args.progress_bar,
+            temperature=args.temperature
         )
     else:
         logger.info(f"starting tcp/ip server on port {args.port}")
@@ -889,16 +908,18 @@ def main():
                 sock, remote_addr = server_sock.accept()
                 logger.info(f"coq client connected {remote_addr}")
                 reader = graph_api_capnp.PredictionProtocol.Request.read_multiple_packed(sock, traversal_limit_in_words=2**64-1)
-                main_loop(reader, sock, predict,
-                          args.debug_dir,
-                          session_idx,
-                          with_meter=args.with_meter,
-                          tactic_expand_bound=args.tactic_expand_bound,
-                          total_expand_bound=args.total_expand_bound,
-                          search_expand_bound=args.search_expand_bound,
-                          update_all_definitions=args.update_all_definitions,
-                          update_new_definitions=args.update_new_definitions,
-                          progress_bar=args.progress_bar,
+                main_loop(
+                    reader=reader, sock=sock, predict=predict,
+                    debug_dir=args.debug_dir,
+                    process_uuid=process_uuid,
+                    session_idx=session_idx,
+                    with_meter=args.with_meter,
+                    tactic_expand_bound=args.tactic_expand_bound,
+                    total_expand_bound=args.total_expand_bound,
+                    search_expand_bound=args.search_expand_bound,
+                    update_all_definitions=args.update_all_definitions,
+                    update_new_definitions=args.update_new_definitions,
+                    progress_bar=args.progress_bar,
                 )
                 logger.info(f"coq client disconnected {remote_addr}")
 
