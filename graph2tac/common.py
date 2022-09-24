@@ -48,9 +48,18 @@ def uuid(data_dir: Path):
     m.update(os.fsencode(data_dir.expanduser().resolve()))
     return m.hexdigest()[:6]
 
+logging.basicConfig(
+    stream=sys.stdout,
+    level = logging.DEBUG,
+    format = '%(name)s:%(levelname)s - %(message)s'
+)
+logging.getLogger().setLevel(logging.INFO)
 logger = logging.getLogger('graph2tac')
+
+logging.addLevelName(15, "VERBOSE")  # between debug and info
 logger.verbose = lambda message: logger.log(level=15, msg=message)
+
+logging.addLevelName(25, "SUMMARY")  # between info and warning
+logger.summary = lambda message: logger.log(level=25, msg=message)
+
 logger.setLevel(logging.INFO)
-handler = logging.StreamHandler(sys.stdout)
-handler.setFormatter(logging.Formatter('%(name)s:%(levelname)s - %(message)s'))
-logger.addHandler(handler)

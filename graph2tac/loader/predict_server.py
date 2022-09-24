@@ -1,6 +1,7 @@
 """
 python prediction server to interact with coq-tactician-reinforce
 """
+from dataclasses import dataclass
 from typing import Generator, Iterator, NewType
 
 import sys
@@ -15,9 +16,13 @@ import capnp
 import argparse
 import numpy as np
 from pathlib import Path
+import logging
 import signal
+import psutil
+import uuid
 
-from graph2tac.common import uuid, logger
+import graph2tac.common
+from graph2tac.common import logger
 from graph2tac.predict import Predict
 from graph2tac.loader.data_server import DataServer, build_def_index, get_global_def_table, LoaderGraph, LoaderProofstate, LoaderDefinition
 
@@ -218,8 +223,125 @@ def process_alignment_request(
     logger.verbose(f"checkAlignment unaligned tactics: {unaligned_tactics}")
     return unaligned_tactics, unaligned_nodes
 
+def killable_reader(reader: Iterator) -> Generator:
+    """
+    The reader iterator, but with adjustments so it can be stopped from the command line.
+    
+    Without this, the reader will block and can't be killed with Cntl+C
+    until it receives a message.  This works by disabling Python's catching of SIGINT
+    when calling the reader, but enabling it before yielding the message.
+    """
+    signal.signal(signal.SIGINT, signal.SIG_DFL)  # SIGINT catching OFF
+    for msg in reader:
+        signal.signal(signal.SIGINT, signal.default_int_handler)  # SIGINT catching ON
+        yield msg
+        signal.signal(signal.SIGINT, signal.SIG_DFL)  # SIGINT catching OFF
+    signal.signal(signal.SIGINT, signal.default_int_handler)  # SIGINT catching ON
 
-def main_loop(reader, sock, predict: Predict, debug_dir, session_idx=0,
+@dataclass
+class LoggingCounters:
+    """
+    The counters recorded in the logs and debug output.
+    """
+    process_uuid: uuid.UUID
+    """
+    UUID for the process.
+    
+    Used to distinguish logs when multiple processes get logged to the same file.
+    """
+    session_idx: int
+    """Index for the current session"""
+    thm_idx: int = -1
+    """Index of the current theorem (based on number of `initialization` messages seen)"""    
+    thm_annotation: str = ""
+    """A theorem identifier (including file and linenumber if Coq is using coqc)"""
+    msg_idx: int = -1
+    """Number of 'prediction' messages recieved since last 'intitialize' message"""
+    t_predict: float = 0.0
+    """Total time (in seconds) spent on predict since last 'initialize'"""
+    n_predict: int = 0
+    """Number of 'prediction' messages recieved since last 'intialize'"""
+    max_t_predict: float = 0.0
+    """Max time (in seconds) spent on single predict since last 'initialize'"""
+    argmax_t_predict: int = -1
+    """Index of last maximum time single predict since last 'initialize'"""
+    t_coq: int = 0
+    """Total time (in seconds) spent waiting on Coq since last 'initialize'"""
+    n_coq: int = 0
+    """Number of 'prediction' requests made by Coq"""
+    init_data_online_size: int = 0
+    """Data size in bytes for 'intitialize' message"""
+    predict_data_online_size: int = 0
+    """Total data size in bytes for 'predict' messages since last 'intitialize' message"""
+    total_data_online_size: int = 0
+    """Total data size in bytes for all messages since last 'intitialize' message"""
+    build_network_time: float = 0.0
+    """Time (in seconds) to build network when processing most recent 'intitialize' message"""
+    update_def_time: float = 0.0
+    """Time (in seconds) to update the definitions processing most recent 'intitialize' message"""
+    n_def_clusters_updated: int = 0
+    """Number of definition clusters updated when processing most recent 'initialize' message"""
+    proc = psutil.Process()
+    """This process, used to get memory and cpu statistics."""
+    total_mem: float = 0.0
+    """Total memory (in bytes) at time of most recent 'initialize' message"""
+    physical_mem: float = 0.0
+    """Total physical memory (in bytes) at time of most recent 'initialize' message"""
+    total_mem_diff: float = 0.0
+    """Difference in memory (in bytes) since last 'initialize' message"""
+    physical_mem_diff: float = 0.0
+    """Difference in physical memory (in bytes) since last 'initialize' message"""
+    cpu_pct = 0.0
+    """
+    CPU utilization since the last 'initialize' message.
+
+    Can be > 100% if using multiple cores (same as in htop).
+    May incorrectly be 0.0 if there isn't enough time between 'initialize' calls.
+    """
+
+    def update_process_stats(self):
+        """
+        Update the CPU and memory statistics recording the difference 
+        """
+        self.cpu_pct = self.proc.cpu_percent()
+        new_mem = self.proc.memory_info()
+        self.total_mem_diff = new_mem.vms - self.total_mem
+        self.physical_mem_diff = new_mem.rss - self.physical_mem
+        self.total_mem = new_mem.vms
+        self.physical_mem = new_mem.rss
+
+    def summary_log_message(self) -> str:
+        summary_data = {
+            "UUID" : f"{self.process_uuid}",
+            "Session" : f"{self.session_idx}",
+            "Theorem" : f"{self.thm_idx}",
+            "Annotation" : f"{self.thm_annotation}",
+            "Initialize|Message size (B)" : f"{self.init_data_online_size}",
+            "Initialize|Network build time (s)" : f"{self.build_network_time:.6f}",
+            "Initialize|Def clusters to update" : f"{self.n_def_clusters_updated}",
+            "Initialize|Def update time (s)" : f"{self.update_def_time:.6f}",
+            "Predict|Messages cnt" : f"{self.msg_idx}",
+            "Predict|Avg message size (B/msg)" : 
+                f"{self.init_data_online_size/self.msg_idx:.1f}" if self.msg_idx else "NA",
+            "Predict|Avg predict time (s/msg)" : 
+                f"{self.t_predict/self.n_predict:.6f}" if self.n_predict else "NA",
+            "Predict|Max predict time (s/msg)" : f"{self.max_t_predict:.6f}",
+            "Predict|Max time predict msg ix" : f"{self.argmax_t_predict}",
+            "Predict|Avg Coq wait time (s/msg)":
+                f"{self.t_coq/self.n_coq:.6f}" if self.n_coq else "NA",
+            "Memory|Total data in msgs (MB)" : f"{self.total_data_online_size/10**6:.3f}",
+            "Memory|Total memory (MB)": f"{self.total_mem/10**6:.3f}",
+            "Memory|Physical memory (MB)": f"{self.physical_mem/10**6:.3f}",
+            "Memory|Total mem diff (MB)": f"{self.total_mem_diff/10**6:.3f}",
+            "Memory|Physical mem diff (MB)": f"{self.physical_mem_diff/10**6:.3f}",
+            "Avg CPU (%)": f"{self.cpu_pct}"
+        }
+        return (
+            f"Thm Summary:\n" +
+            "\n".join(f"[g2t-sum] {k}\t{v}" for k, v in summary_data.items())
+        )
+
+def main_loop(reader, sock, predict: Predict, debug_dir, process_uuid, session_idx=0,
               bfs_option=True,
               with_meter=False,
               tactic_expand_bound=8,
@@ -249,35 +371,9 @@ def main_loop(reader, sock, predict: Predict, debug_dir, session_idx=0,
     logger.debug(f"network tactic hash to numargs {network_tactic_hash_to_numargs}")
     network_tactic_hash_to_index = {tactic_hash : idx for idx, tactic_hash in enumerate(network_tactic_index_to_hash)}
 
-    context_cnt = -1
-    n_predict = 0
-    t_predict = 0
-    t_coq = 0
-    n_coq = 0
-    
-    def killable_reader(reader: Iterator) -> Generator:
-        """
-        The reader iterator, but with adjustments so it can be stopped from the command line.
-        
-        Without this, the reader will block and can't be killed with Cntl+C
-        until it receives a message.  This works by disabling Python's catching of SIGINT
-        when calling the reader, but enabling it before yielding the message.
-        """
-        signal.signal(signal.SIGINT, signal.SIG_DFL)  # SIGINT catching OFF
-        for msg in reader:
-            signal.signal(signal.SIGINT, signal.default_int_handler)  # SIGINT catching ON
-            yield msg
-            signal.signal(signal.SIGINT, signal.SIG_DFL)  # SIGINT catching OFF
-        signal.signal(signal.SIGINT, signal.default_int_handler)  # SIGINT catching ON
-
     decorated_reader = tqdm.tqdm(killable_reader(reader)) if with_meter else killable_reader(reader)
 
-
-    msg_idx = -1
-    total_data_online_size = 0
-    build_network_time = 0
-    update_def_time = 0
-    n_def_clusters_updated = 0
+    log_cnts = LoggingCounters(process_uuid=process_uuid, session_idx=session_idx)
 
     for msg in decorated_reader:
         msg_type = msg.which()
@@ -302,15 +398,17 @@ def main_loop(reader, sock, predict: Predict, debug_dir, session_idx=0,
 
 
         elif msg_type == "initialize":
-            if context_cnt >= 0:
-                logger.info(f'theorem {context_cnt} had {msg_idx} messages received of total size (unpacked) {total_data_online_size} bytes, with network compiled in {build_network_time:.6f} s, with {n_def_clusters_updated} def clusters updated in {update_def_time:.6f} s')
+            log_cnts.update_process_stats()
+            if log_cnts.thm_idx >= 0:
+                logger.summary(log_cnts.summary_log_message())
 
 
-            context_cnt += 1
+            log_cnts.thm_idx += 1
+            log_cnts.thm_annotation = msg.initialize.logAnnotation
 
-            logger.info(f'session {session_idx} theorem idx={context_cnt}, annotation={msg.initialize.logAnnotation} started.')
+            logger.verbose(f'session {session_idx} theorem idx={log_cnts.thm_idx}, annotation={msg.initialize.logAnnotation} started.')
 
-            wrap_debug_record(debug_dir, msg, context_cnt)
+            wrap_debug_record(debug_dir, msg, log_cnts.thm_idx)
 
             msg_data = msg.as_builder().to_bytes()
 
@@ -339,7 +437,8 @@ def main_loop(reader, sock, predict: Predict, debug_dir, session_idx=0,
                                                 local_to_global,
                                                 "request.initialize",
                                                 )
-            total_data_online_size = len(msg_data)
+            log_cnts.init_data_online_size = len(msg_data)
+            log_cnts.total_data_online_size = len(msg_data)
 
             logger.info(f"c_data_online references {n_msg_recorded} msg")
 
@@ -381,10 +480,10 @@ def main_loop(reader, sock, predict: Predict, debug_dir, session_idx=0,
 
             predict.initialize(global_context)
             t1 = time.time()
-            build_network_time = t1-t0
-            logger.info(f"Building network model completed in {build_network_time:.6f} seconds")
+            log_cnts.build_network_time = t1-t0
+            logger.info(f"Building network model completed in {log_cnts.build_network_time:.6f} seconds")
 
-            logger.info(f"Updating  definition clusters...")
+            logger.info(f"Updating definition clusters...")
 
 
             decorated_iterator = tqdm.tqdm(def_clusters_for_update) if progress_bar else def_clusters_for_update
@@ -406,8 +505,10 @@ def main_loop(reader, sock, predict: Predict, debug_dir, session_idx=0,
                 # print(cluster_state)
                 predict.compute_new_definitions([cluster_state])
             t1 = time.time()
-            n_def_clusters_updated = len(def_clusters_for_update)
-            update_def_time = t1 - t0
+            log_cnts.n_def_clusters_updated = len(def_clusters_for_update)
+            log_cnts.update_def_time = t1 - t0
+
+            logger.info(f"Definition clusters updated.")
 
             tacs, tac_numargs = process_initialize(sock, msg)
             evaluation_tactic_hash_to_numargs = {k:v for k,v in zip(tacs, tac_numargs)}
@@ -417,20 +518,26 @@ def main_loop(reader, sock, predict: Predict, debug_dir, session_idx=0,
                 if tac_hash in network_tactic_hash_to_index.keys():
                     allowed_model_tactics.append(network_tactic_hash_to_index[tac_hash])
 
-            msg_idx = 0
+            log_cnts.msg_idx = 0
+            log_cnts.t_predict = 0.0
+            log_cnts.n_predict = 0
+            log_cnts.max_t_predict = 0.0
+            log_cnts.argmax_t_predict = -1
+            log_cnts.t_coq = 0.0
+            log_cnts.n_coq = 0
             t0_coq = time.time()
         elif msg_type == "predict":
-            t_coq += (time.time() - t0_coq)
-            n_coq += 1
-            if n_coq != 0 and n_coq % 10 == 0:
-                logger.info(f'Coq requests {t_coq/n_coq:.6f} second/request')
+            log_cnts.t_coq += (time.time() - t0_coq)
+            log_cnts.n_coq += 1
+            if log_cnts.n_coq != 0 and log_cnts.n_coq % 10 == 0:
+                logger.verbose(f'Coq requests {log_cnts.t_coq/log_cnts.n_coq:.6f} second/request')
 
 
 
-            msg_idx += 1
+            log_cnts.msg_idx += 1
 
             if debug_dir is not None:
-                fname = os.path.join(debug_dir, f'msg_predict.{context_cnt}.{msg_idx}.bin')
+                fname = os.path.join(debug_dir, f'msg_predict.{log_cnts.thm_idx}.{msglog_cnts.msg_idx_idx}.bin')
                 debug_record(msg, fname=fname)
 
             msg_data = msg.as_builder().to_bytes()
@@ -445,8 +552,9 @@ def main_loop(reader, sock, predict: Predict, debug_dir, session_idx=0,
                                                 local_to_global,
                                                 "request.predict",
                                                 )
-            total_data_online_size += len(msg_data)
-            logger.info(f"num_messages_stored {num_messages_stored}")
+            log_cnts.total_data_online_size += len(msg_data)
+            log_cnts.predict_data_online_size += len(msg_data)
+            logger.verbose(f"num_messages_stored {num_messages_stored}")
             data_msg_idx = num_messages_stored - 1
             roots = np.array( [(data_msg_idx, msg.predict.state.root)], dtype=np.uint32)
 
@@ -509,37 +617,42 @@ def main_loop(reader, sock, predict: Predict, debug_dir, session_idx=0,
                                                               this_context,  sock.fileno(), eval_names[len(BASE_NAMES):])
             for action_idx, (online_encoded_action, online_confidence) in enumerate(
                     zip(top_online_encoded_actions, top_online_confidences)):
-                logger.info(f"sending to coq the action {action_idx}, prob = {online_confidence:.6f}, {online_encoded_action}")
+                logger.verbose(f"sending to coq the action {action_idx}, prob = {online_confidence:.6f}, {online_encoded_action}")
 
             t1 = time.time()
-            t_predict += (t1 - t0)
-            n_predict += 1
+            # the index of which message has the longest time.  By measuring this we will know if there is heavy recompilation.
+            if t1-t0 > log_cnts.max_t_predict:
+                log_cnts.max_t_predict = t1-t0
+                log_cnts.argmax_t_predict = log_cnts.msg_idx - 1  
+
+            log_cnts.t_predict += (t1 - t0)
+            log_cnts.n_predict += 1
 
             logger.verbose(f'Process predict this call {t1-t0:.6f} seconds')
-            if n_predict != 0 and n_predict % 10 == 0:
-                logger.info(f'Network predicts {t_predict/n_predict:.6f} second/call')
+            if log_cnts.n_predict != 0 and log_cnts.n_predict % 10 == 0:
+                logger.verbose(f'Network predicts {log_cnts.t_predict/log_cnts.n_predict:.6f} second/call')
             t0_coq = time.time()
         else:
             raise Exception("Capnp protocol error in prediction_loop: "
                             "msg type is not 'predict', 'synchronize', or 'initialize'")
 
-
-    logger.info(f'(final): theorem {context_cnt} had {msg_idx} messages received of total size (unpacked) {total_data_online_size} bytes, with network compiled in {build_network_time:.6f} s, with {n_def_clusters_updated} def clusters updated in {update_def_time:.6f} s')
+    log_cnts.update_process_stats()
+    logger.info(f"(final) " + log_cnts.summary_log_message())
 
 
 
 
 def test_record(data_dir):
-    os.makedirs(uuid(data_dir), exist_ok=True)
-    fname = Path(uuid(data_dir)).joinpath('check_dataset.out')
+    os.makedirs(graph2tac.common.uuid(data_dir), exist_ok=True)
+    fname = Path(graph2tac.common.uuid(data_dir)).joinpath('check_dataset.out')
     d = DataServer(data_dir=data_dir, bfs_option=True, max_subgraph_size=512)
     dataset_recorded = [d.data_point(idx) for idx in range(d._debug_data().proof_steps_size())]
     cluster_subgraphs = d.def_cluster_subgraphs()
     pickle.dump((dataset_recorded, cluster_subgraphs), open(fname,'wb'))
 
 def test_check(data_dir):
-    os.makedirs(uuid(data_dir), exist_ok=True)
-    fname = Path(uuid(data_dir)).joinpath('check_dataset.out')
+    os.makedirs(graph2tac.common.uuid(data_dir), exist_ok=True)
+    fname = Path(graph2tac.common.uuid(data_dir)).joinpath('check_dataset.out')
     d = DataServer(data_dir=data_dir, bfs_option=True, max_subgraph_size=512)
     dataset = [d.data_point(idx) for idx in range(d._debug_data().proof_steps_size())]
     cluster_subgraphs = d.def_cluster_subgraphs()
@@ -590,11 +703,11 @@ def main():
 
     parser.add_argument('--log_level', type=str,
                         default='info',
-                        help='debug | verbose | info | warning | error | critical')
+                        help='debug | verbose | info | summary | warning | error | critical')
 
     parser.add_argument('--tf_log_level', type=str,
                         default='info',
-                        help='debug | verbose | info | warning | error | critical')
+                        help='debug | verbose | info | summary | warning | error | critical')
 
     parser.add_argument('--debug_dir', type=str,
                         default = None,
@@ -691,13 +804,15 @@ def main():
     log_levels = {'debug':'10',
                   'verbose':'15',
                   'info':'20',
+                  'summary':'25',
                   'warning':'30',
                   'error':'40',
                   'critical':'50'}
 
-    tf_log_levels={'debug':'0',
+    tf_env_log_levels={'debug':'0',
                    'verbose':'0',
                    'info':'0',
+                   'summary':'1',
                    'warning':'1',
                    'error':'2',
                    'critical':'3'}
@@ -706,13 +821,23 @@ def main():
     os.environ['G2T_LOG_LEVEL'] = log_levels[args.log_level]
     logger.setLevel(int(log_levels[args.log_level]))
 
+    # This process uuid is used in logging as an identifier for this process.
+    # There is a small probability of a collision with another process, but it is unlikely.
+    process_uuid = uuid.uuid1()
+    logger.info(f"UUID: {process_uuid}")
+
     predict = None
     if not args.model is None:
-        os.environ['TF_CPP_MIN_LOG_LEVEL'] = tf_log_levels[args.tf_log_level]
+        # TF sometimes uses the warnings module.
+        # Here we redirect them to the "py.warnings" logger.
+        logging.captureWarnings(True)
+        logging.getLogger("py.warnings").setLevel(int(log_levels[args.tf_log_level]))
+        # Turn off (or on) TF logging BEFORE importing tensorflow
+        os.environ['TF_CPP_MIN_LOG_LEVEL'] = tf_env_log_levels[args.tf_log_level]
         if args.arch == 'tf2':
             logger.info("importing tensorflow...")
             import tensorflow as tf
-            tf.get_logger().setLevel(int(tf_log_levels[args.log_level]))
+            tf.get_logger().setLevel(int(log_levels[args.tf_log_level]))
             tf.config.run_functions_eagerly(args.tf_eager)
 
             logger.info("importing TF2Predict class..")
@@ -721,7 +846,7 @@ def main():
         elif args.arch == 'tfgnn':
             logger.info("importing tensorflow...")
             import tensorflow as tf
-            tf.get_logger().setLevel(int(tf_log_levels[args.log_level]))
+            tf.get_logger().setLevel(int(log_levels[args.tf_log_level]))
             tf.config.run_functions_eagerly(args.tf_eager)
 
             if args.exclude_tactics is not None:
@@ -750,16 +875,19 @@ def main():
         logger.info("starting stdin server")
         sock = socket.socket(fileno=sys.stdin.fileno())
         reader = graph_api_capnp.PredictionProtocol.Request.read_multiple_packed(sock, traversal_limit_in_words=2**64-1)
-        main_loop(reader, sock, predict, args.debug_dir,
-                  session_idx=0,
-                  with_meter=args.with_meter,
-                  tactic_expand_bound=args.tactic_expand_bound,
-                  total_expand_bound=args.total_expand_bound,
-                  search_expand_bound=args.search_expand_bound,
-                  update_all_definitions=args.update_all_definitions,
-                  update_new_definitions=args.update_new_definitions,
-                  progress_bar=args.progress_bar,
-                  temperature=args.temperature
+        main_loop(
+            reader=reader, sock=sock, predict=predict,
+            debug_dir=args.debug_dir,
+            process_uuid=process_uuid,
+            session_idx=0,
+            with_meter=args.with_meter,
+            tactic_expand_bound=args.tactic_expand_bound,
+            total_expand_bound=args.total_expand_bound,
+            search_expand_bound=args.search_expand_bound,
+            update_all_definitions=args.update_all_definitions,
+            update_new_definitions=args.update_new_definitions,
+            progress_bar=args.progress_bar,
+            temperature=args.temperature
         )
     else:
         logger.info(f"starting tcp/ip server on port {args.port}")
@@ -780,16 +908,18 @@ def main():
                 sock, remote_addr = server_sock.accept()
                 logger.info(f"coq client connected {remote_addr}")
                 reader = graph_api_capnp.PredictionProtocol.Request.read_multiple_packed(sock, traversal_limit_in_words=2**64-1)
-                main_loop(reader, sock, predict,
-                          args.debug_dir,
-                          session_idx,
-                          with_meter=args.with_meter,
-                          tactic_expand_bound=args.tactic_expand_bound,
-                          total_expand_bound=args.total_expand_bound,
-                          search_expand_bound=args.search_expand_bound,
-                          update_all_definitions=args.update_all_definitions,
-                          update_new_definitions=args.update_new_definitions,
-                          progress_bar=args.progress_bar,
+                main_loop(
+                    reader=reader, sock=sock, predict=predict,
+                    debug_dir=args.debug_dir,
+                    process_uuid=process_uuid,
+                    session_idx=session_idx,
+                    with_meter=args.with_meter,
+                    tactic_expand_bound=args.tactic_expand_bound,
+                    total_expand_bound=args.total_expand_bound,
+                    search_expand_bound=args.search_expand_bound,
+                    update_all_definitions=args.update_all_definitions,
+                    update_new_definitions=args.update_new_definitions,
+                    progress_bar=args.progress_bar,
                 )
                 logger.info(f"coq client disconnected {remote_addr}")
 
