@@ -6,7 +6,7 @@ import tensorflow as tf
 import tensorflow_gnn as tfgnn
 from pathlib import Path
 
-from graph2tac.loader.data_server import DataServer, GraphConstants, graph_as
+from graph2tac.loader.data_server import DataServer, GraphConstants, LoaderAction, LoaderDefinition, LoaderProofstate
 from graph2tac.tfgnn.graph_schema import proofstate_graph_spec, definition_graph_spec
 from graph2tac.common import logger
 
@@ -660,15 +660,14 @@ class DataServerDataset(Dataset):
         return tfgnn.GraphTensor.from_pieces(node_sets={'node': node_set}, edge_sets={'edge': edge_set})
 
     @staticmethod
-    def _action_to_arguments(action: Tuple, local_context_length: tf.Tensor) -> Tuple[int, tf.Tensor, tf.Tensor]:
+    def _split_action_arguments(arguments_array: tf.Tensor, local_context_length: tf.Tensor) -> Tuple[tf.Tensor, tf.Tensor]:
         """
-        Convert an action in the loader's format into the corresponding TF-GNN format.
+        Convert an action's arguments from loader format into the corresponding TF-GNN format.
 
-        @param action: the action, as returned by the DataServer
+        @param arguments_array: the argument array, as returned by the DataServer
         @param local_context_length: the size of the local context in the proofstate
-        @return: a triple with the tactic, a tf.Tensor for the local arguments and a tf.Tensor for the global arguments
+        @return: a pair with a tf.Tensor for the local arguments and a tf.Tensor for the global arguments
         """
-        (tactic_id, arguments_array) = action
         is_global_argument, argument_ids = tf.unstack(arguments_array, axis=1)
 
         # there can still be local arguments that are None
@@ -678,7 +677,7 @@ class DataServerDataset(Dataset):
         # global arguments go from 0 to node_label_num-base_node_label_num
         global_arguments = tf.where(is_global_argument == 1, argument_ids, -1)
 
-        return tactic_id, local_arguments, global_arguments
+        return local_arguments, global_arguments
 
     @classmethod
     def _make_proofstate_graph_tensor(cls,
@@ -695,13 +694,17 @@ class DataServerDataset(Dataset):
         """
         loader_graph, root, context, proofstate_info = state
         context_node_ids, available_global_context = context
-        node_labels, sources, targets, edge_labels = graph_as("tf_gnn", loader_graph)
+        node_labels, edges, edge_labels, _ = loader_graph
+        sources = edges[:, 0]
+        targets = edges[:, 1]
         proofstate_name, proofstate_step, proofstate_faithful = proofstate_info
 
         bare_graph_tensor = cls._make_bare_graph_tensor(node_labels, sources, targets, edge_labels)
 
         local_context_length = tf.shape(context_node_ids, out_type=tf.int64)[0]
-        tactic_id, local_arguments, global_arguments = cls._action_to_arguments(action, local_context_length)
+
+        tactic_id, tactic_args = action
+        local_arguments, global_arguments = cls._split_action_arguments(tactic_args, local_context_length)
 
         context = tfgnn.Context.from_fields(features={
             'tactic': tf.expand_dims(tactic_id, axis=0),
@@ -736,7 +739,9 @@ class DataServerDataset(Dataset):
         @param num_definitions: tf.Tensor for the number of labels being defined (dtype=tf.int64)
         @return: a GraphTensor object that is compatible with the `definition_graph_spec` in `graph_schema.py`
         """
-        node_labels, sources, targets, edge_labels = graph_as("tf_gnn", loader_graph)
+        node_labels, edges, edge_labels, _ = loader_graph
+        sources = edges[:, 0]
+        targets = edges[:, 1]
 
         bare_graph_tensor = cls._make_bare_graph_tensor(node_labels, sources, targets, edge_labels)
 
@@ -750,6 +755,22 @@ class DataServerDataset(Dataset):
                                              edge_sets=bare_graph_tensor.edge_sets,
                                              context=context)
 
+    @staticmethod
+    def _loader_to_proofstate_data(loader_data: tuple[LoaderProofstate, LoaderAction, int]) -> tuple:
+        """Convert loader proofstate and action format to corresponding format for proofstate_data_spec"""
+        state, action, id = loader_data 
+        # state
+        graph = state.graph
+        graph_tuple = (graph.nodes, graph.edges, graph.edge_labels, graph.edge_offsets)
+        context_tuple = (state.context.local_context, state.context.global_context)
+        metadata_tuple = (state.metadata.name, state.metadata.step, state.metadata.is_faithful)
+        state_tuple = (graph_tuple, state.root, context_tuple, metadata_tuple)
+
+        # action
+        action_tuple = (action.tactic_id, action.args)
+
+        return (state_tuple, action_tuple, id)
+
     def _proofstates(self) -> tf.data.Dataset:
         """
         Returns a dataset with all the proof-states.
@@ -757,9 +778,19 @@ class DataServerDataset(Dataset):
         @return: a tf.data.Dataset streaming GraphTensor objects
         """
         # get the proofstates from the DataServer
-        proofstates = tf.data.Dataset.from_generator(lambda: self.data_server.data_train(shuffled=False, as_text=False),
-                                                     output_signature=self.proofstate_data_spec)
+        proofstates = tf.data.Dataset.from_generator(
+            map(self._loader_to_proofstate_data, lambda: self.data_server.data_train(shuffled=False, as_text=False)),
+            output_signature=self.proofstate_data_spec
+        )
         return proofstates.map(self._make_proofstate_graph_tensor, num_parallel_calls=tf.data.AUTOTUNE)
+
+    @staticmethod
+    def _loader_to_definition_data(defn: LoaderDefinition) -> tuple:
+        """Convert loader definition format to corresponding format for definition_data_spec"""
+        graph = defn.graph
+        graph_tuple = (graph.nodes, graph.edges, graph.edge_labels, graph.edge_offsets)
+
+        return (graph_tuple, defn.num_definitions, defn.definition_names)
 
     def _definitions(self) -> tf.data.Dataset:
         """
@@ -767,8 +798,10 @@ class DataServerDataset(Dataset):
 
         @return: a tf.data.Dataset streaming GraphTensor objects
         """
-        dataset = tf.data.Dataset.from_generator(lambda: self.data_server.def_cluster_subgraphs(),
-                                                 output_signature=self.definition_data_spec)
+        dataset = tf.data.Dataset.from_generator(
+            map(self._loader_to_definition_data, lambda: self.data_server.def_cluster_subgraphs()),
+            output_signature=self.definition_data_spec
+        )
         return dataset.map(self._make_definition_graph_tensor, num_parallel_calls=tf.data.AUTOTUNE)
 
 

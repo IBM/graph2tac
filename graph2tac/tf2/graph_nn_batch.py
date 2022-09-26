@@ -3,12 +3,13 @@ defines batch dataclass used by the specific gnn defined in graph_nn.py
 the classes in these modules probably should be packaged together with
 GraphToLogits class in graph_nn
 """
-from typing import List, Tuple, Any
+from typing import List, Tuple
+from numpy.typing import NDArray
 
 import numpy as np
 from dataclasses import dataclass
 
-from graph2tac.loader.data_server import graph_as, LoaderProofstate
+from graph2tac.loader.data_server import LoaderAction, LoaderProofstate
 from graph2tac.tf2.model_params import ModelDatasetConstants
 
 # TODO(jrute): This code is unique to the model in model.py,
@@ -17,62 +18,45 @@ from graph2tac.tf2.model_params import ModelDatasetConstants
 # Then we can avoid writing np_to_tensor(flat_batch_np(...)) everywhere.
 
 @dataclass
-class FlatBatchNP:
+class FlatBatchNP:  # TODO(fixtypes): Fix these comments
     """
-    Numpy data used for training a batch
+    Batch of proofstates and arguments using numpy arrays
+    ready to be loaded into a model for training or inference.
 
-    Originally stored as format:
-    input_signature = ((
-        (
-            ( tf.TensorSpec(shape=[None], dtype=tf.int32),  # nodes_i
-              tf.TensorSpec(shape=[None], dtype=tf.int32)), # nodes_c
-            (
-                tf.TensorSpec(shape=[None,2], dtype=tf.int32), # edges
-            )*graph_constants.edge_factor_num,
-            tf.TensorSpec(shape=[None], dtype=tf.int32), # roots
-            ( tf.TensorSpec(shape=[None], dtype=tf.int32),  # context_i
-              tf.TensorSpec(shape=[None], dtype=tf.int32)), # context
-        ),
-        (
-            tf.TensorSpec(shape=[None], dtype=tf.int32), # tactic_labels
-            tf.TensorSpec(shape=[None, graph_constants.max_args], dtype=tf.int32), # arg_labels
-            tf.TensorSpec(shape=[None, graph_constants.max_args], dtype=tf.bool), # mask_args
-        )
-    ),)
+    The nodes and edges from all the datapoints in the batch
+    are stored in the same arrays (forming a super graph)
+    and we store indices to keep track of which original 
+    datapoint they come from.
     """
-    # this a format to collect batch_size datapoints
-    # each datapoint is a graph tactic and argument
-
-    # we concatenate all nodes from graphs in the list
-    # batch index for each node from a
-    nodes_i: np.ndarray  # shape=[sum(lens of nodes_c)]  dtype=np.int32
-    # graph class for each node
-    nodes_c: np.ndarray  # shape=[sum(lens of nodes_c)]  dtype=np.int32
-
-    # we concatenate all edges from all graphs
-    # the outer index is conflated edges classes
-    # list of lists of all edges, external index is the conflated edge class,
-    # each edge is (source, target) tuple   dtype=np.int32
-    # shape = (graphs_constants.edge_factor.num,  number of edges of that type, 2)
-    edges: List[np.ndarray]
-
-    # index of root node for each datapoint
-    roots: np.ndarray  # shape=[batch size]  dtype=np.int32
-
-    # batch index for each context element
-    context_i: np.ndarray  # shape=[sum(lens of contexts)]  dtype=np.int32
-    # node pointers from datapoint contex concatenated
-    context: np.ndarray  # shape=[sum(lens of context)]  dtype=np.int32
-
-    # index of base tactic for each batch, e.g. "apply _"
-    tactic_labels: np.ndarray  # shape=[batch size]  dtype=np.int32
-
-    # argument label pointer to a context index for each datapoint
-    arg_labels: np.ndarray  # shape=[total number of arguments]
-
-    # mask for arguments
-    # e.g. [True, True, False , False, .... False] for a tactic with 2 arguments
-    mask_args: np.ndarray  # shape=[batch size, max # of arguments]
+    nodes_i: NDArray[np.int_]  # shape=[sum(lens of nodes_c)]  dtype=np.int32
+    """Index of which datapoint in batch a node corresponds to."""
+    nodes_c: NDArray[np.int_]  # shape=[sum(lens of nodes_c)]  dtype=np.int32
+    """node class for each node"""
+    edges: List[NDArray[np.int_]]
+    """Graph edges
+    
+    we concatenate all edges from all graphs
+    the outer index is conflated edges classes
+    list of lists of all edges, external index is the conflated edge class,
+    each edge is (source, target) tuple   dtype=np.int32
+    shape = (graphs_constants.edge_factor.num,  number of edges of that type, 2)
+    """
+    roots: NDArray[np.int_]  # shape=[batch size]  dtype=np.int32
+    """index of root node for each datapoint"""
+    context_i: NDArray[np.int_]  # shape=[sum(lens of contexts)]  dtype=np.int32
+    """batch index for each context element"""
+    context: NDArray[np.int_]  # shape=[sum(lens of context)]  dtype=np.int32
+    """node pointers from datapoint contex concatenated"""
+    
+    tactic_labels: NDArray[np.int_]  # shape=[batch size]  dtype=np.int32
+    """index of base tactic for each batch, e.g. 'apply _'"""
+    arg_labels: NDArray[np.int_]  # shape=[total number of arguments]
+    """argument label pointer to a context index for each datapoint"""
+    mask_args: NDArray[np.bool]  # shape=[batch size, max # of arguments]
+    """
+    mask for arguments
+    e.g. [True, True, False , False, .... False] for a tactic with 2 arguments
+    """
 
     def counts(self):
         """
@@ -99,7 +83,7 @@ def build_padded_arguments_and_mask(args: np.array, max_arg_num: int, context_le
     return padded_args, mask
 
 
-def make_flat_batch_np(batch: List[Tuple[LoaderProofstate, Any, int]],
+def make_flat_batch_np(batch: List[Tuple[LoaderProofstate, LoaderAction, int]],
                        global_context_size: int,
                        max_arg_num: int
                        ) -> FlatBatchNP:
@@ -114,18 +98,18 @@ def make_flat_batch_np(batch: List[Tuple[LoaderProofstate, Any, int]],
     """
     assert len(batch) > 0
     # each batch element is (state, action, graph_id)
-    states, actions, _ = zip(*batch)
+    states = [state for state, _, _ in batch]
+    actions = [action for _, action, _ in batch]
 
-    # each state is (loader_graph, root, context, metadata)
-    graphs, roots, all_context, _ = zip(*states)
+    graphs = [s.graph for s in states]
+    roots = [s.root for s in states]
+    context = [s.context.local_context for s in states]
 
-    # each context is (local_context, available_global_context)
-    context, _ = zip(*all_context)
+    nodes_c = [g.nodes for g in graphs]
+    edges = [np.split(g.edges, g.edge_offsets) for g in graphs]
 
-    nodes_c, edges = zip(* map(lambda x: graph_as("tf2", x), graphs))
-
-
-    tactic_labels, args_np_raw = zip(*actions)
+    tactic_labels = [a.tactic_id for a in actions]
+    args_np_raw = [a.args for a in actions]
 
     args_and_mask_np = [build_padded_arguments_and_mask(a, max_arg_num, len(context)) for a in args_np_raw]
     args_np, mask_args_np = zip(*args_and_mask_np)
@@ -141,7 +125,6 @@ def make_flat_batch_np(batch: List[Tuple[LoaderProofstate, Any, int]],
     ]
     roots = np.array([root + offset for root, offset in zip(roots, n_offsets)])
     c_lens = [len(x) for x in context]
-    c_offsets = np.cumsum([0] + c_lens[:-1])
 
     context = np.concatenate([c + offset for c, offset in zip(context, n_offsets)])
     context_i = np.concatenate([np.full(x, i, dtype=np.int32) for i, x in enumerate(c_lens)])

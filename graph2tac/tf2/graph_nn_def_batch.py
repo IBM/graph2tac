@@ -7,9 +7,10 @@ GraphToLogits class in graph_nn
 
 from dataclasses import dataclass
 from typing import List
+from numpy.typing import NDArray
 import numpy as np
 
-from graph2tac.loader.data_server import graph_as, LoaderDefinition
+from graph2tac.loader.data_server import LoaderDefinition
 
 # TODO(jrute): This code is unique to the model in model.py,
 # and it now depends on the dataset constants saved with that model.
@@ -18,34 +19,36 @@ from graph2tac.loader.data_server import graph_as, LoaderDefinition
 from graph2tac.tf2.model_params import ModelDatasetConstants
 
 @dataclass
-class FlatDefBatchNP:
+class FlatDefBatchNP:  # TODO(fixtypes): Fix these comments
     """
-    Numpy data used for training a batch of definitions
+    Batch of definition using numpy arrays
+    ready to be loaded into a model for training or inference.
+
+    The nodes and edges from all the datapoints in the batch
+    are stored in the same arrays (forming a super graph)
+    and we store indices to keep track of which original 
+    datapoint they come from.
     """
-    # this a format to collect batch_size datapoints
-    # each datapoint is a graph tactic and argument
-    batch_size : int
-
-    # we concatenate all nodes from graphs in the list
-    # batch index for each node from a
-    nodes_i: np.ndarray  # shape=[sum(lens of nodes_c)]  dtype=np.int32
-    # graph class for each node
-    nodes_c: np.ndarray  # shape=[sum(lens of nodes_c)]  dtype=np.int32
-
-    # we concatenate all edges from all graphs
-    # the outer index is conflated edges classes
-    # list of lists of all edges, external index is the conflated edge class,
-    # each edge is (source, target) tuple   dtype=np.int32
-    # shape = (graphs_constants.edge_factor.num,  number of edges of that type, 2)
-    edges: List[np.ndarray]
-
-    # root nodes for all datapoints
-    roots: np.ndarray  # shape=[batch size]  dtype=np.int32
-
-    # batch index for each context element
-    roots_i: np.ndarray  # shape=[sum(lens of roots)]  dtype=np.int32
-    # node pointers from datapoint contex concatenated
-    roots_c: np.ndarray  # shape=[sum(lens of roots)]  dtype=np.int32
+    batch_size: int
+    nodes_i: NDArray[np.int_]  # shape=[sum(lens of nodes_c)]  dtype=np.int32
+    """Index of which datapoint in batch a node corresponds to."""
+    nodes_c: NDArray[np.int_]  # shape=[sum(lens of nodes_c)]  dtype=np.int32
+    """node class for each node"""
+    edges: List[NDArray[np.int_]]
+    """Graph edges
+    
+    we concatenate all edges from all graphs
+    the outer index is conflated edges classes
+    list of lists of all edges, external index is the conflated edge class,
+    each edge is (source, target) tuple   dtype=np.int32
+    shape = (graphs_constants.edge_factor.num,  number of edges of that type, 2)
+    """
+    roots: NDArray[np.int_]  # shape=[batch size]  dtype=np.int32
+    """index of root nodes for all datapoints (can be more than one per datapoint)"""
+    roots_i: NDArray[np.int_]  # shape=[sum(lens of contexts)]  dtype=np.int32
+    """batch index for each context element"""
+    roots_c: NDArray[np.int_]  # shape=[sum(lens of context)]  dtype=np.int32
+    """node pointers from datapoint contex concatenated"""
 
     def counts(self):
         """
@@ -61,7 +64,6 @@ class FlatDefBatchNP:
                 f"{num_roots} roots "
                 f"{num_datapoints} datapoints ")
 
-
 def make_flat_def_batch_np(batch: List[LoaderDefinition]) -> FlatDefBatchNP:
     """
     this function forms FlatDefBatchNP of numpy arrays from a non-empty list of datapoints
@@ -69,11 +71,12 @@ def make_flat_def_batch_np(batch: List[LoaderDefinition]) -> FlatDefBatchNP:
     """
     assert len(batch) > 0
     batch_size = len(batch)
-    # nodes_c, edges, root_nums = zip(*batch)
-    graphs, root_nums, _ = zip(*batch)
-    nodes_c, edges = zip(* map(lambda x: graph_as("tf2", x), graphs))
 
+    graphs = [dfn.graph for dfn in batch]
+    root_nums = [dfn.num_definitions for dfn in batch]
 
+    nodes_c = [g.nodes for g in graphs]
+    edges = [np.split(g.edges, g.edge_offsets) for g in graphs]
 
     roots = [np.arange(rn) for rn in root_nums]
 
