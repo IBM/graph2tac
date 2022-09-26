@@ -24,7 +24,7 @@ import uuid
 import graph2tac.common
 from graph2tac.common import logger
 from graph2tac.predict import Predict
-from graph2tac.loader.data_server import DataServer, build_def_index, get_global_def_table, LoaderGraph, LoaderProofstate, LoaderDefinition
+from graph2tac.loader.data_server import DataServer, ProofstateContext, ProofstateMetadata, build_def_index, get_global_def_table, LoaderGraph, LoaderProofstate, LoaderDefinition
 
 
 Tactic = NewType('Tactic', object)
@@ -489,20 +489,25 @@ def main_loop(reader, sock, predict: Predict, debug_dir, process_uuid, session_i
             decorated_iterator = tqdm.tqdm(def_clusters_for_update) if progress_bar else def_clusters_for_update
             t0 = time.time()
             for def_cluster in decorated_iterator:
-                cluster_names = [def_idx_to_name[def_idx] for def_idx in def_cluster]
-                # print(cluster_names)
+                cluster_names = np.array([def_idx_to_name[def_idx] for def_idx in def_cluster])
 
                 res = get_subgraph_online(c_data_online, def_idx_to_node[def_cluster], bfs_option, max_subgraph_size, False)
                 eval_node_labels, edges, edge_labels, edges_offset, global_visited, _, _, _, _ = res
 
                 train_node_labels = map_eval_label_to_train_label[eval_node_labels]
-                # edges_grouped_by_label = np.split(edges, edges_offset)
 
-                cluster_graph = train_node_labels, edges, edge_labels, edges_offset
+                cluster_graph = LoaderGraph(
+                    nodes=train_node_labels,
+                    edges=edges,
+                    edge_labels=edge_labels,
+                    edge_offsets=edges_offset
+                )
 
-                # cluster_state = (train_node_labels, edges_grouped_by_label, len(def_cluster))
-                cluster_state = LoaderDefinition( (cluster_graph, len(def_cluster), cluster_names) )
-                # print(cluster_state)
+                cluster_state = LoaderDefinition(
+                    graph=cluster_graph,
+                    num_definitions=len(def_cluster),
+                    definition_names=cluster_names
+                )
                 predict.compute_new_definitions([cluster_state])
             t1 = time.time()
             log_cnts.n_def_clusters_updated = len(def_clusters_for_update)
@@ -580,22 +585,29 @@ def main_loop(reader, sock, predict: Predict, debug_dir, process_uuid, session_i
             for edge_idx in range(child_start, child_stop):
                 logger.debug(f"root 0 child {msg.predict.graph.edges[edge_idx]}")
 
-            online_graph = LoaderGraph( (train_node_labels, edges, edge_labels, edges_offset) )
+            online_graph = LoaderGraph(
+                nodes=train_node_labels,
+                edges=edges,
+                edge_labels=edge_labels,
+                edge_offsets=edges_offset
+            )
 
             # FIDEL: is this information present? For now, just fill it in with dummy data
-            dummy_proofstate_info = ('dummy_proofstate_name', -1, True)
+            dummy_proofstate_info = ProofstateMetadata(b'dummy_proofstate_name', -1, True)
 
             logger.verbose(f"online_state: {online_graph}")
 
             t0 = time.time()
 
-            dynamic_global_context = list(range(len(global_context)))
-
+            dynamic_global_context = np.arange(len(global_context), dtype=np.uint32)
+            
             online_actions, online_confidences = predict.ranked_predictions(
-                LoaderProofstate((online_graph,
-                                  this_encoded_root,
-                                  (this_encoded_context, dynamic_global_context),
-                                  dummy_proofstate_info)),
+                state=LoaderProofstate(
+                    graph=online_graph,
+                    root=this_encoded_root,
+                    context=ProofstateContext(this_encoded_context, dynamic_global_context),
+                    metadata=dummy_proofstate_info
+                ),
                 tactic_expand_bound=tactic_expand_bound,
                 total_expand_bound=total_expand_bound,
                 allowed_model_tactics=allowed_model_tactics,

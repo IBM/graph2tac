@@ -33,8 +33,9 @@ def action_encode(action,
 
 
 def my_hash_of(state: LoaderProofstate, with_context: bool):
-    graph, root, context, _ = state
-    what_to_hash = (*graph, context[0]) if with_context else graph
+    graph = state.graph
+    graph_tuple = (graph.nodes, graph.edges, graph.edge_labels, graph.edge_offsets)
+    what_to_hash = (*graph_tuple, state.context.local_context) if with_context else graph_tuple
     state_hash = my_hash(''.join(hash_nparray(x) for x in what_to_hash).encode())
     return state_hash
 
@@ -70,14 +71,12 @@ class Train:
     def train(self):
         none_counter = 0
         for state, action, idx in tqdm.tqdm(self._data_server.data_train()):
-            graph, root, context, _ = state
-            local_context, _ = context
             state_hash = my_hash_of(state, self._with_context)
 
             train_action = self._data.get(state_hash, [])
             try:
                 train_action.append(action_encode(action,
-                                              local_context=local_context,
+                                              local_context=state.context.local_context,
                                               global_context=self._global_context))
             except IndexError:
                 none_counter += 1
@@ -132,7 +131,7 @@ class HPredict(Predict):
                            annotation: str = "",
                            debug: bool = False
                            ) -> Tuple[np.ndarray, List]:
-        graph, root, (context, dynamic_global_context), _ = state
+        context = state.context.local_context
         state_hash = my_hash_of(state, self._with_context)
         inverse_local_context = dict()
         for (i, node_idx) in enumerate(context):

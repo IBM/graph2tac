@@ -8,7 +8,7 @@ import tensorflow_gnn as tfgnn
 from dataclasses import dataclass
 from pathlib import Path
 
-from graph2tac.loader.data_server import GraphConstants, LoaderProofstate, LoaderDefinition
+from graph2tac.loader.data_server import GraphConstants, LoaderAction, LoaderProofstate, LoaderDefinition
 from graph2tac.tfgnn.dataset import Dataset, DataServerDataset
 from graph2tac.tfgnn.tasks import PredictionTask, TacticPrediction, DefinitionTask, GLOBAL_ARGUMENT_PREDICTION
 from graph2tac.tfgnn.models import GraphEmbedding, LogitsFromEmbeddings
@@ -117,19 +117,17 @@ class PredictOutput:
         predictions = self.predictions[:search_expand_bound] if search_expand_bound is not None else self.predictions
         return any(inference.evaluate(tactic_id, local_arguments, global_arguments) for inference in predictions)
 
-    def evaluate(self, action: Tuple, search_expand_bound: Optional[int] = None) -> bool:
+    def evaluate(self, action: LoaderAction, search_expand_bound: Optional[int] = None) -> bool:
         """
-        Evaluate an action in tuple format.
+        Evaluate an action in the loader format
         """
-        loader_graph, root, context, proofstate_info = self.state
-        local_context_ids, global_context_ids = context
+        local_context_ids = self.state.context.local_context
         local_context_length = tf.shape(local_context_ids, out_type=tf.int64)[0]
 
-        tactic_id, arguments_array = action
-        tactic_id = tf.cast(tactic_id, dtype=tf.int64)
-        arguments_array = tf.cast(arguments_array, dtype=tf.int64)
-        action = DataServerDataset._action_to_arguments((tactic_id, arguments_array), local_context_length)
-        return self._evaluate(*action, search_expand_bound=search_expand_bound)
+        tactic_id = tf.cast(action.tactic_id, dtype=tf.int64)
+        arguments_array = tf.cast(action.args, dtype=tf.int64)
+        local_args, global_args = DataServerDataset._split_action_arguments(arguments_array, local_context_length)
+        return self._evaluate(tactic_id, local_args, global_args, search_expand_bound=search_expand_bound)
 
 
 class TFGNNPredict(Predict):
@@ -279,13 +277,13 @@ class TFGNNPredict(Predict):
         old_embeddings = (1 - update_mask) * self.prediction_task.graph_embedding._node_embedding.embeddings
         self.prediction_task.graph_embedding._node_embedding.set_weights([new_embeddings + old_embeddings])
 
-    def _dummy_proofstate_data_generator(self, states: List[Tuple]):
+    def _dummy_proofstate_data_generator(self, states: List[LoaderProofstate]):
         for state in states:
-            action = (self._dummy_tactic_id, tf.zeros(shape=(0, 2), dtype=tf.int64))
+            action = LoaderAction(self._dummy_tactic_id, tf.zeros(shape=(0, 2), dtype=tf.int64))
             graph_id = tf.constant(-1, dtype=tf.int64)
-            yield state, action, graph_id
+            yield DataServerDataset._loader_to_proofstate_data((state, action, graph_id))
 
-    def _make_dummy_proofstate_dataset(self, states: List[Tuple]) -> tf.data.Dataset:
+    def _make_dummy_proofstate_dataset(self, states: List[LoaderProofstate]) -> tf.data.Dataset:
         """
         Create a dataset of (dummy) proofstate graphs.
 
@@ -305,8 +303,10 @@ class TFGNNPredict(Predict):
         @param new_cluster_subgraphs: list of definition clusters in tuple form (as returned by the data loader)
         @return: a `GraphTensor` containing the definition clusters, following the `definition_graph_spec` schema
         """
-        dataset = tf.data.Dataset.from_generator(lambda: new_cluster_subgraphs,
-                                                 output_signature=DataServerDataset.definition_data_spec)
+        dataset = tf.data.Dataset.from_generator(
+            lambda: map(DataServerDataset._loader_to_definition_data, new_cluster_subgraphs),
+            output_signature=DataServerDataset.definition_data_spec
+        )
         dataset = dataset.map(DataServerDataset._make_definition_graph_tensor)
         dataset = self._preprocess(dataset).map(self._tokenize_definition_graph)
         return dataset.batch(Dataset.MAX_DEFINITIONS).get_single_element()
@@ -510,19 +510,19 @@ class TFGNNPredict(Predict):
         return per_proofstate_result, per_lemma_result
 
     def evaluate(self,
-                 state_action_pairs: Iterable[Tuple[LoaderProofstate, Tuple]],
+                 state_action_pairs: Iterable[Tuple[LoaderProofstate, LoaderAction]],
                  batch_size: int,
                  tactic_expand_bound: int,
                  total_expand_bound: int,
                  search_expand_bound: Optional[int] = None,
                  allowed_model_tactics: Optional[Iterable[int]] = None
                  ) -> Tuple[float, float]:
-        states, actions = zip(*state_action_pairs)
+        states = [state for state, _ in state_action_pairs]
         proofstate_graph_dataset = self._make_dummy_proofstate_dataset(states).batch(batch_size)
 
         tactic_mask = self._tactic_mask_from_allowed_model_tactics(allowed_model_tactics)
 
-        predictions = []
+        predictions: list[PredictOutput] = []
         for proofstate_graph in iter(proofstate_graph_dataset):
             batch_tactic_mask = tf.repeat(tf.expand_dims(tactic_mask, axis=0), repeats=proofstate_graph.total_num_components, axis=0)
             batch_predict_output = self._batch_ranked_predictions(proofstate_graph=proofstate_graph,
@@ -538,7 +538,7 @@ class TFGNNPredict(Predict):
             result = predict_output.evaluate(action, search_expand_bound=search_expand_bound)
             per_proofstate.append(result)
 
-            _, _, _, (name, _, _) = state
+            name = state.metadata.name
             per_lemma[name] = (per_lemma.get(name, True) and result)
         per_proofstate_result = np.array(per_proofstate).mean()
         per_lemma_result = np.array(list(per_lemma.values())).mean()
