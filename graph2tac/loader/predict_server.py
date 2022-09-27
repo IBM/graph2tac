@@ -1,8 +1,9 @@
 """
 python prediction server to interact with coq-tactician-reinforce
 """
+from collections import defaultdict
 from dataclasses import dataclass
-from typing import Generator, Iterator, NewType
+from typing import Dict, Generator, Iterator, NewType
 
 import sys
 import time
@@ -140,7 +141,7 @@ def get_train_name_to_label(train_node_label_to_name, train_node_label_in_spine)
     return train_name_to_label
 
 
-def get_def_idx_to_node__train_to_eval__eval_to_train__eval_names(msg_data,
+def get_def_idx_to_node__train_to_eval__eval_to_train__eval_names(db, msg_data,
                                                                   train_node_label_to_name,
                                                                   train_node_label_in_spine,
                                                                   message_type,
@@ -149,9 +150,10 @@ def get_def_idx_to_node__train_to_eval__eval_to_train__eval_names(msg_data,
 
     # in evaluation or checkAlignment message type the representative is dummy = UINT32_MAX
     # it is not supposed to be used by the following processing
-
+    db.start("global_def_table")
     (node_indexes, def_hashes, def_idx_to_name), dummy_representative  = get_global_def_table([msg_data], message_type, restrict_to_spine=False)[0]
-
+    db.end("global_def_table")
+    db.start("build_def_index")
     eval_names = BASE_NAMES + def_idx_to_name
     buf_list = [msg_data]
     def_index_table = build_def_index(
@@ -161,8 +163,11 @@ def get_def_idx_to_node__train_to_eval__eval_to_train__eval_names(msg_data,
         message_type,
         local_to_global
     )
+    db.end("build_def_index")
+    db.start("get_train_eval_alignment")
     def_idx_to_node =  np.array(def_index_table.idx_to_global_node, dtype=np.uint32)
     train_label_to_eval_label, eval_label_to_train_label = get_train_eval_alignment(train_name_to_label, eval_names, len(train_node_label_to_name))
+    db.end("get_train_eval_alignment")
     return def_idx_to_node, train_label_to_eval_label, eval_label_to_train_label, eval_names
 
 def wrap_debug_record(debug_dir, msg, context_cnt):
@@ -341,6 +346,67 @@ class LoggingCounters:
             "\n".join(f"[g2t-sum] {k}\t{v}" for k, v in summary_data.items())
         )
 
+class TimeMemDebugger:
+    proc: psutil.Process
+    times: Dict[str, list[float]]
+    tmems: Dict[str, list[float]]
+    pmems: Dict[str, list[float]]
+    time0: Dict[str, float]
+    tmem0: Dict[str, float]
+    pmem0: Dict[str, float]
+    key_stack: list[str]
+
+    def __init__(self):
+        self.proc= psutil.Process()
+        self.times = defaultdict(list)
+        self.tmems = defaultdict(list)
+        self.pmems = defaultdict(list)
+        self.time0 = {}
+        self.tmem0 = {}
+        self.pmem0 = {}
+        self.key_stack = []
+
+    def start(self, key: str, log_rate=1):
+        self.key_stack.append(key)
+        full_key = ".".join(self.key_stack)
+
+        self.time0[full_key] = time.time()
+        mem = self.proc.memory_info()
+        self.tmem0[full_key] = mem.vms / 10**6  # MB
+        self.pmem0[full_key] = mem.rss / 10**6  # MB
+
+    def end(self, key: str, log_rate=1):
+        assert self.key_stack[-1] == key, f"Expected key == {self.key_stack[-1]}, found {key}  (stack : {self.key_stack})"
+        
+        time1 = time.time()
+        mem = self.proc.memory_info()
+        tmem1 = mem.vms / 10**6  # MB
+        pmem1 = mem.rss / 10**6  # MB
+
+        full_key = full_key = ".".join(self.key_stack)
+        self.key_stack.pop()
+
+        self.times[full_key].append(time1 - self.time0[full_key])
+        self.tmems[full_key].append(tmem1 - self.tmem0[full_key])
+        self.pmems[full_key].append(pmem1 - self.pmem0[full_key])
+        
+        cnt = len(self.times[full_key][1:])
+        if cnt and cnt % log_rate == 0:
+            total_time = sum(self.times[full_key][1:])
+            total_pmem = sum(self.pmems[full_key][1:])
+            total_tmem = sum(self.tmems[full_key][1:])
+            print(f"DB [{full_key}]: steps: {cnt}  total_time: {total_time:.3f}  time/step: {total_time / cnt:.3f}  tmem: {tmem1:.3f}  total_tmem: {total_tmem:.3f}  tmem/step: {total_tmem / cnt:.3f}  pmem: {pmem1:.3f}  total_pmem: {total_pmem:.3f}  pmem/step: {total_pmem / cnt:.3f}")
+
+    def log_summary(self):
+        for full_key in self.times:
+            cnt = len(self.times[full_key][1:])
+            total_time = sum(self.times[full_key][1:])
+            total_pmem = sum(self.pmems[full_key][1:])
+            total_tmem = sum(self.tmems[full_key][1:])
+            print(f"DB [{full_key}]: steps: {cnt}  total_time: {total_time}  time/step: {total_time / cnt}  total_tmem: {total_tmem}  tmem/step: {total_tmem / cnt}  total_pmem: {total_pmem}  pmem/step: {total_pmem / cnt}")
+
+
+
 def main_loop(reader, sock, predict: Predict, debug_dir, process_uuid, session_idx=0,
               bfs_option=True,
               with_meter=False,
@@ -375,7 +441,10 @@ def main_loop(reader, sock, predict: Predict, debug_dir, process_uuid, session_i
 
     log_cnts = LoggingCounters(process_uuid=process_uuid, session_idx=session_idx)
 
+    db = TimeMemDebugger()
+    
     for msg in decorated_reader:
+        db.start("loop")
         msg_type = msg.which()
         logger.verbose(f"message: {msg.which()}")
         if msg_type == "synchronize":
@@ -398,35 +467,43 @@ def main_loop(reader, sock, predict: Predict, debug_dir, process_uuid, session_i
 
 
         elif msg_type == "initialize":
+            db.start("init")
+            db.start("intro1")
             log_cnts.update_process_stats()
             if log_cnts.thm_idx >= 0:
                 logger.summary(log_cnts.summary_log_message())
-
 
             log_cnts.thm_idx += 1
             log_cnts.thm_annotation = msg.initialize.logAnnotation
 
             logger.verbose(f'session {session_idx} theorem idx={log_cnts.thm_idx}, annotation={msg.initialize.logAnnotation} started.')
-
+            db.end("intro1")
+            db.start("intro2")
             wrap_debug_record(debug_dir, msg, log_cnts.thm_idx)
-
+            db.end("intro2")
+            db.start("msg_to_bytes")
             msg_data = msg.as_builder().to_bytes()
+            db.end("msg_to_bytes")
 
+            db.start("get_dicts")
             local_to_global = [np.array([0], dtype=np.uint32)]
-
             def_idx_to_node, train_label_to_eval_label, eval_label_to_train_label, eval_names = get_def_idx_to_node__train_to_eval__eval_to_train__eval_names(
-                msg_data, train_node_label_to_name, train_node_label_in_spine, "request.initialize", local_to_global)
-
+                db, msg_data, train_node_label_to_name, train_node_label_in_spine, "request.initialize", local_to_global)
+            db.end("get_dicts")
+            db.start("intro4")
             logger.verbose(f"train_label_to_eval_label {train_label_to_eval_label}")
             logger.verbose(f"eval_label_to_train_label {eval_label_to_train_label}")
-
+            
+            
             def_idx_to_name = eval_names[len(BASE_NAMES):]
             unaligned_nodes = get_unaligned_nodes(def_idx_to_node,
                                                   def_idx_to_name,
                                                   eval_label_to_train_label,
                                                   len(train_node_label_to_name))
-            logger.verbose(f"initialization unaligned nodes {unaligned_nodes}")
 
+            logger.verbose(f"initialization unaligned nodes {unaligned_nodes}")
+            db.end("intro4")
+            db.start("intro5")
             c_data_online = build_data_online_from_buf(def_idx_to_node,
                                                        network_tactic_index_to_hash,
                                                        np.arange(len(network_tactic_index_to_hash), dtype=np.uint32))
@@ -439,7 +516,8 @@ def main_loop(reader, sock, predict: Predict, debug_dir, process_uuid, session_i
                                                 )
             log_cnts.init_data_online_size = len(msg_data)
             log_cnts.total_data_online_size = len(msg_data)
-
+            db.end("intro5")
+            db.start("intro6")
             logger.info(f"c_data_online references {n_msg_recorded} msg")
 
             def_deps_ids =  get_def_deps_online(c_data_online, bfs_option, max_subgraph_size)
@@ -449,13 +527,13 @@ def main_loop(reader, sock, predict: Predict, debug_dir, process_uuid, session_i
 
             log_clusters_verbose(def_scc_clusters, eval_label_to_train_label, train_node_label_to_name)
 
-
             logger.info(f"generating clusters from initialization message")
             map_eval_label_to_train_label = np.array(eval_label_to_train_label, dtype=np.int32)
 
             global_context = map_eval_label_to_train_label[len(BASE_NAMES):].astype(np.int32)
             # available_global = np.arange(0, len(global_context), 1, dtype=np.uint64)
-
+            db.end("intro6")
+            db.start("intro7")
             logger.verbose(f"online global_context (indexed from 0): {global_context}")
 
 
@@ -473,7 +551,8 @@ def main_loop(reader, sock, predict: Predict, debug_dir, process_uuid, session_i
             else:
                 logger.info(f"No update of the definition clusters requested")
 
-
+            db.end("intro7")
+            db.start("build_network")
             t0 = time.time()
             logger.info(f"initializing network with {len(global_context)} defs in global context")
 
@@ -482,13 +561,16 @@ def main_loop(reader, sock, predict: Predict, debug_dir, process_uuid, session_i
             t1 = time.time()
             log_cnts.build_network_time = t1-t0
             logger.info(f"Building network model completed in {log_cnts.build_network_time:.6f} seconds")
+            db.end("build_network")
+            db.start("update_clusters")
 
             logger.info(f"Updating definition clusters...")
-
 
             decorated_iterator = tqdm.tqdm(def_clusters_for_update) if progress_bar else def_clusters_for_update
             t0 = time.time()
             for def_cluster in decorated_iterator:
+                db.start("cluster")
+                db.start("other")
                 cluster_names = [def_idx_to_name[def_idx] for def_idx in def_cluster]
                 # print(cluster_names)
 
@@ -503,12 +585,18 @@ def main_loop(reader, sock, predict: Predict, debug_dir, process_uuid, session_i
                 # cluster_state = (train_node_labels, edges_grouped_by_label, len(def_cluster))
                 cluster_state = LoaderDefinition( (cluster_graph, len(def_cluster), cluster_names) )
                 # print(cluster_state)
-                predict.compute_new_definitions([cluster_state])
+                db.end("other")
+                db.start("compute_new_definitions")
+                predict.compute_new_definitions(db, [cluster_state])  # TODO(jrute): Possible memory leak
+                db.end("compute_new_definitions")
+                db.end("cluster")
             t1 = time.time()
             log_cnts.n_def_clusters_updated = len(def_clusters_for_update)
             log_cnts.update_def_time = t1 - t0
 
             logger.info(f"Definition clusters updated.")
+            db.end("update_clusters")
+            db.start("other")
 
             tacs, tac_numargs = process_initialize(sock, msg)
             evaluation_tactic_hash_to_numargs = {k:v for k,v in zip(tacs, tac_numargs)}
@@ -526,7 +614,12 @@ def main_loop(reader, sock, predict: Predict, debug_dir, process_uuid, session_i
             log_cnts.t_coq = 0.0
             log_cnts.n_coq = 0
             t0_coq = time.time()
+
+            db.end("other")
+            db.end("init")
         elif msg_type == "predict":
+            db.start("predict")
+            db.start("first")
             log_cnts.t_coq += (time.time() - t0_coq)
             log_cnts.n_coq += 1
             if log_cnts.n_coq != 0 and log_cnts.n_coq % 10 == 0:
@@ -591,7 +684,9 @@ def main_loop(reader, sock, predict: Predict, debug_dir, process_uuid, session_i
 
             dynamic_global_context = list(range(len(global_context)))
 
-            online_actions, online_confidences = predict.ranked_predictions(
+            db.end("first")
+            db.start("ranked_prediction")
+            online_actions, online_confidences = predict.ranked_predictions( db,  # TODO(jrute): Possible memory leak  # TODO(jrute): Slow code
                 LoaderProofstate((online_graph,
                                   this_encoded_root,
                                   (this_encoded_context, dynamic_global_context),
@@ -601,6 +696,8 @@ def main_loop(reader, sock, predict: Predict, debug_dir, process_uuid, session_i
                 allowed_model_tactics=allowed_model_tactics,
                 available_global=None
             )
+            db.end("ranked_prediction")
+            db.start("last")
             # FIDEL: why was this here? Does not conform to the API!
             #                 annotation = msg_idx - 1,
             #                 debug = (LOG_LEVEL <= logging.INFO)
@@ -632,12 +729,15 @@ def main_loop(reader, sock, predict: Predict, debug_dir, process_uuid, session_i
             if log_cnts.n_predict != 0 and log_cnts.n_predict % 10 == 0:
                 logger.verbose(f'Network predicts {log_cnts.t_predict/log_cnts.n_predict:.6f} second/call')
             t0_coq = time.time()
+            db.end("last")
+            db.end("predict")
         else:
             raise Exception("Capnp protocol error in prediction_loop: "
                             "msg type is not 'predict', 'synchronize', or 'initialize'")
-
+        db.end("loop")
     log_cnts.update_process_stats()
     logger.info(f"(final) " + log_cnts.summary_log_message())
+    db.log_summary()
 
 
 

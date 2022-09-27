@@ -67,7 +67,7 @@ class TF2Predict(Predict):
         result = self.pred_fn(flat_batch)
 
     @predict_api_debugging
-    def compute_new_definitions(self, new_cluster_subgraphs : List[LoaderDefinition]) -> None:
+    def compute_new_definitions(self, db, new_cluster_subgraphs : List[LoaderDefinition]) -> None:
         """
         Public API. The client is supposed to call this method for a sequence of topologically sorted valid roots of
         cluster definitions. For simplicity, the client can always call this method with single-element batches in
@@ -149,7 +149,7 @@ class TF2Predict(Predict):
         return top_tactic_ids, tactic_logits[top_tactic_ids], arg_nums, arg_logits
 
     @predict_api_debugging
-    def ranked_predictions(self,
+    def ranked_predictions(self, db,
                            state: LoaderProofstate,
                            allowed_model_tactics: List,
                            available_global: Optional[np.ndarray] = None,

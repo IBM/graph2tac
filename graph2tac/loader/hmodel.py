@@ -116,14 +116,14 @@ class HPredict(Predict):
                 self._label_to_idx[label] = idx
 
     @predict_api_debugging
-    def compute_new_definitions(self, clusters: List[LoaderDefinition]) -> None:
+    def compute_new_definitions(self, db, clusters: List[LoaderDefinition]) -> None:
         """
         a list of cluster states on which we run dummy runs
         """
         pass
 
     @predict_api_debugging
-    def ranked_predictions(self,
+    def ranked_predictions(self, db,
                            state: LoaderProofstate,
                            allowed_model_tactics: List[int],
                            available_global: Optional[np.ndarray] = None,

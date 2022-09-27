@@ -261,23 +261,34 @@ class TFGNNPredict(Predict):
             self._inference_model_cache = {}
 
     @predict_api_debugging
-    def compute_new_definitions(self, new_cluster_subgraphs: List[LoaderDefinition]) -> None:
+    def compute_new_definitions(self, db, new_cluster_subgraphs: List[LoaderDefinition]) -> None:
         if self.definition_task is None:
             raise RuntimeError('cannot update definitions when a definition task is not present')
-        definition_graph = self._make_definition_batch(new_cluster_subgraphs)
+        
+        db.start("make_def_batch")
+        definition_graph = self._make_definition_batch(db, new_cluster_subgraphs)  # TODO(jrute): Possible memory leak  # TODO(jrute): Slow code
+        db.end("make_def_batch")
 
+        db.start("def_task_prep")
         scalar_definition_graph = definition_graph.merge_batch_to_components()
-        definition_embeddings = self.definition_task(scalar_definition_graph).flat_values
+        db.end("def_task_prep")
+        db.start("def_task")
+        definition_embeddings = self.definition_task(scalar_definition_graph).flat_values  # TODO(jrute): Slow code
+        db.end("def_task")
+        db.start("get_labels")
         defined_labels = Trainer._get_defined_labels(definition_graph).flat_values
+        db.end("get_labels")
 
+        db.start("set_weights")
         node_label_num = self.prediction_task.graph_embedding._node_label_num
         hidden_size = self.prediction_task.graph_embedding._hidden_size
         update_mask = tf.reduce_sum(tf.one_hot(defined_labels, node_label_num, axis=0), axis=-1, keepdims=True)
         new_embeddings = update_mask * tf.scatter_nd(indices=tf.expand_dims(defined_labels, axis=-1),
-                                                     updates=definition_embeddings,
-                                                     shape=(node_label_num, hidden_size))
+                                                    updates=definition_embeddings,
+                                                    shape=(node_label_num, hidden_size))
         old_embeddings = (1 - update_mask) * self.prediction_task.graph_embedding._node_embedding.embeddings
         self.prediction_task.graph_embedding._node_embedding.set_weights([new_embeddings + old_embeddings])
+        db.end("set_weights")
 
     def _dummy_proofstate_data_generator(self, states: List[Tuple]):
         for state in states:
@@ -285,30 +296,43 @@ class TFGNNPredict(Predict):
             graph_id = tf.constant(-1, dtype=tf.int64)
             yield state, action, graph_id
 
-    def _make_dummy_proofstate_dataset(self, states: List[Tuple]) -> tf.data.Dataset:
+    def _make_dummy_proofstate_dataset(self, db, states: List[Tuple]) -> tf.data.Dataset:
         """
         Create a dataset of (dummy) proofstate graphs.
 
         @param states: list of proof-states in tuple form (as returned by the data loader)
         @return: a `tf.data.Dataset` producing `GraphTensor` objects following the `proofstate_graph_spec` schema
         """
+        db.start("generator")
         dataset = tf.data.Dataset.from_generator(lambda: self._dummy_proofstate_data_generator(states),
                                                  output_signature=DataServerDataset.proofstate_data_spec)
+        db.end("generator")
+        db.start("graph_tensor")
         dataset = dataset.map(DataServerDataset._make_proofstate_graph_tensor)
+        db.end("graph_tensor")
+        db.start("preprocess")
         dataset = dataset.apply(self._preprocess)
+        db.end("preprocess")
         return dataset
 
-    def _make_definition_batch(self, new_cluster_subgraphs: Iterable[LoaderDefinition]) -> tfgnn.GraphTensor:
+    def _make_definition_batch(self, db, new_cluster_subgraphs: Iterable[LoaderDefinition]) -> tfgnn.GraphTensor:
         """
         Create a dataset of definition graphs.
 
         @param new_cluster_subgraphs: list of definition clusters in tuple form (as returned by the data loader)
         @return: a `GraphTensor` containing the definition clusters, following the `definition_graph_spec` schema
         """
+        
+        db.start("make_dataset")
         dataset = tf.data.Dataset.from_generator(lambda: new_cluster_subgraphs,
-                                                 output_signature=DataServerDataset.definition_data_spec)
-        dataset = dataset.map(DataServerDataset._make_definition_graph_tensor)
-        dataset = self._preprocess(dataset).map(self._tokenize_definition_graph)
+                                                output_signature=DataServerDataset.definition_data_spec)
+        db.end("make_dataset")
+        db.start("map_dataset")
+        dataset = dataset.map(DataServerDataset._make_definition_graph_tensor)  # TODO(jrute): Possible memory leak  # TODO(jrute): Slow code
+        db.end("map_dataset")
+        db.start("preprocess_and_tokenize_dataset")
+        dataset = self._preprocess(dataset).map(self._tokenize_definition_graph)  # TODO(jrute): Possible memory leak  # TODO(jrute): Slow code
+        db.end("preprocess_and_tokenize_dataset")
         return dataset.batch(Dataset.MAX_DEFINITIONS).get_single_element()
 
     @staticmethod
@@ -374,18 +398,21 @@ class TFGNNPredict(Predict):
             self._inference_model_cache[tactic_expand_bound] = inference_model
         return self._inference_model_cache[tactic_expand_bound]
 
-    def _batch_ranked_predictions(self,
+    def _batch_ranked_predictions(self, db,
                                   proofstate_graph: tfgnn.GraphTensor,
                                   tactic_expand_bound: int,
                                   total_expand_bound: int,
                                   tactic_mask: tf.Tensor
                                   ) -> List[PredictOutput]:
 
+        db.start("fetch_inference_model")
         inference_model = self._inference_model(tactic_expand_bound)
-
+        db.end("fetch_inference_model")
+        db.start("inference")
         inference_output = inference_model({self.prediction_task.PROOFSTATE_GRAPH: proofstate_graph,
                                             self.prediction_task.TACTIC_MASK: tactic_mask})
-
+        db.end("inference")
+        db.start("other")
         _, local_context_sizes = proofstate_graph.context['local_context_ids'].nested_row_lengths()
 
         batch_size = int(proofstate_graph.total_num_components.numpy())
@@ -406,6 +433,7 @@ class TFGNNPredict(Predict):
                                                             global_context_size=self._graph_constants.global_context.size,
                                                             **inference_data)
                 predict_output.predictions.extend(filter(lambda inference: inference.value > -float('inf'), predictions))
+        db.end("other")
         return predict_outputs
 
     def _tactic_mask_from_allowed_model_tactics(self, allowed_model_tactics: Optional[Iterable[int]]) -> tf.Tensor:
@@ -416,29 +444,35 @@ class TFGNNPredict(Predict):
             tactic_mask = tf.ones(shape=(tactic_num,), dtype=tf.bool)
         return tactic_mask & self.fixed_tactic_mask
 
-    def batch_ranked_predictions(self,
+    def batch_ranked_predictions(self, db,
                                  states: List[LoaderProofstate],
                                  tactic_expand_bound: int,
                                  total_expand_bound: int,
                                  allowed_model_tactics: Optional[Iterable[int]] = None
                                  ) -> List[Union[PredictOutput, Tuple[List[np.ndarray], np.ndarray]]]:
         # convert the input to a batch of graph tensors (rank 1)
-        proofstate_graph = self._make_dummy_proofstate_dataset(states).batch(len(states)).get_single_element()
-
+        db.start("batched_ranked_pred")
+        db.start("make_graph")
+        proofstate_graph = self._make_dummy_proofstate_dataset(db, states).batch(len(states)).get_single_element()  # TODO(jrute): Possible memory leak
+        db.end("make_graph")
         # create the tactic mask input
+        db.start("tactic_mask")
         tactic_mask = self._tactic_mask_from_allowed_model_tactics(allowed_model_tactics)
         tactic_mask = tf.repeat(tf.expand_dims(tactic_mask, axis=0), repeats=len(states), axis=0)
-
+        db.end("tactic_mask")
         # make predictions
-        batch_predict_output = self._batch_ranked_predictions(proofstate_graph=proofstate_graph,
+        db.start("batch_predict_output")
+        batch_predict_output = self._batch_ranked_predictions(db, proofstate_graph=proofstate_graph,
                                                               tactic_expand_bound=tactic_expand_bound,
                                                               total_expand_bound=total_expand_bound,
                                                               tactic_mask=tactic_mask)
-
+        db.end("batch_predict_output")
+        db.start("other")
         # fill in the states in loader format
         for state, predict_output in zip(states, batch_predict_output):
             predict_output.state = state
-
+        db.end("other")
+        db.end("batched_ranked_pred")
         # return predictions in the appropriate format
         if not self.numpy_output:
             return batch_predict_output
@@ -446,7 +480,7 @@ class TFGNNPredict(Predict):
             return [predict_output.numpy() for predict_output in batch_predict_output]
 
     @predict_api_debugging
-    def ranked_predictions(self,
+    def ranked_predictions(self, db,
                            state: LoaderProofstate,
                            tactic_expand_bound: int,
                            total_expand_bound: int,
@@ -459,7 +493,7 @@ class TFGNNPredict(Predict):
         if available_global is not None:
             raise NotImplementedError('available_global is not supported yet')
 
-        return self.batch_ranked_predictions(states=[state],
+        return self.batch_ranked_predictions(db, states=[state],
                                              allowed_model_tactics=allowed_model_tactics,
                                              tactic_expand_bound=tactic_expand_bound,
                                              total_expand_bound=total_expand_bound)[0]
