@@ -199,29 +199,9 @@ class Checkpointer:
         param_yaml_path = subdir / "optim_params.yaml"
         param_yaml_path.write_text(self.optimizer_params.to_yaml())
 
-    def test_load_from_checkpoint(self, epoch: int):
-        # TODO(jrute): Remove when done testing this
-        subdir = self.checkpoint_dir / f"{self.model_name}__epoch{epoch}"
-        new_model_wrapper = ModelWrapper(checkpoint=subdir)
     def load_from_checkpoint(self, epoch: int):
         subdir = self.checkpoint_dir / f"{self.model_name}__epoch{epoch}"
         self.model_wrapper = ModelWrapper(checkpoint=subdir)
-
-    def test_predict(self, epoch: int, batch):
-        # TODO(jrute): Remove when done testing this
-        subdir = self.checkpoint_dir / f"{self.model_name}__epoch{epoch}"
-        predictor = Predict(checkpoint_dir=subdir)
-        state = batch[0][0]
-        cxt = state[3]
-        tactic = batch[0][1][0]
-        arg_mask = batch[0][1][2]
-        arg_cnt = arg_mask.sum()
-        print("tac_result", predictor.predict_tactic_logits(state).shape)
-        r = predictor.predict_arg_logits(state, tactic)
-        print("arg_result", r.shape)
-        print("arg_mask", arg_mask)
-        print("expected_arg_size:", (arg_cnt, len(cxt)))
-        assert r.shape == (arg_cnt, len(cxt))
 
 
 class FingerPrinter():

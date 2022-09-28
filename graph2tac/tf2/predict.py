@@ -3,7 +3,7 @@ from typing import Optional, List, Tuple
 from pathlib import Path
 import numpy as np
 import tensorflow as tf
-from graph2tac.loader.data_server import GraphConstants, LoaderProofstate, LoaderDefinition
+from graph2tac.loader.data_server import GraphConstants, LoaderAction, LoaderProofstate, LoaderDefinition
 
 from graph2tac.tf2.graph_nn_batch import make_flat_batch_np, make_flat_batch_np_empty
 from graph2tac.tf2.graph_nn_def_batch import make_flat_def_batch_np
@@ -56,7 +56,7 @@ class TF2Predict(Predict):
             if node_label_num > self.dataset_consts.node_label_num:
                 self.model_wrapper.extend_embedding_table(node_label_num)
         max_args = self.dataset_consts.tactic_max_arg_num
-        self.dummy_action = (0, np.zeros([max_args, 2]),)
+        self.dummy_action = LoaderAction(tactic_id=0, args=np.zeros([max_args, 2], dtype=np.uint32),)
         self.dummy_id = 0
         self.pred_fn = self.model_wrapper.get_predict_fn()
         self.set_def_fn = self.model_wrapper.get_set_def_fn()
@@ -106,9 +106,9 @@ class TF2Predict(Predict):
         - first dimension is the num args for that tactic
         - second dimension is the num of elements in the cxt
         """
-        action = (tactic_id, self.dummy_action[1], self.dummy_action[2])
+        action = LoaderAction(tactic_id=tactic_id, args=self.dummy_action.args)
         batch = [(state, action, self.dummy_id)]  # only action tactic is used to get arg logits
-        cxt_len = len(state[3])  # this is how many local context elements there are
+        cxt_len = len(state.context.local_context)  # this is how many local context elements there are
         model_input = np_to_tensor(make_flat_batch_np(batch, len(self.dataset_consts.global_context),
                                                       self.dataset_consts.tactic_max_arg_num))
         _, arg_nums, arg_logits = self.pred_fn(model_input)  # [bs], [total_args, (local_global_ctx)] (ragged)
@@ -128,14 +128,16 @@ class TF2Predict(Predict):
         pre_top_tactic_ids = np.argsort(-tactic_logits)  # [:tactic_expand_bound]
         top_tactic_ids = pre_top_tactic_ids[np.isin(pre_top_tactic_ids, allowed_model_tactics)][:tactic_expand_bound]
         top_tactic_ids = top_tactic_ids[self.tactic_index_to_numargs[top_tactic_ids] < NUMPY_NDIM_LIMIT]
-        batch = [(state, (tactic_id, self.dummy_action[1]), self.dummy_id) for tactic_id in top_tactic_ids]
+        batch = [
+            (state, LoaderAction(tactic_id, self.dummy_action.args), self.dummy_id)
+            for tactic_id in top_tactic_ids
+        ]
         if not batch:
             return top_tactic_ids, tactic_logits[top_tactic_ids], [], []
         model_input = np_to_tensor(make_flat_batch_np(batch, len(self.dataset_consts.global_context),
                                                       self.dataset_consts.tactic_max_arg_num))
         _, arg_nums, arg_logits = self.pred_fn(model_input)
-        _, _, (context, _), _ = state
-        cxt_len = len(context)  # this is how many local context elements there are
+        cxt_len = len(state.context.local_context)  # this is how many local context elements there are
         arg_cnt = sum(arg_nums)
         local_context_arg_cnt = arg_cnt * cxt_len  # how many logits there are for local context elements in all arguments
         global_context_start = local_context_arg_cnt + arg_cnt
@@ -155,9 +157,7 @@ class TF2Predict(Predict):
                            available_global: Optional[np.ndarray] = None,
                            tactic_expand_bound=20,
                            total_expand_bound=1000000):
-        _, _, context, _ = state
-
-        context_len = len(context)
+        context_len = len(state.context.local_context)
         global_context = np.arange(len(self.dataset_consts.global_context), dtype = np.uint32)
         if available_global is not None:
             if len(available_global) > 0 and (available_global >= len(self.dataset_consts.global_context)).any():

@@ -3,7 +3,8 @@ data server provides the class to serve data to training
  - from a collection of bin files in a filesystem
  - from messages in a stream in interactive session (to be implemented)
 """
-from typing import List, Tuple, Callable, NewType
+from typing import Iterable, List, Tuple, Callable
+from numpy.typing import NDArray
 
 import time
 import os
@@ -19,22 +20,6 @@ from graph2tac.hash import get_split_label
 from graph2tac.loader.helpers import get_all_fnames
 
 import tqdm
-
-# nodes, edges, edge_labels, edge_offsets
-LoaderGraph = NewType('LoaderGraph', Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray])
-
-# name, step, is_faithful
-ProofstateMetadata = NewType('ProofstateMetadata', Tuple[bytes, int, bool])
-
-# context_node_ids, available_global_context
-ProofstateContext = NewType('ProofstateContext', Tuple[np.ndarray, np.ndarray])
-
-# loader_graph, root, context, metadata
-LoaderProofstate = NewType('LoaderProofstate', Tuple[LoaderGraph, int, ProofstateContext, ProofstateMetadata])
-
-# loader_graph, num_definitions, definition_names
-LoaderDefinition = NewType('LoaderDefinition', Tuple[LoaderGraph, int, np.ndarray])
-
 
 from graph2tac.loader.clib.loader import (
     files_get_scc_components,
@@ -52,6 +37,140 @@ from graph2tac.loader.clib.loader import (
     get_graph_constants_online
 )
 
+def custom_dataclass_repr(obj) -> str:
+    """String repr for a dataclass, but removing the array data."""
+    kws = {k: f"array(shape={v.shape}, dytype={v.dtype})" if isinstance(v, np.ndarray) else repr(v) for k,v in obj.__dict__.items()}
+    return obj.__class__.__qualname__ + "(" + ", ".join(k + "=" + v for k,v in kws.items()) + ")"
+
+
+@dataclass(repr=False)
+class LoaderGraph:
+    """A single graph as it comes from the loader"""
+    nodes: NDArray[np.uint32]  # [nodes]
+    """Node class labels.  Shape: [number of nodes]"""
+    edges: NDArray[np.uint32]  # [edges,2]
+    """Edges as source-target pairs indexed into `nodes`.  Shape: [number of edges, 2]"""
+    edge_labels: NDArray[np.uint32]  # [edges]
+    """Edge labels.  Shape: [number of edges]"""
+    edge_offsets: NDArray[np.uint32]  # [edge_labels]
+    """Start position in `edges` of each edge label.  Shape: [number of edge labels]"""
+
+    def __repr__(self):
+        return custom_dataclass_repr(self)
+
+@dataclass(repr=False)
+class TF2Graph:
+    """A single graph as it is used for TF2 (before being converted to TF types)"""
+    nodes: NDArray[np.uint32]  # [nodes]
+    """Node class labels.  Shape: [number of nodes]"""
+    edges: tuple[NDArray[np.uint32], ...]  # ([edges_with_label_e,2] for e in edge_labels)
+    """Edges (source and target indices in `nodes`) for each edge labels
+    Tuple where each array has shape [number of edges with label, 2]"""
+    def __repr__(self):
+        return custom_dataclass_repr(self)
+
+@dataclass(repr=False)
+class TFGNNGraph:
+    """A single graph as it is used for TFGNN (before being converted to TF types)"""
+    nodes: NDArray[np.uint32]  # [nodes]
+    """Node class labels.  Shape: [number of nodes]"""
+    sources: NDArray[np.uint32]  # [edges]
+    targets: NDArray[np.uint32]  # [edges]
+    edge_labels: NDArray[np.uint32]  # [edges]
+
+    def __repr__(self):
+        return custom_dataclass_repr(self)
+
+@dataclass(repr=False)
+class ProofstateMetadata:
+    """Metadata for a single proof state"""
+    name: bytes
+    """Theorem name"""
+    step: int
+    """Step of the proof"""
+    is_faithful: bool
+    """Represents if the action is faithful, meaning that the action fully encodes the original tactic"""
+
+    def __repr__(self):
+        return custom_dataclass_repr(self)
+
+@dataclass(repr=False)
+class ProofstateContext:
+    """Local and global context for a single proofstate"""
+    local_context: NDArray[np.uint32]  # [loc_cxt]
+    """Local context as indices into the `node` field of the corresponding graph.  Shape: [size of local context]"""
+    global_context: NDArray[np.uint32]  # [global_cxt]
+    """
+    Global context as indices into list of all global identifiers.
+    Shape: [size of global context]
+    
+    The index is into the list of global definitions maintained by the dataserver and kept in the model
+    (not the list of node labels).  Hence the smallest `global_context` value is usually 0.
+    """
+
+    def __repr__(self):
+        return custom_dataclass_repr(self)
+
+@dataclass(repr=False)
+class LoaderProofstate:
+    """A single proofstate as it comes from the loader"""
+    graph: LoaderGraph
+    """Proofstate graph as it comes from the loader"""
+    root: int
+    """Index of the root node in `graph.nodes`.  Currently the root is always 0."""
+    context: ProofstateContext
+    """Local and global context"""
+    metadata: ProofstateMetadata
+    """Proofstate metadata"""
+
+    def __repr__(self):
+        return custom_dataclass_repr(self)
+
+@dataclass(repr=False)
+class LoaderAction:
+    """A single tactic as it comes from the loader"""
+    tactic_id: int
+    """Base tactic id"""
+    args: NDArray[np.uint32]
+    """
+    Tactic arguments (local or global or none).  Using the indices in the `context` field of the proofstate.
+    
+    If `args[i] == [0, l] for l < local_cxt_size`, then the `i`th arg is a local context variable with index `l`.
+    If `args[i] == [0, local_cxt_size]`, then the `i`th arg is a none argument (can't be represented).
+    If `args[i] == [1, g]` for `g > 0`, then the `i`th arg is a global definition with index `g`.
+    
+    The local argument is an index into `context.local_context` for the corresponding proofstate,
+    but the global argument is the index into the list of global definitions returned by the dataserver and kept
+    in the model.  In particular, the global argument is neither an index into `context.global_context`
+    for the proofstate nor the node label of a definition (which would instead be offset by the number of base node labels).
+
+    Hence the smallest possible global argument index is 0 and it can be larger than
+    `len(context.global_context)` for the corresponding proofstate.
+
+    Shape: [number of args for this tactic, 2]
+    """
+
+    def __repr__(self):
+        return custom_dataclass_repr(self)
+
+@dataclass(repr=False)
+class LoaderDefinition:
+    """A single definition declaration as it comes from the loader"""
+    graph: LoaderGraph
+    """Definition graph as it comes from the loader"""
+    num_definitions: int
+    """
+    Number of definitions in the graph.
+    
+    The roots for these definitions are the nodes of the `graph.nodes`.
+    (E.g. inductive types are packaged as a single graph with
+    mulitple definitions, one for the type and one for each constructor
+    """
+    definition_names: NDArray[np.object_]
+    """Names of the definitions.  Stored as either bytestrings or strings.  Shape: [number of definitions in the graph]"""
+
+    def __repr__(self):
+        return custom_dataclass_repr(self)
 
 @dataclass
 class GraphConstants:
@@ -68,22 +187,45 @@ class GraphConstants:
     label_in_spine: List[bool]
     max_subgraph_size: int
 
-
 @dataclass
 class DataPoint:
+    """
+    A proofstate and action datapoint from the loader
+    
+    This is used mostly for investigation into the dataset.
+    """
     proof_step_idx: int
+    """Datapoint unique index from the loader."""
     graph: LoaderGraph
-    local_context: np.ndarray
-    available_global_context: np.ndarray
+    """Single proofstate graph"""
+    local_context: NDArray[np.uint32]
+    """Local context as indices into `graph.node` of the corresponding graph.  Shape: [size of local context]"""
+    available_global_context: NDArray[np.uint32]
+    """
+    Global context as indices into list of all global identifiers.
+    Shape: [size of global context]
+    
+    The index is into the list of global definitions maintained by the dataserver and kept in the model
+    (not the list of node labels).  Hence the smallest `global_context` value is usually 0.
+    """
     root: int
-    action: Tuple[np.ndarray, np.ndarray]
+    """Index of the root node in `graph.nodes`.  Currently the root is always 0."""
+    action: LoaderAction
+    """The tactic applied to the proof state"""
     state_text: bytes
+    """Plain text representation of the proof state"""
     action_base_text: bytes
+    """The base tactic represented at plain text, e.g. 'apply _'"""
     action_interm_text: bytes
+    """The tactic represented at plain text most similar to how it is represented coming out of the loader"""
     action_text: bytes
+    """The tactic represented as plain text, representing the full"""
     def_name: bytes
+    """The theorem this proof step is in.  Can be used to align to the orginal data."""
     step_in_proof: int
+    """The step ix of the proof.  Can be used to align to the orginal data."""
     file_name: Path
+    """The coq file this proof step is in.  Can be used to align to the orginal data."""
 
 
 @dataclass
@@ -94,23 +236,6 @@ class DefIndexTable:
     idx_to_hash: list
     idx_in_spine: list[bool]
     idx_to_global_context: list[set] 
-
-
-def graph_as(model: str, graph: Tuple) -> Tuple:
-    """
-    input: the graph as loader returns it
-    output: the graph in a format that model consumes where the model is "tf2" or "tfgnn"
-
-    """
-    nodes, edges, edge_labels, edges_offset = graph
-
-    if model == "tf_gnn":
-        return nodes, edges[:, 0], edges[:, 1], edge_labels
-    if model == "tf2":
-        edges_grouped_by_label = np.split(edges, edges_offset)
-        return nodes, edges_grouped_by_label
-
-    raise Exception(f"currently supported graph format is for models tf2 or tfgnn, but received {model}")
 
 
 def find_bin_files(data_dir: Path) -> List[Path]:
@@ -428,13 +553,17 @@ class Data2:
     def def_name_of_tactic_point(self, data_point_idx):
         return def_name_of_tactic_point(self.__def_index_table, self.__tactical_data[data_point_idx])
 
-    def get_proof_step_text(self, data_point_idx):
+    # TODO(jrute): This should return a dataclass if it is a public API
+    def get_proof_step_text(self, data_point_idx) -> tuple[bytes, bytes, bytes, bytes]:
         tactic_point = self.__tactical_data[data_point_idx]
         state_text, action_base_text, action_interm_text, action_text = get_proof_step_online_text(self.__c_data_online, tactic_point[2:6])
         return state_text, action_base_text, action_interm_text, action_text
 
-    def get_proof_step(self, data_point_idx,
-                       skip_text=False):
+    def get_proof_step(
+        self, 
+        data_point_idx: int,
+        skip_text: bool=False
+    ) -> DataPoint:
         tactic_point = self.__tactical_data[data_point_idx]
         tactic_hash, num_args, file_idx, def_node_idx, proof_step_idx, outcome_idx, state_root_node, def_hash = tactic_point
         res = get_subgraph_online(
@@ -451,22 +580,32 @@ class Data2:
         if not skip_text:
             state_text, action_base_text, action_interm_text, action_text = self.get_proof_step_text(data_point_idx)
         else:
-            state_text, action_base_text, action_interm_text, action_text = "","","",""
+            state_text, action_base_text, action_interm_text, action_text = b"", b"", b"", b""
 
         # TEXT ANNOTATION TO BE IMPLEMENTED
-        return DataPoint(data_point_idx,
-                         graph=LoaderGraph( (nodes, edges, edge_labels, edges_offset) ),
-                         local_context=context,
-                         available_global_context=self.step_global_context(data_point_idx),
-                         root = root,
-                         action=(tactic_index, args),
-                         state_text=state_text,
-                         action_base_text=action_base_text,
-                         action_interm_text=action_interm_text,
-                         action_text=action_text,
-                         def_name=def_name,
-                         step_in_proof=proof_step_idx.item(),
-                         file_name=self.__fnames[file_idx])
+        return DataPoint(
+            data_point_idx,
+            graph=LoaderGraph(
+                nodes=nodes,
+                edges=edges,
+                edge_labels=edge_labels,
+                edge_offsets=edges_offset
+            ),
+            local_context=context,
+            available_global_context=self.step_global_context(data_point_idx),
+            root=root,
+            action=LoaderAction(
+                tactic_id=tactic_index, 
+                args=args
+            ),
+            state_text=state_text,
+            action_base_text=action_base_text,
+            action_interm_text=action_interm_text,
+            action_text=action_text,
+            def_name=def_name,
+            step_in_proof=proof_step_idx.item(),
+            file_name=self.__fnames[file_idx]
+        )
 
     # TODO (after TF2 deprecation): Remove data-splitting functionality, training logic should take care of this
     def select_data_points(self, split_fun: Callable[[...], int], label: int) -> List[int]:
@@ -504,14 +643,27 @@ class Data2:
 
         context_node_ids = proof_step.local_context
         available_global_context = proof_step.available_global_context
-        context = ProofstateContext( (context_node_ids, available_global_context) )
+        context = ProofstateContext(
+            local_context=context_node_ids,
+            global_context=available_global_context
+        )
 
         name = proof_step.def_name
         step = proof_step.step_in_proof
         is_faithful = proof_step.action_text.replace(b'@', b'')==proof_step.action_interm_text.replace(b'@', b'')
-        metadata = ProofstateMetadata( (name, step, is_faithful) )
+        metadata = ProofstateMetadata(
+            name=name,
+            step=step,
+            is_faithful=is_faithful
+        )
 
-        return LoaderProofstate( (loader_graph, root, context, metadata) )
+        return LoaderProofstate(
+            graph=loader_graph,
+            root=root,
+            context=context,
+            metadata=metadata
+        )
+        
 
     def step_global_context(self, data_point_idx: int) -> np.ndarray:
         """
@@ -551,8 +703,17 @@ class Data2:
         definition_labels = nodes[:num_definitions]
         definition_names = label_to_names[definition_labels]
 
-        graph = LoaderGraph( (nodes, edges, edge_labels, edges_offset) )
-        return LoaderDefinition( (graph, num_definitions, definition_names) )
+        graph = LoaderGraph(
+            nodes=nodes,
+            edges=edges,
+            edge_labels=edge_labels,
+            edge_offsets=edges_offset
+        )
+        return LoaderDefinition(
+            graph=graph,
+            num_definitions=num_definitions,
+            definition_names=definition_names
+        )
 
 
 class Iterator:
@@ -673,7 +834,7 @@ class DataServer:
         """
         return self.__online_data.def_cluster_subgraph(cluster_idx)
 
-    def def_cluster_subgraphs(self):
+    def def_cluster_subgraphs(self) -> Iterable[LoaderDefinition]:
         """
         returns a generator of subgraphs for definition clusters
         in the same format as def_class_subgraph (see docstring there)

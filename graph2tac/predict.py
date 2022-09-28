@@ -1,4 +1,4 @@
-from typing import List, Tuple, Optional, Callable, Dict
+from typing import List, Tuple, Optional, Callable, Dict, TypeVar
 
 import time
 import pickle
@@ -26,10 +26,11 @@ def cartesian_product(*arrays):
         arr[...,i] = a
     return arr.reshape(-1, la)
 
+RT = TypeVar('RT')  # return type
 
-def predict_api_debugging(api_call: Callable):
+def predict_api_debugging(api_call: Callable[..., RT]) -> Callable[..., RT]:
     api_name = api_call.__name__
-    def api_call_with_debug(self: "Predict", *args: List, **kwargs: Dict):
+    def api_call_with_debug(self: "Predict", *args: List, **kwargs: Dict) -> RT:
         if self._debug_dir is not None:
             debug_message_file = self._run_dir / f'{self._debug_message_number}.pickle'
             logger.debug(f'logging {api_name} call to {debug_message_file}')
@@ -81,7 +82,7 @@ class Predict:
             run_dirs = [int(run_dir.name) for run_dir in self._debug_dir.glob('*') if run_dir.is_dir()]
             run_number = max(run_dirs) + 1 if run_dirs else 1
 
-            self._run_dir = debug_dir / str(run_number)
+            self._run_dir = self._debug_dir / str(run_number)
             self._run_dir.mkdir()
             logger.info(f'running Predict in debug mode, messages will be stored at {self._run_dir}')
 
