@@ -779,7 +779,7 @@ class DataServerDataset(Dataset):
         """
         # get the proofstates from the DataServer
         proofstates = tf.data.Dataset.from_generator(
-            map(self._loader_to_proofstate_data, lambda: self.data_server.data_train(shuffled=False, as_text=False)),
+            lambda: map(self._loader_to_proofstate_data, self.data_server.data_train(shuffled=False, as_text=False)),
             output_signature=self.proofstate_data_spec
         )
         return proofstates.map(self._make_proofstate_graph_tensor, num_parallel_calls=tf.data.AUTOTUNE)
@@ -799,7 +799,7 @@ class DataServerDataset(Dataset):
         @return: a tf.data.Dataset streaming GraphTensor objects
         """
         dataset = tf.data.Dataset.from_generator(
-            map(self._loader_to_definition_data, lambda: self.data_server.def_cluster_subgraphs()),
+            lambda: map(self._loader_to_definition_data, self.data_server.def_cluster_subgraphs()),
             output_signature=self.definition_data_spec
         )
         return dataset.map(self._make_definition_graph_tensor, num_parallel_calls=tf.data.AUTOTUNE)
