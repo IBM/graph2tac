@@ -7,7 +7,7 @@ import pickle
 import numpy as np
 from pathlib import Path
 
-from graph2tac.loader.data_server import DataServer, LoaderProofstate, LoaderDefinition
+from graph2tac.loader.data_server import DataServer, LoaderAction, LoaderProofstate, LoaderDefinition
 from graph2tac.predict import Predict, predict_api_debugging
 
 
@@ -22,14 +22,13 @@ def hash_nparray(array: np.array):
     return my_hash(x)
 
 
-def action_encode(action,
+def action_encode(action: LoaderAction,
                   local_context,
                   global_context):
-    tactic_idx, args = action
     context = (local_context, global_context)
-    res = [(arg[0], context[arg[0]][arg[1]]) for arg in args]
+    res = [(arg[0], context[arg[0]][arg[1]]) for arg in action.args]
 
-    return tactic_idx, res
+    return action.tactic_id, res
 
 
 def my_hash_of(state: LoaderProofstate, with_context: bool):
