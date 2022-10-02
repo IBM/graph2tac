@@ -103,8 +103,8 @@ setup(
     license='MIT',
     install_requires=[
         'keras>=2.8',
-        'tensorflow>=2.8',
-        'tensorflow_gnn>=0.2.0.dev1',
+        'tensorflow>=2.9.0,<2.10', # TODO(jrute): Try to upgrade to >=2.10
+        'tensorflow_gnn>=0.2.0,<0.3',  # TODO(jrute): Try to upgrade to >=0.3
         'tqdm',
         'numpy',
         'fire',
