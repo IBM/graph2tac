@@ -345,16 +345,17 @@ class Dataset:
 
     def _preprocess_single(self, x):
         # applying symmetrization
-        edge_label_num = self._dataset._graph_constants.edge_label_num
-        if self._dataset.symmetrization == UNDIRECTED:
-            x = self._dataset._symmetrize(x, edge_label_num, True)
-        elif self._dataset.symmetrization == BIDIRECTIONAL:
-            x = self._dataset._symmetrize(x, edge_label_num, False)
+        edge_label_num = self._graph_constants.edge_label_num
+        if self.symmetrization == UNDIRECTED:
+            x = self._symmetrize(x, edge_label_num, True)
+        elif self.symmetrization == BIDIRECTIONAL:
+            x = self._symmetrize(x, edge_label_num, False)
             edge_label_num *= 2
         # introducing self edges
-        if self._dataset.add_self_edges:
-            x = self._dataset._add_self_edges(x, edge_label_num)
-    
+        if self.add_self_edges:
+            x = self._add_self_edges(x, edge_label_num)
+        return x
+
     def _preprocess(self, dataset: tf.data.Dataset) -> tf.data.Dataset:
         """
         Applies the symmetrization and adds self-edges to the GraphTensor objects streamed by the input dataset.
