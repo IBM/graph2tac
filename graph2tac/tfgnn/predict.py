@@ -25,17 +25,21 @@ def stack_dicts_with(f, ds):
         for key in keys
     }
 
-def stack_features(xs):
-    return stack_dicts_with(tf.ragged.stack, [x.features for x in xs])
+def stack_maybe_ragged(xs):
+    if isinstance(xs[0], tf.RaggedTensor):
+        return tf.ragged.stack(xs)
+    else:
+        return tf.stack(xs)
 
 def stack_contexts(cs):
     return tfgnn.Context.from_fields(
-        features = stack_features(cs)
+        sizes = tf.stack([c.sizes for c in cs]),
+        features = stack_dicts_with(stack_maybe_ragged, [c.features for c in cs]),
     )
 
 def stack_node_sets(nss):
     sizes = tf.stack([ns.sizes for ns in nss])
-    features = stack_features(nss)
+    features = stack_dicts_with(tf.ragged.stack, [ns.features for ns in nss])
     return tfgnn.NodeSet.from_fields(
         sizes = sizes,
         features = features,
@@ -43,7 +47,7 @@ def stack_node_sets(nss):
 
 def stack_edge_sets(ess):
     sizes = tf.stack([es.sizes for es in ess])
-    features = stack_features(ess)
+    features = stack_dicts_with(tf.ragged.stack, [es.features for es in ess])
     source_name = ess[0].adjacency.source_name
     target_name = ess[0].adjacency.target_name
     assert all(es.adjacency.source_name == source_name for es in ess)
@@ -51,7 +55,7 @@ def stack_edge_sets(ess):
     source = tf.ragged.stack([es.adjacency.source for es in ess])
     target = tf.ragged.stack([es.adjacency.target for es in ess])
     return tfgnn.EdgeSet.from_fields(
-        sizes = tf.constant([3]),
+        sizes = sizes,
         features = features,
         adjacency = tfgnn.Adjacency.from_indices(
             source = (source_name, source),
@@ -208,7 +212,6 @@ class TFGNNPredict(Predict):
         with dataset_yaml_filepath.open('r') as yml_file:
             dataset = Dataset(graph_constants=graph_constants, **yaml.load(yml_file, Loader=yaml.SafeLoader))
         self._dataset = dataset
-        self._tokenize_definition_graph = dataset.tokenize_definition_graph
 
         # call to parent constructor to defines self._graph_constants
         super().__init__(graph_constants=graph_constants, debug_dir=debug_dir)
@@ -328,8 +331,8 @@ class TFGNNPredict(Predict):
 
     @tf.function(input_signature = DataServerDataset.proofstate_data_spec)
     def _make_proofstate_graph_tensor_from_data(self, state, action, graph_id):
-        x = self._dataset._make_proofstate_graph_tensor(state, action, graph_id)
-        x = dataset._preprocess_single(x)
+        x = DataServerDataset._make_proofstate_graph_tensor(state, action, graph_id)
+        x = self._dataset._preprocess_single(x)
         return x
 
     def _make_proofstate_graph_tensor(self, state : LoaderProofstate):
@@ -367,7 +370,7 @@ class TFGNNPredict(Predict):
     def _make_definition_graph_tensor_from_data(self, loader_graph, num_definitions, definition_names):
         x = DataServerDataset._make_definition_graph_tensor(loader_graph, num_definitions, definition_names)
         x = self._dataset._preprocess_single(x)
-        x = global_argument_predict._tokenize_definition_graph(x)
+        x = self._dataset.tokenize_definition_graph(x)
         return x
 
     def _make_definition_graph_tensor(self, x):
