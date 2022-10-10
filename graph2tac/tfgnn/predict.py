@@ -310,16 +310,28 @@ class TFGNNPredict(Predict):
             # clear the inference model cache to force re-creation of the inference models using the new layers
             self._inference_model_cache = {}
 
-    @predict_api_debugging
-    def compute_new_definitions(self, new_cluster_subgraphs: List[LoaderDefinition]) -> None:
-        if self.definition_task is None:
-            raise RuntimeError('cannot update definitions when a definition task is not present')
-        definition_graph = self._make_definition_batch(new_cluster_subgraphs)
+    @tf.function(input_signature = DataServerDataset.definition_data_spec)
+    def _compute_new_definition_embs(self, loader_graph, num_definitions, definition_names):
+        definition_graph = stack_graph_tensors([
+            self._make_definition_graph_tensor_from_data(loader_graph, num_definitions, definition_names)
+        ])
 
         scalar_definition_graph = definition_graph.merge_batch_to_components()
         definition_embeddings = self.definition_task(scalar_definition_graph).flat_values
         defined_labels = Trainer._get_defined_labels(definition_graph).flat_values
 
+        return definition_embeddings, defined_labels
+    
+    @predict_api_debugging
+    def compute_new_definitions(self, new_cluster_subgraphs: List[LoaderDefinition]) -> None:
+        if self.definition_task is None:
+            raise RuntimeError('cannot update definitions when a definition task is not present')
+        assert len(new_cluster_subgraphs) == 1
+        new_cluster_subgraph = DataServerDataset._loader_to_definition_data(new_cluster_subgraphs[0])
+
+        definition_embeddings, defined_labels = self._compute_new_definition_embs(*new_cluster_subgraph)
+        
+        # TODO(jrute): More of this below can be compiled to make it even faster
         node_label_num = self.prediction_task.graph_embedding._node_label_num
         hidden_size = self.prediction_task.graph_embedding._hidden_size
         update_mask = tf.reduce_sum(tf.one_hot(defined_labels, node_label_num, axis=0), axis=-1, keepdims=True)
@@ -328,6 +340,7 @@ class TFGNNPredict(Predict):
                                                      shape=(node_label_num, hidden_size))
         old_embeddings = (1 - update_mask) * self.prediction_task.graph_embedding._node_embedding.embeddings
         self.prediction_task.graph_embedding._node_embedding.set_weights([new_embeddings + old_embeddings])
+        
 
     @tf.function(input_signature = DataServerDataset.proofstate_data_spec)
     def _make_proofstate_graph_tensor_from_data(self, state, action, graph_id):
