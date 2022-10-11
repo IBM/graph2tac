@@ -324,7 +324,7 @@ class TFGNNPredict(Predict):
             return self.cached_definition_computation
         
         @tf.function(input_signature = DataServerDataset.definition_data_spec)
-        def _compute_new_definition_embs(loader_graph, num_definitions, definition_names):
+        def _compute_and_replace_definition_embs(loader_graph, num_definitions, definition_names):
             definition_graph = stack_graph_tensors([
                 self._make_definition_graph_tensor_from_data(loader_graph, num_definitions, definition_names)
             ])
@@ -333,18 +333,16 @@ class TFGNNPredict(Predict):
             definition_embeddings = self.definition_task(scalar_definition_graph).flat_values
             defined_labels = Trainer._get_defined_labels(definition_graph).flat_values
 
-            node_label_num = self.prediction_task.graph_embedding._node_label_num
-            hidden_size = self.prediction_task.graph_embedding._hidden_size
-            update_mask = tf.reduce_sum(tf.one_hot(defined_labels, node_label_num, axis=0), axis=-1, keepdims=True)
-            new_embeddings = update_mask * tf.scatter_nd(indices=tf.expand_dims(defined_labels, axis=-1),
-                                                        updates=definition_embeddings,
-                                                        shape=(node_label_num, hidden_size))
-            old_embeddings = (1 - update_mask) * self.prediction_task.graph_embedding._node_embedding.embeddings
-
-            return new_embeddings + old_embeddings
+            emb_vars = self.prediction_task.graph_embedding._node_embedding.embeddings
+            emb_vars.scatter_update(
+                tf.IndexedSlices(
+                    definition_embeddings,
+                    defined_labels,
+                )
+            )
         
-        self.cached_definition_computation = _compute_new_definition_embs
-        return _compute_new_definition_embs
+        self.cached_definition_computation = _compute_and_replace_definition_embs
+        return _compute_and_replace_definition_embs
     
     @predict_api_debugging
     def compute_new_definitions(self, new_cluster_subgraphs: List[LoaderDefinition]) -> None:
@@ -354,11 +352,8 @@ class TFGNNPredict(Predict):
         assert len(new_cluster_subgraphs) == 1
         new_cluster_subgraph = DataServerDataset._loader_to_definition_data(new_cluster_subgraphs[0])
 
-        compute_new_definition_embs = self._fetch_definition_computation()
-        embs = compute_new_definition_embs(*new_cluster_subgraph)
-        
-        # for some reason this doesn't like to be put inside of @tf.function, so we leave it outside
-        self.prediction_task.graph_embedding._node_embedding.set_weights([embs])
+        compute_and_replace_definition_embs = self._fetch_definition_computation()
+        compute_and_replace_definition_embs(*new_cluster_subgraph)
         
 
     @tf.function(input_signature = DataServerDataset.proofstate_data_spec)
