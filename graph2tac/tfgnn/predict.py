@@ -202,6 +202,7 @@ class TFGNNPredict(Predict):
 
         # initialize inference model cache (most of the time we always use one model for a fixed tactic_expand_bound)
         self._inference_model_cache = {}
+        self.cached_definition_computation = None
 
         # create dummy dataset for pre-processing purposes
         graph_constants_filepath = log_dir / 'config' / 'graph_constants.yaml'
@@ -309,37 +310,55 @@ class TFGNNPredict(Predict):
 
             # clear the inference model cache to force re-creation of the inference models using the new layers
             self._inference_model_cache = {}
+            self.cached_definition_computation = None
 
-    @tf.function(input_signature = DataServerDataset.definition_data_spec)
-    def _compute_new_definition_embs(self, loader_graph, num_definitions, definition_names):
-        definition_graph = stack_graph_tensors([
-            self._make_definition_graph_tensor_from_data(loader_graph, num_definitions, definition_names)
-        ])
+    def _fetch_definition_computation(self):
+        """
+        The definition computation needs to be rebuilt when the embeddings table is swapped out.
 
-        scalar_definition_graph = definition_graph.merge_batch_to_components()
-        definition_embeddings = self.definition_task(scalar_definition_graph).flat_values
-        defined_labels = Trainer._get_defined_labels(definition_graph).flat_values
+        When the embeddings table is changed, this cached function is deleted and
+        we rebuild it here when we need it.
+        """
 
-        return definition_embeddings, defined_labels
+        if self.cached_definition_computation is not None:
+            return self.cached_definition_computation
+        
+        @tf.function(input_signature = DataServerDataset.definition_data_spec)
+        def _compute_new_definition_embs(loader_graph, num_definitions, definition_names):
+            definition_graph = stack_graph_tensors([
+                self._make_definition_graph_tensor_from_data(loader_graph, num_definitions, definition_names)
+            ])
+
+            scalar_definition_graph = definition_graph.merge_batch_to_components()
+            definition_embeddings = self.definition_task(scalar_definition_graph).flat_values
+            defined_labels = Trainer._get_defined_labels(definition_graph).flat_values
+
+            node_label_num = self.prediction_task.graph_embedding._node_label_num
+            hidden_size = self.prediction_task.graph_embedding._hidden_size
+            update_mask = tf.reduce_sum(tf.one_hot(defined_labels, node_label_num, axis=0), axis=-1, keepdims=True)
+            new_embeddings = update_mask * tf.scatter_nd(indices=tf.expand_dims(defined_labels, axis=-1),
+                                                        updates=definition_embeddings,
+                                                        shape=(node_label_num, hidden_size))
+            old_embeddings = (1 - update_mask) * self.prediction_task.graph_embedding._node_embedding.embeddings
+
+            return new_embeddings + old_embeddings
+        
+        self.cached_definition_computation = _compute_new_definition_embs
+        return _compute_new_definition_embs
     
     @predict_api_debugging
     def compute_new_definitions(self, new_cluster_subgraphs: List[LoaderDefinition]) -> None:
         if self.definition_task is None:
             raise RuntimeError('cannot update definitions when a definition task is not present')
+
         assert len(new_cluster_subgraphs) == 1
         new_cluster_subgraph = DataServerDataset._loader_to_definition_data(new_cluster_subgraphs[0])
 
-        definition_embeddings, defined_labels = self._compute_new_definition_embs(*new_cluster_subgraph)
+        compute_new_definition_embs = self._fetch_definition_computation()
+        embs = compute_new_definition_embs(*new_cluster_subgraph)
         
-        # TODO(jrute): More of this below can be compiled to make it even faster
-        node_label_num = self.prediction_task.graph_embedding._node_label_num
-        hidden_size = self.prediction_task.graph_embedding._hidden_size
-        update_mask = tf.reduce_sum(tf.one_hot(defined_labels, node_label_num, axis=0), axis=-1, keepdims=True)
-        new_embeddings = update_mask * tf.scatter_nd(indices=tf.expand_dims(defined_labels, axis=-1),
-                                                     updates=definition_embeddings,
-                                                     shape=(node_label_num, hidden_size))
-        old_embeddings = (1 - update_mask) * self.prediction_task.graph_embedding._node_embedding.embeddings
-        self.prediction_task.graph_embedding._node_embedding.set_weights([new_embeddings + old_embeddings])
+        # for some reason this doesn't like to be put inside of @tf.function, so we leave it outside
+        self.prediction_task.graph_embedding._node_embedding.set_weights([embs])
         
 
     @tf.function(input_signature = DataServerDataset.proofstate_data_spec)
@@ -354,6 +373,7 @@ class TFGNNPredict(Predict):
         x = DataServerDataset._loader_to_proofstate_data((state, action, graph_id))
         x = self._make_proofstate_graph_tensor_from_data(*x)
         return x
+
     def _make_proofstate_batch(self, datapoints : Iterable[LoaderProofstate]):
         return stack_graph_tensors([
             self._make_proofstate_graph_tensor(x)
@@ -385,16 +405,6 @@ class TFGNNPredict(Predict):
         x = self._dataset._preprocess_single(x)
         x = self._dataset.tokenize_definition_graph(x)
         return x
-
-    def _make_definition_graph_tensor(self, x):
-        x = DataServerDataset._loader_to_definition_data(x)
-        x = self._make_definition_graph_tensor_from_data(*x)
-        return x
-    def _make_definition_batch(self, datapoints : Iterable[LoaderDefinition]):
-        return stack_graph_tensors([
-            self._make_definition_graph_tensor(x)
-            for x in datapoints
-        ])
 
     @staticmethod
     def _logits_decoder(logits: tf.Tensor, total_expand_bound: int) -> Tuple[np.ndarray, np.ndarray]:
