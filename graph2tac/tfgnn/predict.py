@@ -17,6 +17,59 @@ from graph2tac.common import logger
 from graph2tac.predict import Predict, predict_api_debugging, cartesian_product, NUMPY_NDIM_LIMIT
 
 
+def stack_dicts_with(f, ds):
+    keys = ds[0].keys()
+    assert all(d.keys() == keys for d in ds)
+    return {
+        key : f([d[key] for d in ds])
+        for key in keys
+    }
+
+def stack_maybe_ragged(xs):
+    if isinstance(xs[0], tf.RaggedTensor):
+        return tf.ragged.stack(xs)
+    else:
+        return tf.stack(xs)
+
+def stack_contexts(cs):
+    return tfgnn.Context.from_fields(
+        sizes = tf.stack([c.sizes for c in cs]),
+        features = stack_dicts_with(stack_maybe_ragged, [c.features for c in cs]),
+    )
+
+def stack_node_sets(nss):
+    sizes = tf.stack([ns.sizes for ns in nss])
+    features = stack_dicts_with(tf.ragged.stack, [ns.features for ns in nss])
+    return tfgnn.NodeSet.from_fields(
+        sizes = sizes,
+        features = features,
+    )
+
+def stack_edge_sets(ess):
+    sizes = tf.stack([es.sizes for es in ess])
+    features = stack_dicts_with(tf.ragged.stack, [es.features for es in ess])
+    source_name = ess[0].adjacency.source_name
+    target_name = ess[0].adjacency.target_name
+    assert all(es.adjacency.source_name == source_name for es in ess)
+    assert all(es.adjacency.target_name == target_name for es in ess)
+    source = tf.ragged.stack([es.adjacency.source for es in ess])
+    target = tf.ragged.stack([es.adjacency.target for es in ess])
+    return tfgnn.EdgeSet.from_fields(
+        sizes = sizes,
+        features = features,
+        adjacency = tfgnn.Adjacency.from_indices(
+            source = (source_name, source),
+            target = (target_name, target),
+        ),
+    )
+
+def stack_graph_tensors(gts):
+    context = stack_contexts([gt.context for gt in gts])
+    node_sets = stack_dicts_with(stack_node_sets, [gt.node_sets for gt in gts])
+    edge_sets = stack_dicts_with(stack_edge_sets, [gt.edge_sets for gt in gts])
+    return tfgnn.GraphTensor.from_pieces(context = context, node_sets = node_sets, edge_sets = edge_sets)
+
+
 class Inference:
     """
     Container class for a single inference for a given proof-state.
@@ -149,6 +202,7 @@ class TFGNNPredict(Predict):
 
         # initialize inference model cache (most of the time we always use one model for a fixed tactic_expand_bound)
         self._inference_model_cache = {}
+        self.cached_definition_computation = None
 
         # create dummy dataset for pre-processing purposes
         graph_constants_filepath = log_dir / 'config' / 'graph_constants.yaml'
@@ -158,8 +212,7 @@ class TFGNNPredict(Predict):
         dataset_yaml_filepath = log_dir / 'config' / 'dataset.yaml'
         with dataset_yaml_filepath.open('r') as yml_file:
             dataset = Dataset(graph_constants=graph_constants, **yaml.load(yml_file, Loader=yaml.SafeLoader))
-        self._preprocess = dataset._preprocess
-        self._tokenize_definition_graph = dataset.tokenize_definition_graph
+        self._dataset = dataset
 
         # call to parent constructor to defines self._graph_constants
         super().__init__(graph_constants=graph_constants, debug_dir=debug_dir)
@@ -257,25 +310,70 @@ class TFGNNPredict(Predict):
 
             # clear the inference model cache to force re-creation of the inference models using the new layers
             self._inference_model_cache = {}
+            self.cached_definition_computation = None
 
+    def _fetch_definition_computation(self):
+        """
+        The definition computation needs to be rebuilt when the embeddings table is swapped out.
+
+        When the embeddings table is changed, this cached function is deleted and
+        we rebuild it here when we need it.
+        """
+
+        if self.cached_definition_computation is not None:
+            return self.cached_definition_computation
+        
+        @tf.function(input_signature = DataServerDataset.definition_data_spec)
+        def _compute_and_replace_definition_embs(loader_graph, num_definitions, definition_names):
+            definition_graph = stack_graph_tensors([
+                self._make_definition_graph_tensor_from_data(loader_graph, num_definitions, definition_names)
+            ])
+
+            scalar_definition_graph = definition_graph.merge_batch_to_components()
+            definition_embeddings = self.definition_task(scalar_definition_graph).flat_values
+            defined_labels = Trainer._get_defined_labels(definition_graph).flat_values
+
+            emb_vars = self.prediction_task.graph_embedding._node_embedding.embeddings
+            emb_vars.scatter_update(
+                tf.IndexedSlices(
+                    definition_embeddings,
+                    defined_labels,
+                )
+            )
+        
+        self.cached_definition_computation = _compute_and_replace_definition_embs
+        return _compute_and_replace_definition_embs
+    
     @predict_api_debugging
     def compute_new_definitions(self, new_cluster_subgraphs: List[LoaderDefinition]) -> None:
         if self.definition_task is None:
             raise RuntimeError('cannot update definitions when a definition task is not present')
-        definition_graph = self._make_definition_batch(new_cluster_subgraphs)
 
-        scalar_definition_graph = definition_graph.merge_batch_to_components()
-        definition_embeddings = self.definition_task(scalar_definition_graph).flat_values
-        defined_labels = Trainer._get_defined_labels(definition_graph).flat_values
+        assert len(new_cluster_subgraphs) == 1
+        new_cluster_subgraph = DataServerDataset._loader_to_definition_data(new_cluster_subgraphs[0])
 
-        node_label_num = self.prediction_task.graph_embedding._node_label_num
-        hidden_size = self.prediction_task.graph_embedding._hidden_size
-        update_mask = tf.reduce_sum(tf.one_hot(defined_labels, node_label_num, axis=0), axis=-1, keepdims=True)
-        new_embeddings = update_mask * tf.scatter_nd(indices=tf.expand_dims(defined_labels, axis=-1),
-                                                     updates=definition_embeddings,
-                                                     shape=(node_label_num, hidden_size))
-        old_embeddings = (1 - update_mask) * self.prediction_task.graph_embedding._node_embedding.embeddings
-        self.prediction_task.graph_embedding._node_embedding.set_weights([new_embeddings + old_embeddings])
+        compute_and_replace_definition_embs = self._fetch_definition_computation()
+        compute_and_replace_definition_embs(*new_cluster_subgraph)
+        
+
+    @tf.function(input_signature = DataServerDataset.proofstate_data_spec)
+    def _make_proofstate_graph_tensor_from_data(self, state, action, graph_id):
+        x = DataServerDataset._make_proofstate_graph_tensor(state, action, graph_id)
+        x = self._dataset._preprocess_single(x)
+        return x
+
+    def _make_proofstate_graph_tensor(self, state : LoaderProofstate):
+        action = LoaderAction(self._dummy_tactic_id, tf.zeros(shape=(0, 2), dtype=tf.int64))
+        graph_id = tf.constant(-1, dtype=tf.int64)
+        x = DataServerDataset._loader_to_proofstate_data((state, action, graph_id))
+        x = self._make_proofstate_graph_tensor_from_data(*x)
+        return x
+
+    def _make_proofstate_batch(self, datapoints : Iterable[LoaderProofstate]):
+        return stack_graph_tensors([
+            self._make_proofstate_graph_tensor(x)
+            for x in datapoints
+        ])
 
     def _dummy_proofstate_data_generator(self, states: List[LoaderProofstate]):
         for state in states:
@@ -293,23 +391,15 @@ class TFGNNPredict(Predict):
         dataset = tf.data.Dataset.from_generator(lambda: self._dummy_proofstate_data_generator(states),
                                                  output_signature=DataServerDataset.proofstate_data_spec)
         dataset = dataset.map(DataServerDataset._make_proofstate_graph_tensor)
-        dataset = dataset.apply(self._preprocess)
+        dataset = dataset.apply(self._dataset._preprocess)
         return dataset
 
-    def _make_definition_batch(self, new_cluster_subgraphs: Iterable[LoaderDefinition]) -> tfgnn.GraphTensor:
-        """
-        Create a dataset of definition graphs.
-
-        @param new_cluster_subgraphs: list of definition clusters in tuple form (as returned by the data loader)
-        @return: a `GraphTensor` containing the definition clusters, following the `definition_graph_spec` schema
-        """
-        dataset = tf.data.Dataset.from_generator(
-            lambda: map(DataServerDataset._loader_to_definition_data, new_cluster_subgraphs),
-            output_signature=DataServerDataset.definition_data_spec
-        )
-        dataset = dataset.map(DataServerDataset._make_definition_graph_tensor)
-        dataset = self._preprocess(dataset).map(self._tokenize_definition_graph)
-        return dataset.batch(Dataset.MAX_DEFINITIONS).get_single_element()
+    @tf.function(input_signature = DataServerDataset.definition_data_spec)
+    def _make_definition_graph_tensor_from_data(self, loader_graph, num_definitions, definition_names):
+        x = DataServerDataset._make_definition_graph_tensor(loader_graph, num_definitions, definition_names)
+        x = self._dataset._preprocess_single(x)
+        x = self._dataset.tokenize_definition_graph(x)
+        return x
 
     @staticmethod
     def _logits_decoder(logits: tf.Tensor, total_expand_bound: int) -> Tuple[np.ndarray, np.ndarray]:
@@ -423,7 +513,7 @@ class TFGNNPredict(Predict):
                                  allowed_model_tactics: Optional[Iterable[int]] = None
                                  ) -> List[Union[PredictOutput, Tuple[List[np.ndarray], np.ndarray]]]:
         # convert the input to a batch of graph tensors (rank 1)
-        proofstate_graph = self._make_dummy_proofstate_dataset(states).batch(len(states)).get_single_element()
+        proofstate_graph = self._make_proofstate_batch(states)
 
         # create the tactic mask input
         tactic_mask = self._tactic_mask_from_allowed_model_tactics(allowed_model_tactics)
