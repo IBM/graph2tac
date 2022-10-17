@@ -5,7 +5,14 @@ graph2tac converts graphs to tactics
 
 - standard linux c++ compiler build chain (tested on g++)
 
-- capnproto https://capnproto.org : need capnp proto compiler, the library and the headers. On Ubuntu you can install `capnproto` and `libcapnp-dev`.
+- capnproto https://capnproto.org : need capnp proto compiler, the library and the headers. On Ubuntu (Debian based distros) you can install
+```
+capnproto libcapnp-dev
+```
+On RPM based distros install
+```
+capnproto libcapnp libcapnp-devel
+```
 
 - CUDA/GPU (optional, if you want to use GPU): please follow https://www.tensorflow.org/install to install on your system.
 

@@ -12,12 +12,12 @@ template <> struct select_npy_type<uint64_t> {
   const static NPY_TYPES type = NPY_UINT64;
 };
 
-#ifdef __clang__
-#pragma message  "NOT GNU"
-template <> struct select_npy_type<unsigned long> {
-  const static NPY_TYPES type = NPY_ULONG;
-};
-#endif
+// #ifdef __clang__
+// #pragma message  "NOT GNU"
+// template <> struct select_npy_type<unsigned long> {
+//   const static NPY_TYPES type = NPY_ULONG;
+// };
+// #endif
 
 
 template <> struct select_npy_type<uint32_t> {

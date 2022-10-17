@@ -1,4 +1,4 @@
-@0x8a58f5e8c91ebd1d; # v13
+@0xbab8ca9624df2b9c; # v12
 
 ######################################################################################################
 #
@@ -96,7 +96,7 @@ struct Graph {
 
       # Constr nodes
       rel @9 :Void;
-      evar @10 :ProofStateId;
+      evar @10 :Void;
       evarSubst @11 :Void;
       cast @12 :Void;
       prod @13 :Void;
@@ -242,16 +242,10 @@ struct ProofState {
   # been modified to use auto-generated names. Hence, tactics should not be concerned about the names of
   # the context.
 
-  contextText @4 :List(Text);
-  # A textual representation of the type/definition of context nodes
-
-  conclusionText @5 :Text;
-  # A textual representation of the conclusion of the proof state.
-
-  text @6 :Text;
+  text @4 :Text;
   # A textual representation of the proof state.
 
-  id @7 :ProofStateId;
+  id @5 :ProofStateId;
   # A unique identifier of the proof state. Any two proof states in a tactical proof that have an equal id
   # can morally be regarded to be 'the same' proof state.
   # IMPORTANT: Two proof states with the same id may still have different contents. This is because proof states
@@ -404,9 +398,6 @@ struct Dataset {
   # Note that some of these nodes may not be part of the 'super-global' context that is reachable using the
   # `representative` field as an entry point. The reason is that the global context is a forest (list of tree's)
   # and the 'super-global' context is only the main spine of this forest.
-
-  moduleName @4 :Text;
-  # The name of the module defined by this file.
 }
 
 

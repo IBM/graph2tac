@@ -1,4 +1,4 @@
-@0xf70bdd1a2cb44721; # v11
+@0x8a58f5e8c91ebd1d; # v13
 
 ######################################################################################################
 #
@@ -38,6 +38,8 @@ using DepIndex = UInt16;
 # How a dependency index should be resolved to a graph is not specified here. However, a
 # dependency index of zero always refers to the 'current' graph.
 
+using NodeIdentity = Int64;
+
 using TacticId = UInt64;
 using DefinitionId = UInt64;
 using ProofStateId = UInt32; # Note, proof state ids are only unique within their own proof
@@ -76,11 +78,11 @@ struct Graph {
 
     label :union { # Inlined for efficiency purposes
       proofState @0 :Void;
-      undefProofState @28 :Void;
+      undefProofState @29 :Void;
 
       # Context
-      contextDef @1 :Text;
-      contextAssum @2 :Text;
+      contextDef @1 :Void;
+      contextAssum @2 :Void;
 
       # Definitions
       definition @3 :Definition;
@@ -94,31 +96,56 @@ struct Graph {
 
       # Constr nodes
       rel @9 :Void;
-      evar @10 :Void;
+      evar @10 :ProofStateId;
       evarSubst @11 :Void;
       cast @12 :Void;
       prod @13 :Void;
       lambda @14 :Void;
       letIn @15 :Void;
       app @16 :Void;
-      appFun @17 :Void;
-      appArg @18 :Void;
-      case @19 :Void;
-      caseBranch @20 :Void;
-      fix @21 :Void;
-      fixFun @22 :Void;
-      coFix @23 :Void;
-      coFixFun @24 :Void;
+      case @17 :Void;
+      caseBranch @18 :Void;
+      fix @19 :Void;
+      fixFun @20 :Void;
+      coFix @21 :Void;
+      coFixFun @22 :Void;
 
       # Primitives
-      int @25 :IntP;
-      float @26 :FloatP;
-      primitive @27 :Text;
+      int @23 :IntP;
+      float @24 :FloatP;
+      primitive @25 :Text;
     }
 
-    childrenIndex @29 :UInt32;
-    childrenCount @30 :UInt16;
-    # The children of a node are encoded as a range withing the `edge`-list of the graph.
+    childrenIndex @26 :UInt32;
+    childrenCount @27 :UInt16;
+    # The children of a node are encoded as a range withing the `edges`-list of the graph.
+
+    identity @28 :NodeIdentity;
+    # The identity of a node uniquely determines it. That is, one can consider any to nodes with the same
+    # identity to be equal. The notion of equal we use is as follows:
+    # 1. Graph perspective: Two nodes have the same identity if and only if they are bisimilar.
+    #    In this notion, bisimilarity does take into consideration the label of the nodes, modulo some
+    #    equivalence class that is not fully specified here. One aspect of the equivalence class is that
+    #    for definition nodes their associated global context (accessed through `Definition.previous`) is
+    #    not taken into account.
+    # 2. Lambda calculus perspective: Two nodes have the same identity if their corresponding lambda terms
+    #    are alpha-equivalent. Note that two definitions with the same body are not considered
+    #    alpha-equivalent.
+    #
+    # The identity of a node is used to perform partial graph-sharing. That is, two nodes with the same
+    # identity are merged when the graph is generated. There are two reasons why two nodes with the same
+    # semantic identity might have a different physical identity:
+    # 1. Nodes are only merged when the first node exists in the same graph as the second node, or exists
+    #    in a dependent graph. Hence, nodes originating from developments that do not depend on each other
+    #    are never merged. Full graph-sharing would require global analysis on a dataset, which any consumer
+    #    can optionally do as a post-processing step.
+    # 2. Two definition nodes with the same name and body have the same identity. But if they occur in
+    #    different global contexts, these nodes are physically different to ensure the integrity of their
+    #    global contexts.
+    #
+    # Beware that the identity is currently a 64 bit field. For datasets that have graphs of size in the
+    # order of billions of nodes there is a non-trivial chance of a collision. (We consider this acceptable
+    # for machine learning purposes.)
   }
 
   nodes @0 :List(Node);
@@ -148,6 +175,9 @@ struct Tactic {
   # may be resolved differently.
 
   ident @0 :TacticId;
+  # A hash representing the identity of a tactic without it's arguments. Due to the complexity of the syntax
+  # trees of Coq's tactics, we do not currently encode the syntax tree. Instead, this hash is a representative
+  # of the syntax tree of the tactic with all of it's arguments removed.
 
   text @1 :Text;
   # The full text of the tactic including the full arguments. This does not currently correspond to
@@ -158,7 +188,7 @@ struct Tactic {
   # A textual representation of the base tactic without arguments. It tries to roughly correspond to `ident`.
   # Note, however, that this is both an under-approximation and an over-approximation. The reason is that tactic
   # printing is not 100% isomorphic to Coq's internal AST of tactics. Sometimes, different tactics get mapped to
-  # the same text. Conversely, the same tactic may be mapped to different texts when identifiers are printed in
+  # the same text. Conversely, the same tactic may be mapped to different texts when identifiers are printed
   # using different partially-qualified names.
 
   intermText @3 :Text;
@@ -187,21 +217,41 @@ struct Argument {
   }
 }
 
+struct Node {
+  depIndex @0 :DepIndex;
+  nodeIndex @1 :NodeIndex;
+}
+
 struct ProofState {
   # A proof state represents a particular point in the tactical proof of a constant.
 
-  root @0 :NodeIndex;
-  # The entry-point of the proof state, all nodes that are 'part of' the proof state are reachable from here.
+  root :group {
+    # The entry-point of the proof state, all nodes that are 'part of' the proof state are reachable from here.
+    depIndex @0 :DepIndex;
+    nodeIndex @1 :NodeIndex;
+  }
 
-  context @1 :List(NodeIndex);
-  # The local context of the proof state. These nodes are either `contextAssum` or `contextDef`. Note that
+
+  context @2 :List(Node);
+  # The local context of the proof state. These nodes label's are either `contextAssum` or `contextDef`. Note that
   # these nodes are also reachable from the root of the proof state.
 
-  text @2 :Text;
-  # A textual representation of the proof state. This field is only populated in the dataset, not while interacting
-  # with Coq.
+  contextNames @3 :List(Text);
+  # The names of the local context nodes of the proof state, as they originally appeared in the proof.
+  # These names should be used for debugging and viewing purposes only, because hypothesis-generating tactics have
+  # been modified to use auto-generated names. Hence, tactics should not be concerned about the names of
+  # the context.
 
-  id @3 :ProofStateId;
+  contextText @4 :List(Text);
+  # A textual representation of the type/definition of context nodes
+
+  conclusionText @5 :Text;
+  # A textual representation of the conclusion of the proof state.
+
+  text @6 :Text;
+  # A textual representation of the proof state.
+
+  id @7 :ProofStateId;
   # A unique identifier of the proof state. Any two proof states in a tactical proof that have an equal id
   # can morally be regarded to be 'the same' proof state.
   # IMPORTANT: Two proof states with the same id may still have different contents. This is because proof states
@@ -213,17 +263,23 @@ struct Outcome {
   # An outcome is the result of running a tactic on a proof state. A tactic may run on multiple proof states.
 
   before @0 :ProofState;
-  after @1 :List(ProofState);
+  # The proof state before the tactic execution.
 
-  term @2 :NodeIndex;
+  after @1 :List(ProofState);
+  # The new proof states that were generated by the tactic.
+
+  term :group {
+    depIndex @2 :DepIndex;
+    nodeIndex @3 :NodeIndex;
+  }
   # The proof term that witnesses the transition from the before state to the after states. It contains a hole
   # (an `evar` node) for each of the after states. It may also refer to elements of the local context of the
   # before state.
 
-  termText @3 :Text;
+  termText @4 :Text;
   # A textual representation of the proof term.
 
-  tacticArguments @4 :List(Argument);
+  tacticArguments @5 :List(Argument);
   # The arguments of the tactic that produced this outcome. Note that these arguments belong to the tactic in
   # `ProofStep.tactic`.
 }
@@ -232,34 +288,37 @@ struct ProofStep {
   # A proof step is the execution of a single tactic on one or more proof states, producing a list of outcomes.
 
   tactic :union {
+    # The tactic that generated the proof step. Note that the arguments of the tactic can be found in the
+    # individual outcomes, because they may be different for each outcome.
+
     unknown @0 :Void;
     # Sometimes a tactic cannot or should not be recorded. In those cases, it is marked as 'unknown'.
     # This currently happens with tactics that are run as a result of the `Proof with tac` construct and it
     # happens for tactics that are known to be unsafe like `change_no_check`, `fix`, `cofix` and more.
+
     known @1 :Tactic;
   }
+
   outcomes @2 :List(Outcome);
+  # A list of transformations of proof states to other proof states, as executed by the tactic of the proof step
 }
 
 struct Definition {
-  hash @0 :DefinitionId;
-  # A hash of the definition. It is currently not guaranteed to be unique, its usage is currently discouraged.
+  # A definition of the CIC, which is either an constant, inductive, constructor, projection or section
+  # variable. Constants and section variables can have tactical proofs associated to them.
 
-  name @1 :Text;
-  # The name of the definition. The name should be unique in a particular super-global context, but is not unique
-  # among different branches of a global context.
+  name @0 :Text;
+  # The fully-qualified name of the definition. The name should be unique in a particular global context,
+  # but is not unique among different branches of the global in a dataset.
 
-  previous @2 :NodeIndex;
+  previous @1 :NodeIndex;
   # The previous definition within the global context of the current file.
   # For the first definition this field is set to `len(graph.nodes)`.
-  # Attempts are made to make the ordering of the global context consistent with the ordering of definitions
-  # in the source document. However, when closing modules and sections this ordering is not guaranteed to be
-  # maintained.
   # The contract on this field is that any definition nodes reachable from the forward closure of the definition
   # must also be reachable through the chain of previous fields. An exception to this rule are mutually
   # recursive definitions. Those nodes are placed into the global context in an arbitrary ordering.
 
-  externalPrevious @3 :List(DepIndex);
+  externalPrevious @2 :List(DepIndex);
   # This field provides information about the external global context.
   # At any point in a source file other files 'X' can be loaded through 'Require X'. When this happens, the
   # definitions of X that are reachable through its 'representative' field become available to all subsequent
@@ -267,45 +326,53 @@ struct Definition {
 
   status :union {
     # A definition is either
-    # (1) an object as originally inputted by the user
+    # (1) an object as originally inputted by the user.
     # (2) a definition that was originally defined in a section and has now had the section
     #     variables discharged into it.
     # (3) a definition that was obtained by performing some sort of module functor substitution.
     # When a definition is not original, we cross-reference to the definition that it was derived from.
-    original @4 :Void;
-    discharged @5 :NodeIndex;
+    original @3 :Void;
+    discharged @4 :NodeIndex;
     substituted :group {
-      depIndex @6 :DepIndex;
-      nodeIndex @7 :NodeIndex;
+      depIndex @5 :DepIndex;
+      nodeIndex @6 :NodeIndex;
     }
   }
 
   union {
-    inductive @8 :Void;
-    constructor @9 :Void;
-    projection @10 :Void;
+    # The kind of the definition.
 
-    manualConstant @11 :Void;
+    inductive @7 :NodeIndex;
+    constructor @8 :NodeIndex;
+    projection @9 :NodeIndex;
+    # These definitions are part of a mutually recursive cluster. They hold a reference to another definition
+    # that acts as the 'representative' of the mutually recursive cluster. The representative is chosen such
+    # that all definitions of the cluster are reachable through its `previous` pointer. Additionally, all
+    # definitions within the cluster have the same representative, and no definitions that are not part of the
+    # cluster are interleaved within the chain of `previous` nodes.
+
+    manualConstant @10 :Void;
     # A constant defined by directly inputting a term
     # In the future, we might augment such constants with tactical
     # refinement proofs that build the term iteratively.
 
-    tacticalConstant @12 :List(ProofStep);
+    tacticalConstant @11 :List(ProofStep);
     # A constant that was either directly or indirectly generated by a tactical proof.
     # Note that for non-original constants, the proof step sequence may not be very accurate.
 
-    manualSectionConstant @13 :Void;
+    manualSectionConstant @12 :Void;
     # A section variable or local section definition.
 
-    tacticalSectionConstant @14 :List(ProofStep);
+    tacticalSectionConstant @13 :List(ProofStep);
     # Local section definitions can also be defined using a tactical proof.
   }
 
-  typeText @15 :Text;
-  termText @16 :Text;
-  # A textual representation of the type and term of the definition.
-  # For inductives, constructors, projections, section variables and axioms the `termText` string
-  # is empty.
+  typeText @14 :Text;
+  # A textual representation of the type of this definition.
+
+  termText @15 :Text;
+  # A textual representation of the body of this definition.
+  # For inductives, constructors, projections, section variables and axioms the string is empty.
 }
 
 
@@ -317,7 +384,7 @@ struct Definition {
 
 struct Dataset {
   # Every file in the dataset contains a single message of type `Dataset`. Every file corresponds to
-  # a Coq source file, and contains a representation of all definitions that have existed during
+  # a Coq source file, and contains a representation of all definitions that have existed at any point
   # throughout the compilation of the source file.
 
   dependencies @0 :List(File);
@@ -337,6 +404,9 @@ struct Dataset {
   # Note that some of these nodes may not be part of the 'super-global' context that is reachable using the
   # `representative` field as an entry point. The reason is that the global context is a forest (list of tree's)
   # and the 'super-global' context is only the main spine of this forest.
+
+  moduleName @4 :Text;
+  # The name of the module defined by this file.
 }
 
 
@@ -382,6 +452,7 @@ struct ExecutionResult {
 interface ProofObject {
   # Represents a particular proof state.
   runTactic @0 (tactic: Tactic, arguments: List(Argument)) -> (result: ExecutionResult);
+  runTextTactic @1 (tactic :Text) -> (result: ExecutionResult);
   # Run a tactic on the proof state. This function can be called repeatedly, and the given tactic will always be
   # executed on the same proof state.
 }
@@ -426,23 +497,24 @@ struct PredictionProtocol {
         tactics @0 :List(AbstractTactic);
         graph @1 :Graph;
         definitions @2 :List(NodeIndex);
+        logAnnotation @3 :Text;
       }
       predict :group {
         # Request a list of tactic predictions given the graph of a proof state.
-        graph @3 :Graph;
+        graph @4 :Graph;
         # The graph may reference definitions that were transmitted during the the `initialize` message.
         # This graph is designated using the `DepIndex` 1.
-        state @4 :ProofState;
+        state @5 :ProofState;
       }
-      synchronize @5 :UInt64;
+      synchronize @6 :UInt64;
       # Coq uses this message to synchronize the state of the protocol when exceptions have occurred.
       # The contract is that the given integer needs to be echo'd back verbatim.
       checkAlignment :group {
         # Request for the server to align the given tactics and definition to it's internal knowledge
         # and report back any tactics and definitions that were not found
-        tactics @6 :List(AbstractTactic);
-        graph @7 :Graph;
-        definitions @8 :List(NodeIndex);
+        tactics @7 :List(AbstractTactic);
+        graph @8 :Graph;
+        definitions @9 :List(NodeIndex);
       }
     }
   }
@@ -529,46 +601,43 @@ enum EdgeClassification {
   letInTerm @21;
 
   # Apps
-  appFunPointer @22;
-  appFunValue @23;
-  appArgPointer @24;
-  appArgValue @25;
-  appArgOrder @26;
+  appFun @22;
+  appArg @23;
 
   # Cases
-  caseTerm @27;
-  caseReturn @28;
-  caseBranchPointer @29;
-  caseInd @30;
+  caseTerm @24;
+  caseReturn @25;
+  caseBranchPointer @26;
+  caseInd @27;
 
   # CaseBranches
-  cBConstruct @31;
-  cBTerm @32;
+  cBConstruct @28;
+  cBTerm @29;
 
   # Fixes
-  fixMutual @33;
-  fixReturn @34;
+  fixMutual @30;
+  fixReturn @31;
 
   # FixFuns
-  fixFunType @35;
-  fixFunTerm @36;
+  fixFunType @32;
+  fixFunTerm @33;
 
   # CoFixes
-  coFixMutual @37;
-  coFixReturn @38;
+  coFixMutual @34;
+  coFixReturn @35;
 
   # CoFixFuns
-  coFixFunType @39;
-  coFixFunTerm @40;
+  coFixFunType @36;
+  coFixFunTerm @37;
 
   # Back pointers
-  relPointer @41;
+  relPointer @38;
 
   # Evars
-  evarSubstPointer @42;
-  evarSubstTerm @43;
-  evarSubstTarget @44;
-  evarSubject @45;
+  evarSubstPointer @39;
+  evarSubstTerm @40;
+  evarSubstTarget @41;
+  evarSubject @42;
 }
 
 # Struct is needed to work around
@@ -583,11 +652,11 @@ const conflatableEdges :List(ConflatableEdges) =
 ];
 const importantEdges :List(EdgeClassification) =
 [ contextElem, contextSubject, contextDefType, contextDefTerm, constType, constDef, constOpaqueDef, indType, indConstruct, constructTerm
-, prodType, prodTerm, lambdaType, lambdaTerm, letInDef, letInType, letInTerm, appFunPointer, appArgPointer, appArgOrder, relPointer ];
+, prodType, prodTerm, lambdaType, lambdaTerm, letInDef, letInType, letInTerm, appFun, appArg, relPointer ];
 const lessImportantEdges :List(EdgeClassification) =
 [ caseTerm, caseReturn, caseBranchPointer, caseInd, cBConstruct, cBTerm, fixMutual, fixReturn, fixFunType, fixFunTerm ];
 const leastImportantEdges :List(EdgeClassification) =
-[ constUndef, constPrimitive, projTerm, castTerm, castType, appFunValue, appArgValue, coFixReturn, coFixFunType, coFixFunTerm
+[ constUndef, constPrimitive, projTerm, castTerm, castType, coFixReturn, coFixFunType, coFixFunTerm
 , coFixMutual, evarSubstPointer, evarSubstTerm, evarSubstTarget ];
 
 # WARNING: DO NOT USE
@@ -603,9 +672,7 @@ const groupedEdges :List(ConflatableEdges) =
 , ( conflatable = [prodType, prodTerm] )
 , ( conflatable = [lambdaType, lambdaTerm] )
 , ( conflatable = [letInDef, letInTerm, letInType] )
-, ( conflatable = [appFunPointer, appArgPointer, appArgOrder] )
-, ( conflatable = [appFunValue] )
-, ( conflatable = [appArgValue] )
+, ( conflatable = [appFun, appArg] )
 , ( conflatable = [caseTerm, caseReturn, caseBranchPointer, caseInd] )
 , ( conflatable = [cBConstruct, cBTerm] )
 , ( conflatable = [fixMutual, fixReturn] )

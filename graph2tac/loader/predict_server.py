@@ -4,6 +4,9 @@ python prediction server to interact with coq-tactician-reinforce
 from dataclasses import dataclass
 from typing import Generator, Iterator, NewType
 
+# uncomment for debugging
+# import pdb
+# import traceback
 import sys
 import time
 import os
@@ -30,7 +33,7 @@ from graph2tac.loader.data_server import DataServer, ProofstateContext, Proofsta
 Tactic = NewType('Tactic', object)
 
 capnp.remove_import_hook()
-graph_api_filename = pkg_resources.resource_filename('graph2tac.loader','clib/graph_api_v11.capnp')
+graph_api_filename = pkg_resources.resource_filename('graph2tac.loader','clib/graph_api_v13.capnp')
 graph_api_capnp = capnp.load(graph_api_filename)
 
 
@@ -491,8 +494,8 @@ def main_loop(reader, sock, predict: Predict, debug_dir, process_uuid, session_i
             for def_cluster in decorated_iterator:
                 cluster_names = np.array([def_idx_to_name[def_idx] for def_idx in def_cluster])
 
-                res = get_subgraph_online(c_data_online, def_idx_to_node[def_cluster], bfs_option, max_subgraph_size, False)
-                eval_node_labels, edges, edge_labels, edges_offset, global_visited, _, _, _, _ = res
+                res = get_subgraph_online(c_data_online, def_idx_to_node[def_cluster], bfs_option, max_subgraph_size)
+                eval_node_labels, edges, edge_labels, edges_offset, global_visited, _, _ = res
 
                 train_node_labels = map_eval_label_to_train_label[eval_node_labels]
 
@@ -561,29 +564,40 @@ def main_loop(reader, sock, predict: Predict, debug_dir, process_uuid, session_i
             log_cnts.predict_data_online_size += len(msg_data)
             logger.verbose(f"num_messages_stored {num_messages_stored}")
             data_msg_idx = num_messages_stored - 1
-            roots = np.array( [(data_msg_idx, msg.predict.state.root)], dtype=np.uint32)
+            assert msg.predict.state.root.depIndex <= 1, "root outside of current message or init message is not supported"
+            root_file_idx = local_to_global[0][msg.predict.state.root.depIndex]
+            roots = np.array( [(root_file_idx, msg.predict.state.root.nodeIndex)], dtype=np.uint32)
 
             res = get_subgraph_online(c_data_online,
                                       roots,
                                       bfs_option,
-                                      max_subgraph_size,
-                                      False)    # debugging information about subgraph allocation
-            eval_node_labels, edges, edge_labels, edges_offset, global_visited, _, _, _, _ = res
+                                      max_subgraph_size)
+            eval_node_labels, edges, edge_labels, edges_offset, global_visited, _, _ = res
 
             train_node_labels = map_eval_label_to_train_label[eval_node_labels]
-            # edges_grouped_by_label = np.split(edges, edges_offset)
-            this_encoded_root, this_encoded_context, this_context = load_msg_online(msg_data, global_visited, data_msg_idx)
+
+            this_encoded_root, this_encoded_context, this_context = load_msg_online(c_data_online, global_visited, data_msg_idx)
+
+            # if you want to debug interactively replace the above line with below block
+            # try:
+            #     this_encoded_root, this_encoded_context, this_context = load_msg_online(msg_data, global_visited, data_msg_idx)
+            # except:
+            #     t, v, tb = sys.exc_info()
+            #     traceback.print_exc()
+            #     pdb.post_mortem(tb)
 
             logger.debug(f"this encoded root {this_encoded_root}")
             logger.debug(f"this encoded context {this_encoded_context}")
             logger.debug(f"this context {this_context}")
-
             logger.debug(f"state from python: {msg.predict.state}")
-            logger.debug("root children from python:")
-            child_start = msg.predict.graph.nodes[msg.predict.state.root].childrenIndex
-            child_stop  = child_start + msg.predict.graph.nodes[msg.predict.state.root].childrenCount
-            for edge_idx in range(child_start, child_stop):
-                logger.debug(f"root 0 child {msg.predict.graph.edges[edge_idx]}")
+
+            if msg.predict.state.root.depIndex == 0:
+                logger.debug("root children from python:")
+                child_start = msg.predict.graph.nodes[msg.predict.state.root.nodeIndex].childrenIndex
+                child_stop  = child_start + msg.predict.graph.nodes[msg.predict.state.root.nodeIndex].childrenCount
+                for edge_idx in range(child_start, child_stop):
+                    logger.debug(f"root 0 child {msg.predict.graph.edges[edge_idx]}")
+            
 
             online_graph = LoaderGraph(
                 nodes=train_node_labels,
@@ -595,7 +609,7 @@ def main_loop(reader, sock, predict: Predict, debug_dir, process_uuid, session_i
             # FIDEL: is this information present? For now, just fill it in with dummy data
             dummy_proofstate_info = ProofstateMetadata(b'dummy_proofstate_name', -1, True)
 
-            logger.verbose(f"online_state: {online_graph}")
+            logger.verbose(f"online_state: {online_graph.nodes, online_graph.edges, online_graph.edge_labels, this_encoded_context}")
 
             t0 = time.time()
 

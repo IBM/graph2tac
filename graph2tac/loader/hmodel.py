@@ -137,7 +137,6 @@ class HPredict(Predict):
            inverse_local_context[node_idx] = i
 
         predictions = self._data.get(state_hash, [])
-        # print("allowed_model_tactics", allowed_model_tactics)
         if len(predictions) > 0:
             pass
         else:

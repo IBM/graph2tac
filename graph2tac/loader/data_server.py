@@ -299,9 +299,7 @@ def process_def_previouses(buf_list, message_type, def_idx_to_global_context,
         previous_nodes.append((p_file_idx, representatives[p_file_idx]))
 
     def_global_context = set()
-
     for previous_global_node in previous_nodes:
-
         previous_idx = global_node_to_def_idx[previous_global_node]
         
         process_def_previouses(buf_list, message_type, def_idx_to_global_context,
@@ -375,8 +373,8 @@ def get_tactic_hash_num_args_collision(tactical_data, fnames):
         if len(tactic_hash_arg_collisions) != 1:
             collision_examples = tactic_group_by_hash[tactic_hash_arg_collisions].tolist()
             for collision_example in collision_examples:
-                tactic_hash, num_args, file_idx, def_idx, proof_step_idx, outcome_idx = collision_example
-                data_error_report.append(f"tactic_hash {tactic_hash}, num_args {num_args}, file {fnames[file_idx]}, def {def_idx}, proof_step {proof_step_idx}, outcome {outcome_idx}")
+                tactic_hash, num_args, file_idx, def_idx, proof_step_idx, outcome_idx, file_idx_root, node_idx_root = collision_example
+                data_error_report.append(f"tactic_hash {tactic_hash}, num_args {num_args}, file {fnames[file_idx]}, def {def_idx}, proof_step {proof_step_idx}, outcome {outcome_idx}, file_idx_root {file_idx_root}, node_idx_root {node_idx_root}")
     return data_error_report
 
 
@@ -420,7 +418,7 @@ class Data2:
 
 
         global_nodes_in_spine = get_global_nodes_in_spine(buf_list, "dataset")
-        print("LOADING | definitions in spine: {len(global_nodes_in_spine)}")
+        print(f"LOADING | definitions in spine: {len(global_nodes_in_spine)}")
 
         self.__def_index_table = build_def_index(self.__global_def_table, global_nodes_in_spine, buf_list, "dataset", self.__local_to_global_files)
 
@@ -439,13 +437,15 @@ class Data2:
              def_node_indexes,
              proof_step_indexes,
              outcome_indexes,
-             local_roots) = get_buf_tactics(buf_object, def_table[0], fname)
-
+             local_dep_roots,
+             node_idx_roots
+             ) = get_buf_tactics(buf_object, def_table[0], fname)
+            file_idx_roots = self.__local_to_global_files[file_idx][local_dep_roots]
             file_indexes = np.full(def_node_indexes.shape, file_idx, dtype=np.uint64)
-            self.__tactical_data.append(np.transpose(np.stack([tactic_hashes, number_arguments, file_indexes, def_node_indexes, proof_step_indexes, outcome_indexes, local_roots])))
+            self.__tactical_data.append(np.transpose(np.stack([tactic_hashes, number_arguments, file_indexes, def_node_indexes, proof_step_indexes, outcome_indexes, file_idx_roots, node_idx_roots])))
 
         if len(self.__tactical_data) == 0:
-            self.__tactical_data = np.zeros(shape=(0,7), dtype=np.uint64)
+            self.__tactical_data = np.zeros(shape=(0,8), dtype=np.uint64)
             self.__max_num_args = None
         else:
             self.__tactical_data = np.concatenate(self.__tactical_data)
@@ -565,14 +565,14 @@ class Data2:
         skip_text: bool=False
     ) -> DataPoint:
         tactic_point = self.__tactical_data[data_point_idx]
-        tactic_hash, num_args, file_idx, def_node_idx, proof_step_idx, outcome_idx, state_root_node, def_hash = tactic_point
+        tactic_hash, num_args, file_idx, def_node_idx, proof_step_idx, outcome_idx, file_idx_root, node_idx_root, def_hash = tactic_point
         res = get_subgraph_online(
             self.__c_data_online,
-            np.array([(file_idx.item(), state_root_node.item())], dtype=np.uint32),
-            self.__bfs_option, self.__max_subgraph_size, False)
-        nodes, edges, edge_labels, edges_offset, global_visited, _, _, _, _ = res
+            np.array([(file_idx_root.item(), node_idx_root.item())], dtype=np.uint32),
+            self.__bfs_option, self.__max_subgraph_size)
+        nodes, edges, edge_labels, edges_offset, global_visited, _, _ = res
 
-        context, root, tactic_index, args = get_proof_step_online(self.__c_data_online, tactic_point[2:6], global_visited)
+        context, root, tactic_index, args = get_proof_step_online(self.__c_data_online, tactic_point[2:7], global_visited)
 
 
         def_name = def_name_of_tactic_point(self.__def_index_table, tactic_point)
@@ -669,7 +669,7 @@ class Data2:
         """
         return dynamic global context as a numpy array of indices into GraphConstants.global_context
         """
-        _, _, file_idx, def_node_idx, _, _, _, _  = self.__tactical_data[data_point_idx]
+        _, _, file_idx, def_node_idx, _, _, _, _, _  = self.__tactical_data[data_point_idx]
         def_idx = self.__def_index_table.global_node_to_idx[(file_idx, def_node_idx)]
         # def_name = self.__def_index_table.idx_to_name[def_idx]
         def_global_context = self.__def_index_table.idx_to_global_context[def_idx]
@@ -692,9 +692,9 @@ class Data2:
 
         def_cluster = self.__def_scc_clusters[cluster_idx]
 
-        res = get_subgraph_online(self.__c_data_online, self.__def_idx_to_node[def_cluster], self.__bfs_option, max_arg_size, False)
+        res = get_subgraph_online(self.__c_data_online, self.__def_idx_to_node[def_cluster], self.__bfs_option, max_arg_size)
 
-        nodes, edges, edge_labels, edges_offset, _ , _, _, _, _ = res
+        nodes, edges, edge_labels, edges_offset, _ , _, _ = res
 
         base_node_label_names, _ = get_graph_constants_online()
         label_to_names = np.array(base_node_label_names +  self.__def_index_table.idx_to_name)

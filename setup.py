@@ -14,7 +14,7 @@ import numpy
 # please indent the lists with one element per line
 # for convenience of version control tools
 
-CAPNP_V=11
+CAPNP_V=13
 
 
 CLIB_DIR = Path("./graph2tac/loader/clib")
