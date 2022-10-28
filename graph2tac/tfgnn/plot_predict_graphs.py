@@ -4,8 +4,7 @@ import argparse
 import pickle
 from pathlib import Path
 
-if __name__ == "__main__":
-
+def main():
     parser = argparse.ArgumentParser(prog='plot_predict_graphs.py',
                                      description='Makes supervised evaluation of the predict class, and plot graphs',
                                      formatter_class=argparse.ArgumentDefaultsHelpFormatter)
@@ -193,3 +192,6 @@ if __name__ == "__main__":
     ax.set_ylabel(ylabel, fontsize=16)
     ax.legend(fontsize=12)
     plt.savefig(args.output_fname)
+
+if __name__ == "__main__":
+    main()
