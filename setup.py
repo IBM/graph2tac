@@ -66,7 +66,7 @@ my_c_module = setuptools.Extension('graph2tac.loader.clib.loader',
                                        "-lkj",
                                        "-lcapnp",
                                        "-lcapnp-rpc",
-                                       "-lstdc++fs",
+#                                       "-lstdc++fs",
 #                                      "-ltbb",         # we may need threads library but ok without it in current code
                                        "-L/opt/local/lib",
                                        ]
