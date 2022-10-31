@@ -13,6 +13,18 @@ capnp.remove_import_hook()
 graph_api_capnp = pytact.common.graph_api_capnp()
 graph_api_capnp = capnp.load(graph_api_capnp)
 
+class IterableLen:
+    def __init__(self, iterable, length):
+        self.iterable = iterable
+        self.length = length
+    def __iter__(self):
+        return iter(self.iterable)
+    def __next__(self):
+        return next(self.iterable)
+    def __len__(self):
+        return self.length
+
+
 def custom_dataclass_repr(obj) -> str:
     """String repr for a dataclass, but removing the array data."""
     kws = {k: f"array(shape={v.shape}, dytype={v.dtype})" if isinstance(v, np.ndarray) else repr(v) for k,v in obj.__dict__.items()}
@@ -298,6 +310,8 @@ class DataServer:
     def _register_tactic(self, tactic_usage):
         if tactic_usage.tactic.ident in self._tactic_to_i:
             return
+        if len(tactic_usage.outcomes) == 0:
+            return
         index = len(self._tactic_to_i)
         self._tactic_to_i[tactic_usage.tactic.ident] = index
         self._tactic_i_to_numargs.append(len(tactic_usage.outcomes[0].tactic_arguments))
@@ -347,7 +361,7 @@ class DataServer:
             edges = np.zeros([0,3], dtype = int)
             edge_offsets = np.zeros(self._edge_label_num, dtype = int)
         graph = LoaderGraph(
-            nodes = node_labels,
+            nodes = np.array(node_labels, dtype=np.uint32),
             edges = edges[:,:2],
             edge_labels = edges[:,2],
             edge_offsets = edge_offsets,
@@ -412,7 +426,7 @@ class DataServer:
             tactic_id=tactic_i,
             args=arguments,
         )
-        return proofstate, action
+        return proofstate, action, i
 
     def _datapoint_text(self, i):
         proof_step, _, _ = self._proof_steps[i]
@@ -433,16 +447,16 @@ class DataServer:
             random.shuffle(train_ids)
 
         if as_text:
-            return map(self._datapoint_text, train_ids)
+            return IterableLen(map(self._datapoint_text, train_ids), len(train_ids))
         else:
-            return map(self._datapoint_graph, train_ids)
+            return IterableLen(map(self._datapoint_graph, train_ids), len(train_ids))
 
     def data_valid(self, as_text: bool = False):
         valid_ids = self._select_data_points(1)
         if as_text:
-            return map(self._datapoint_text, valid_ids)
+            return IterableLen(map(self._datapoint_text, valid_ids), len(valid_ids))
         else:
-            return map(self._datapoint_graph, valid_ids)
+            return IterableLen(map(self._datapoint_graph, valid_ids), len(valid_ids))
 
     def def_cluster_subgraph(self, i):
         cluster = self._def_clusters[i]
@@ -456,4 +470,4 @@ class DataServer:
         )
 
     def def_cluster_subgraphs(self):
-        return map(self.get_cluster_subgraph, range(len(self._def_clusters)))
+        return IterableLen(map(self.get_cluster_subgraph, range(len(self._def_clusters))), len(self._def_clusters))
