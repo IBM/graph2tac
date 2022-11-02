@@ -470,4 +470,4 @@ class DataServer:
         )
 
     def def_cluster_subgraphs(self):
-        return IterableLen(map(self.get_cluster_subgraph, range(len(self._def_clusters))), len(self._def_clusters))
+        return IterableLen(map(self.def_cluster_subgraph, range(len(self._def_clusters))), len(self._def_clusters))
