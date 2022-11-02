@@ -109,13 +109,11 @@ class DataServer:
             self._register_definition(d)
             proof = d.proof
             if proof is None: continue
-            index = 0
-            for tactic_usage in proof:
+            for index,tactic_usage in enumerate(proof):
                 if tactic_usage.tactic is None: continue
                 self._register_tactic(tactic_usage)
                 for outcome in tactic_usage.outcomes:
                     self._proof_steps.append((outcome,d,index))
-                    index += 1
 
         # load clusters
         self._def_clusters.extend(file_data.clustered_definitions())
@@ -184,14 +182,14 @@ class DataServer:
             edges_by_labels = [[] for _ in range(self._edge_label_num)]
             for edge in edges:
                 edges_by_labels[edge[2]].append(edge)
-            edge_offsets = np.cumsum([0]+[
+            edge_offsets = np.cumsum([
                 len(x) for x in edges_by_labels
-            ])[:-1]
+            ])[:-1].astype(np.uint32)
             edges = list(itertools.chain.from_iterable(edges_by_labels))
-            edges = np.array(edges, dtype = int)
+            edges = np.array(edges, dtype = np.uint32)
         else:
-            edges = np.zeros([0,3], dtype = int)
-            edge_offsets = np.zeros(self._edge_label_num, dtype = int)
+            edges = np.zeros([0,3], dtype = np.uint32)
+            edge_offsets = np.zeros(self._edge_label_num, dtype = np.uint32)
         graph = LoaderGraph(
             nodes = np.array(node_labels, dtype=np.uint32),
             edges = edges[:,:2],
