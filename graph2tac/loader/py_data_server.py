@@ -92,11 +92,14 @@ class DataServer:
                 conflation[x] = i
         edge_labels = [None]*total_labels
         edge_label_num = 0
+        for group in conflatable:
+            for x in group:
+                edge_labels[x] = edge_label_num
+            edge_label_num += 1
         for i in range(total_labels):
             if edge_labels[i] is not None: continue
             if conflation[i] is not None:
-                for x in conflatable[conflation[i]]:
-                    edge_labels[x] = edge_label_num
+                continue
             else:
                 edge_labels[i] = edge_label_num
             edge_label_num += 1
