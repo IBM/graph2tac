@@ -162,16 +162,16 @@ class DataServer:
         while q and len(nodes) < max_graph_size:
             if bfs_option: xi,x = q.popleft()
             else: xi,x = q.pop()
-            if x.label.which.raw != stop_at:
-                for e,y in x.children:
-                    yi = node_to_i.get(y, len(nodes))
-                    if yi == len(nodes):
-                        node_to_i[y] = yi
-                        nodes.append(y)
+            for e,y in x.children:
+                yi = node_to_i.get(y, len(nodes))
+                if yi == len(nodes):
+                    node_to_i[y] = yi
+                    nodes.append(y)
+                    if y.label.which.raw != stop_at:
                         q.append((yi,y))
-                    el = self._edge_labels[e.raw]
-                    if el in self._edges_to_ignore: continue
-                    edges.append((xi, yi, el))
+                el = self._edge_labels[e.raw]
+                if el in self._edges_to_ignore: continue
+                edges.append((xi, yi, el))
 
         node_labels = [
             self._get_node_label_index(node)
@@ -299,7 +299,10 @@ class DataServer:
         return LoaderDefinition(
             graph = graph,
             num_definitions = len(roots),
-            definition_names = np.array([n.definition.name for n in roots])
+            definition_names = np.array([
+                n.definition.name
+                for n in roots
+            ], dtype = 'S61')
         )
 
     def def_cluster_subgraphs(self):
