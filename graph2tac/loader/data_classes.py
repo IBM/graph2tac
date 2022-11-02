@@ -6,7 +6,7 @@ from pathlib import Path
 
 def custom_dataclass_repr(obj) -> str:
     """String repr for a dataclass, but removing the array data."""
-    kws = {k: f"array(shape={v.shape}, dytype={v.dtype})" if isinstance(v, np.ndarray) else repr(v) for k,v in obj.__dict__.items()}
+    kws = {k: f"array(shape={v.shape}, dtype={v.dtype})" if isinstance(v, np.ndarray) else repr(v) for k,v in obj.__dict__.items()}
     return obj.__class__.__qualname__ + "(" + ", ".join(k + "=" + v for k,v in kws.items()) + ")"
 
 
