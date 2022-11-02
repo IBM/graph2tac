@@ -269,7 +269,10 @@ class DataServer:
     def _select_data_points(self, label):
         return [
             i for i,(_,d,_) in enumerate(self._proof_steps)
-            if get_split_label(d.node.identity, self.split, self.split_random_seed) == label
+            if get_split_label(
+                    np.array(d.node.identity, dtype = np.uint64).item(),
+                    self.split, self.split_random_seed
+            ) == label
         ]
 
     def data_train(self, shuffled: bool = False,  as_text: bool = False):

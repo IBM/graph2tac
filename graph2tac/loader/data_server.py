@@ -162,7 +162,7 @@ def def_name_of_tactic_point(def_index_table, tactic_point):
 
 
 def def_hash_split(tactical_point, prob: List[float], seed: int) -> int:
-    return get_split_label(tactical_point[7].item(), prob, seed)
+    return get_split_label(tactical_point[8].item(), prob, seed)
 
 
 def get_tactic_hash_num_args_collision(tactical_data, fnames):
