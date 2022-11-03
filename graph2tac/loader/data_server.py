@@ -372,7 +372,7 @@ class Data2:
             self.__bfs_option, self.__max_subgraph_size)
         nodes, edges, edge_labels, edges_offset, global_visited, _, _ = res
 
-        context, root, tactic_index, args = get_proof_step_online(self.__c_data_online, tactic_point[2:7], global_visited)
+        context, root, tactic_index, args = get_proof_step_online(self.__c_data_online, tactic_point[2:6], global_visited)
 
 
         def_name = def_name_of_tactic_point(self.__def_index_table, tactic_point)
