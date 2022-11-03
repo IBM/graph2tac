@@ -176,6 +176,8 @@ class DataServer:
             if bfs_option: xi,x = q.popleft()
             else: xi,x = q.pop()
             for e,y in x.children:
+                el = e.raw
+                if el in self._edges_to_ignore: continue
                 yi = node_to_i.get(y, len(nodes))
                 if yi == len(nodes):
                     if len(nodes) == max_graph_size: continue
@@ -183,9 +185,7 @@ class DataServer:
                     nodes.append(y)
                     if y.label.which.raw != stop_at:
                         q.append((yi,y))
-                el = self._edge_labels[e.raw]
-                if el in self._edges_to_ignore: continue
-                edges.append((xi, yi, el))
+                edges.append((xi, yi, self._edge_labels[el]))
 
         node_labels = [
             self._get_node_label_index(node)
