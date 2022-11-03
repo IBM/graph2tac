@@ -35,6 +35,7 @@ class DataServer:
                  split_random_seed = 0,
                  restrict_to_spine: bool = False,
                  stop_at_definitions: bool = True,
+                 fname_order_key = None,
     ):
         self.data_dir = data_dir
         self.max_subgraph_size = max_subgraph_size
@@ -48,8 +49,16 @@ class DataServer:
 
         self._reader = pytact.data_reader.data_reader(Path(data_dir))
         self._data = self._reader.__enter__()
-        for name, file_data in self._data.items():
-            self._load_file(file_data)
+
+        if fname_order_key is None:
+            for name, file_data in self._data.items():
+                self._load_file(file_data)
+        else:
+            fnames = list(self._data.keys())
+            fnames.sort(key = fname_order_key)
+            for name in fnames:
+                file_data = self._data[name]
+                self._load_file(file_data)
 
     def graph_constants(self):
         total_node_label_num = len(self._node_i_to_name)
