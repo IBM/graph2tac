@@ -7,6 +7,7 @@ from numpy.typing import NDArray
 import numpy as np
 from collections import deque
 import itertools
+import random
 from graph2tac.hash import get_split_label
 
 from graph2tac.loader.data_classes import *

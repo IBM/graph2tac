@@ -56,7 +56,7 @@ def args_decode(args,
 
 
 class Train:
-    def __init__(self, data_dir: Path, max_subgraph_size, with_context, loader):
+    def __init__(self, data_dir: Path, max_subgraph_size, with_context, loader, dry, shuffled):
         if loader == 'clib':
             from graph2tac.loader.data_server import DataServer
         elif loader == 'python':
@@ -72,10 +72,18 @@ class Train:
         self._tactic_index_to_hash = self._data_server.graph_constants().tactic_index_to_hash
         self._max_subgraph_size = max_subgraph_size
         self._with_context = with_context
+        self._dry = dry
+        self._shuffled = shuffled
 
     def train(self):
+        node_counter = 0
+        edge_counter = 0
         none_counter = 0
-        for state, action, idx in tqdm.tqdm(self._data_server.data_train()):
+        for state, action, idx in tqdm.tqdm(self._data_server.data_train(shuffled=self._shuffled)):
+            node_counter += len(state.graph.nodes)
+            edge_counter += len(state.graph.edges)
+            if self._dry:
+                continue
             state_hash = my_hash_of(state, self._with_context)
 
             train_action = self._data.get(state_hash, [])
@@ -210,12 +218,20 @@ def main():
                         default='clib',
                         help='loader to use: clib or python')
 
+    parser.add_argument('--dry',
+                        action='store_true',
+                        help='dry run')
+
+    parser.add_argument('--shuffled',
+                        action='store_true',
+                        help='shuffle train')
+
     args = parser.parse_args()
     if not args.loader in ['clib', 'python']:
         raise ValueError(f"provided loader argument {args.loader} is not in the supported list: clib, python")
 
     trainer = Train(Path(args.data_dir).expanduser().absolute(),
-                    args.max_subgraph_size, args.with_context, args.loader)
+                    args.max_subgraph_size, args.with_context, args.loader, args.dry, args.shuffled)
 
     trainer.train()
 

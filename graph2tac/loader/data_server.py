@@ -14,6 +14,7 @@ import functools
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 
 from dataclasses import dataclass
 from graph2tac.hash import get_split_label
@@ -151,21 +152,22 @@ def build_def_index(global_def_table,
 
 
 def def_hash_of_tactic_point(def_index_table, tactic_point):
-    def_idx = def_index_table.global_node_to_idx[(tactic_point[2].item(), tactic_point[3].item())]
+    def_idx = def_index_table.global_node_to_idx[(tactic_point.file_idx.item(), tactic_point.def_node_idx.item())]
 
     return def_index_table.idx_to_hash[def_idx]
 
 
 def def_name_of_tactic_point(def_index_table, tactic_point):
-    def_idx = def_index_table.global_node_to_idx[(tactic_point[2].item(), tactic_point[3].item())]
+    def_idx = def_index_table.global_node_to_idx[(tactic_point.file_idx.item(), tactic_point.def_node_idx.item())]
     return def_index_table.idx_to_name[def_idx]
 
 
 def def_hash_split(tactical_point, prob: List[float], seed: int) -> int:
-    return get_split_label(tactical_point[8].item(), prob, seed)
+    return get_split_label(tactical_point.def_node_hash.item(), prob, seed)
 
 
 def get_tactic_hash_num_args_collision(tactical_data, fnames):
+    # TODO: refactor wth pandas
     tactical_data = tactical_data[np.lexsort((tactical_data[:,1], tactical_data[:,0]))]
     data_error_report = []
     for tactic_group_by_hash in np.split(tactical_data, np.unique(tactical_data[:, 0], axis=0, return_index=True)[1][1:]):
@@ -255,28 +257,43 @@ class Data2:
         if data_error_report:
             raise Exception(f"the data contains tactic_hash num_args collisions, for example \n" + "\n".join(data_error_report))
 
-        tactic_hashes = np.unique(self.__tactical_data[:,0])
-        tactic_indexes = np.arange(len(tactic_hashes), dtype=np.uint32)
-        def_hashes = np.array([def_hash_of_tactic_point(self.__def_index_table, tactical_point) for tactical_point in self.__tactical_data])
-        def_hashes = np.reshape(def_hashes, (len(self.__tactical_data),1))
-        self.__tactical_data = np.concatenate([self.__tactical_data, def_hashes], axis=1)
+        self.__tactical_data = pd.DataFrame(self.__tactical_data)
+        self.__tactical_data.rename(inplace=True, columns=
+                                    {0:'tactic_hash',
+                                     1:'num_arg',
+                                     2:'file_idx',
+                                     3:'def_node_idx',
+                                     4:'proof_step_idx',
+                                     5:'outcome_idx',
+                                     6:'root_file_idx',
+                                     7:'root_node_idx'})
 
+        self.__tactical_data['def_node_hash'] = self.__tactical_data.apply(lambda x: def_hash_of_tactic_point(self.__def_index_table, x), axis=1)
         t1 = time.time()
         print(f"LOADING | Indexed {len(self.__tactical_data)} tactical action-outcomes in {t1-t0:.6f} seconds.")
-
 
         print(f"LOADING | mmaping all capnp files and building data loader hash tables...", end='')
         t0 = time.time()
 
 
+        td = self.__tactical_data
+        unique_tact_index = td.tactic_hash.drop_duplicates().index
+        self.__tactic_index_to_hash = np.array(td.tactic_hash.loc[unique_tact_index])
+        self.__tactic_index_to_numargs = np.array(td.num_arg.loc[unique_tact_index])
+
+        tactic_indexes = np.arange(len(self.__tactic_index_to_hash), dtype=np.uint32)
         self.__c_data_online = build_data_online_from_buf(
             self.__def_idx_to_node,
-            tactic_hashes,
+            self.__tactic_index_to_hash,
             tactic_indexes)
-        print("done.")
+
+
 
         fname_list = list(map(os.fsencode, self.__fnames))
         n_files_in_data = data_online_extend(self.__c_data_online, buf_list, fname_list,  self.__local_to_global_files, "dataset")
+
+
+        self.__tactic_index_to_string = [self.get_proof_step_text(i)[1] for i in unique_tact_index]
 
         print(f"LOADING | data_online maps  {n_files_in_data}")
 
@@ -307,20 +324,6 @@ class Data2:
         return self.__tactical_data
 
     def graph_constants(self):
-        # if we want to switch to chronological order of tactics, let's use this:
-        # tactics_args = self.__tactical_data[np.sort(np.unique(self.__tactical_data[:,0], return_index=True)[1]),:2]
-
-        tdataidx = np.unique(self.__tactical_data[:,0], return_index=True)[1].astype(np.uint64)
-        thash_narg = self.__tactical_data[tdataidx, :2]
-        uniquetac_idx = np.arange(thash_narg.shape[0], dtype=thash_narg.dtype).reshape((thash_narg.shape[0], 1))
-        tdataidx_reshaped = tdataidx.reshape(thash_narg.shape[0],1)
-        idx_thash_narg_tdataidx = np.concatenate([uniquetac_idx, thash_narg, tdataidx_reshaped], axis=1)
-
-        tactic_num = len(tdataidx)
-        tactic_index_to_hash = idx_thash_narg_tdataidx[:,1]
-        tactic_index_to_numargs = idx_thash_narg_tdataidx[:,2]
-
-        tactic_index_to_string = list(self.get_proof_step_text(tdataidx)[1] for tdataidx in idx_thash_narg_tdataidx[:,3])
 
         base_node_label_names, edge_label_num = get_graph_constants_online()
         base_node_label_num = len(base_node_label_names)
@@ -334,14 +337,15 @@ class Data2:
             node_label_num = np.max(global_context).item() + 1
         else:
             node_label_num = 0
-        return GraphConstants(tactic_num=tactic_num,
+
+        return GraphConstants(tactic_num=len(self.__tactic_index_to_hash),
                               edge_label_num=edge_label_num,
                               base_node_label_num=base_node_label_num,
                               node_label_num=node_label_num,
                               cluster_subgraphs_num=len(self.__def_scc_clusters),
-                              tactic_index_to_numargs=tactic_index_to_numargs,
-                              tactic_index_to_string=tactic_index_to_string,
-                              tactic_index_to_hash=tactic_index_to_hash,
+                              tactic_index_to_numargs=self.__tactic_index_to_numargs,
+                              tactic_index_to_string=self.__tactic_index_to_string,
+                              tactic_index_to_hash=self.__tactic_index_to_hash,
                               global_context=global_context,
                               label_to_names=label_to_names,
                               label_in_spine=label_in_spine,
@@ -351,32 +355,43 @@ class Data2:
         return self.__def_index_table
     
     def def_name_of_tactic_point(self, data_point_idx):
-        return def_name_of_tactic_point(self.__def_index_table, self.__tactical_data[data_point_idx])
+        return def_name_of_tactic_point(self.__def_index_table, self.__tactical_data.iloc[data_point_idx])
 
     # TODO(jrute): This should return a dataclass if it is a public API
     def get_proof_step_text(self, data_point_idx) -> tuple[bytes, bytes, bytes, bytes]:
-        tactic_point = self.__tactical_data[data_point_idx]
-        state_text, action_base_text, action_interm_text, action_text = get_proof_step_online_text(self.__c_data_online, tactic_point[2:6])
+        tactic_point = self.__tactical_data.iloc[data_point_idx]
+        state_text, action_base_text, action_interm_text, action_text = get_proof_step_online_text(
+            self.__c_data_online,
+            np.array([tactic_point.file_idx,
+                     tactic_point.def_node_idx,
+                     tactic_point.proof_step_idx,
+                      tactic_point.outcome_idx], dtype=np.uint64))
         return state_text, action_base_text, action_interm_text, action_text
+
+    def def_name_of_datapoint_idx(self, data_point_idx):
+        td = self.__tactical_data
+        def_idx = self.__def_index_table.global_node_to_idx[(td.file_idx.iat[data_point_idx],
+                                                      td.def_node_idx.iat[data_point_idx])]
+        return self.__def_index_table.idx_to_name[def_idx]
 
     def get_proof_step(
         self, 
         data_point_idx: int,
         skip_text: bool=False
     ) -> DataPoint:
-        tactic_point = self.__tactical_data[data_point_idx]
-        tactic_hash, num_args, file_idx, def_node_idx, proof_step_idx, outcome_idx, file_idx_root, node_idx_root, def_hash = tactic_point
+        td = self.__tactical_data
+        root_file_idx = td.root_file_idx.iat[data_point_idx]
+        root_node_idx = td.root_node_idx.iat[data_point_idx]
+        # tactic_hash, num_args, file_idx, def_node_idx, proof_step_idx, outcome_idx, file_idx_root, node_idx_root, def_hash = tactic_point
         res = get_subgraph_online(
             self.__c_data_online,
-            np.array([(file_idx_root.item(), node_idx_root.item())], dtype=np.uint32),
+            np.array([(root_file_idx, root_node_idx)], dtype=np.uint32),
             self.__bfs_option, self.__max_subgraph_size)
         nodes, edges, edge_labels, edges_offset, global_visited, _, _ = res
 
-        context, root, tactic_index, args = get_proof_step_online(self.__c_data_online, tactic_point[2:7], global_visited)
-
-
-        def_name = def_name_of_tactic_point(self.__def_index_table, tactic_point)
-
+        payload = np.array([td.iat[data_point_idx,i] for i in range(2,6)], dtype=np.uint64)
+        context, root, tactic_index, args = get_proof_step_online(self.__c_data_online, payload, global_visited)
+        def_name = self.def_name_of_datapoint_idx(data_point_idx)
         if not skip_text:
             state_text, action_base_text, action_interm_text, action_text = self.get_proof_step_text(data_point_idx)
         else:
@@ -403,8 +418,8 @@ class Data2:
             action_interm_text=action_interm_text,
             action_text=action_text,
             def_name=def_name,
-            step_in_proof=proof_step_idx.item(),
-            file_name=self.__fnames[file_idx]
+            step_in_proof=td.proof_step_idx.iat[data_point_idx],
+            file_name=self.__fnames[td.file_idx.iat[data_point_idx]]
         )
 
     # TODO (after TF2 deprecation): Remove data-splitting functionality, training logic should take care of this
@@ -417,7 +432,8 @@ class Data2:
         since datapoint has all fields addressing the datapoint (definition, file, proof step etc)
         you can be flexible with the splits
         """
-        return [i for i, tactical_point in enumerate(self.__tactical_data) if split_fun(tactical_point) == label]
+        td = self.__tactical_data
+        return td.index[td.apply(split_fun, axis=1) == label].to_list()
 
     # TODO (after TF2 deprecation): Remove data-splitting functionality, training logic should take care of this
     def data_train(self):
@@ -469,9 +485,9 @@ class Data2:
         """
         return dynamic global context as a numpy array of indices into GraphConstants.global_context
         """
-        _, _, file_idx, def_node_idx, _, _, _, _, _  = self.__tactical_data[data_point_idx]
+        file_idx = self.__tactical_data.file_idx.iat[data_point_idx]
+        def_node_idx = self.__tactical_data.def_node_idx.iat[data_point_idx]
         def_idx = self.__def_index_table.global_node_to_idx[(file_idx, def_node_idx)]
-        # def_name = self.__def_index_table.idx_to_name[def_idx]
         def_global_context = self.__def_index_table.idx_to_global_context[def_idx]
         return np.array(list(def_global_context), dtype=np.uint32)
 
