@@ -172,12 +172,13 @@ class DataServer:
         node_to_i = { node : i for i,node in enumerate(roots) }
         q = deque(enumerate(roots))
         edges = []
-        while q and len(nodes) < max_graph_size:
+        while q:
             if bfs_option: xi,x = q.popleft()
             else: xi,x = q.pop()
             for e,y in x.children:
                 yi = node_to_i.get(y, len(nodes))
                 if yi == len(nodes):
+                    if len(nodes) == max_graph_size: continue
                     node_to_i[y] = yi
                     nodes.append(y)
                     if y.label.which.raw != stop_at:
