@@ -83,7 +83,7 @@ def process_def_previouses(buf_list, message_type, def_idx_to_global_context,
                            def_idx_to_global_node, global_node_to_def_idx,  def_idx, local_to_global, representatives):
     if def_idx_to_global_context[def_idx] is not None:
         return
-            
+
     def_global_node = def_idx_to_global_node[def_idx]
 
     def_file_idx, def_node_idx = def_global_node
@@ -101,7 +101,7 @@ def process_def_previouses(buf_list, message_type, def_idx_to_global_context,
     def_global_context = set()
     for previous_global_node in previous_nodes:
         previous_idx = global_node_to_def_idx[previous_global_node]
-        
+
         process_def_previouses(buf_list, message_type, def_idx_to_global_context,
                                def_idx_to_global_node, global_node_to_def_idx, previous_idx, local_to_global, representatives)
 
@@ -110,8 +110,8 @@ def process_def_previouses(buf_list, message_type, def_idx_to_global_context,
 
     def_idx_to_global_context[def_idx] = def_global_context
 
-    
-    
+
+
 
 def build_def_index(global_def_table,
                     global_nodes_in_spine: set[tuple[int,int]],
@@ -124,14 +124,14 @@ def build_def_index(global_def_table,
     def_idx_to_hash = []
     global_node_to_def_idx = {}
     def_idx_in_spine = []
-    
+
     representatives = []
     for file_idx, (def_data, representative) in enumerate(global_def_table):
         representatives.append(representative)
         for node_idx, def_hash, def_name in zip(*def_data):
             global_node_id = (file_idx, node_idx)
             global_node_to_def_idx[global_node_id] = len(def_idx_to_global_node)
-            
+
             def_idx_to_global_node.append(global_node_id)
             def_idx_to_name.append(def_name)
             def_idx_to_hash.append(def_hash)
@@ -255,8 +255,13 @@ class Data2:
         data_error_report = get_tactic_hash_num_args_collision(self.__tactical_data, self.__fnames)
         if data_error_report:
             raise Exception(f"the data contains tactic_hash num_args collisions, for example \n" + "\n".join(data_error_report))
+        # use this line to order and index tactics by hash
+        # self.__tdataidx = np.unique(self.__tactical_data[:,0], return_index=True)[1].astype(np.uint64)
 
-        tactic_hashes = np.unique(self.__tactical_data[:,0])
+        # use this line to order and index tactics chronologically
+        self.__tdataidx = np.sort(np.unique(self.__tactical_data[:,0], return_index=True)[1]).astype(np.uint64)
+
+        tactic_hashes = self.__tactical_data[self.__tdataidx, 0]
         tactic_indexes = np.arange(len(tactic_hashes), dtype=np.uint32)
         def_hashes = np.array([def_hash_of_tactic_point(self.__def_index_table, tactical_point) for tactical_point in self.__tactical_data])
         def_hashes = np.reshape(def_hashes, (len(self.__tactical_data),1))
@@ -311,7 +316,7 @@ class Data2:
         # if we want to switch to chronological order of tactics, let's use this:
         # tactics_args = self.__tactical_data[np.sort(np.unique(self.__tactical_data[:,0], return_index=True)[1]),:2]
 
-        tdataidx = np.unique(self.__tactical_data[:,0], return_index=True)[1].astype(np.uint64)
+        tdataidx = self.__tdataidx
         thash_narg = self.__tactical_data[tdataidx, :2]
         uniquetac_idx = np.arange(thash_narg.shape[0], dtype=thash_narg.dtype).reshape((thash_narg.shape[0], 1))
         tdataidx_reshaped = tdataidx.reshape(thash_narg.shape[0],1)
@@ -350,7 +355,7 @@ class Data2:
 
     def def_index_table(self):
         return self.__def_index_table
-    
+
     def def_name_of_tactic_point(self, data_point_idx):
         return def_name_of_tactic_point(self.__def_index_table, self.__tactical_data[data_point_idx])
 
@@ -361,7 +366,7 @@ class Data2:
         return state_text, action_base_text, action_interm_text, action_text
 
     def get_proof_step(
-        self, 
+        self,
         data_point_idx: int,
         skip_text: bool=False
     ) -> DataPoint:
@@ -396,7 +401,7 @@ class Data2:
             available_global_context=self.step_global_context(data_point_idx),
             root=root,
             action=LoaderAction(
-                tactic_id=tactic_index, 
+                tactic_id=tactic_index,
                 args=args
             ),
             state_text=state_text,
@@ -464,7 +469,7 @@ class Data2:
             context=context,
             metadata=metadata
         )
-        
+
 
     def step_global_context(self, data_point_idx: int) -> np.ndarray:
         """
