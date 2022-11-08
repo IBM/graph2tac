@@ -143,7 +143,8 @@ def build_def_index(global_def_table,
     for (def_idx, def_global_node) in enumerate(def_idx_to_global_node):
         process_def_previouses(buf_list, message_type, def_idx_to_global_context, def_idx_to_global_node, global_node_to_def_idx, def_idx, local_to_global, representatives)
 
-
+    for idx, def_global_context in enumerate(def_idx_to_global_context):
+        def_idx_to_global_context[idx] = np.fromiter(def_global_context, np.uint32, count=len(def_global_context))
     return DefIndexTable(def_idx_to_global_node, global_node_to_def_idx, def_idx_to_name, def_idx_to_hash, def_idx_in_spine, def_idx_to_global_context)
 
 
@@ -473,7 +474,7 @@ class Data2:
         def_idx = self.__def_index_table.global_node_to_idx[(file_idx, def_node_idx)]
         # def_name = self.__def_index_table.idx_to_name[def_idx]
         def_global_context = self.__def_index_table.idx_to_global_context[def_idx]
-        return np.array(list(def_global_context), dtype=np.uint32)
+        return def_global_context
 
 
     def step_state_text(self, data_point_idx: int):
