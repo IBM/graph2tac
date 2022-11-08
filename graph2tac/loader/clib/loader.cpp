@@ -555,17 +555,17 @@ std::pair<std::vector<c_GlobalNode>, std::unordered_map<c_GlobalNode, size_t>*> 
 	} else {
 	    node_ptr = q.back(); q.pop_back();
 	}
-	auto this_nodes = global_nodes.at(node_ptr.file_idx);
-	auto this_edges = global_edges.at(node_ptr.file_idx);
+	const auto this_nodes = global_nodes.at(node_ptr.file_idx);
+	const auto this_edges = global_edges.at(node_ptr.file_idx);
 	const auto& node = this_nodes[node_ptr.node_idx];
-	uint32_t edge_begin = node.getChildrenIndex();
-	uint32_t edge_end = edge_begin + node.getChildrenCount();
+	const uint32_t edge_begin = node.getChildrenIndex();
+	const uint32_t edge_end = edge_begin + node.getChildrenCount();
 	for (uint32_t edge_idx = edge_begin;
 	     edge_idx < edge_end;  ++edge_idx) {
 	    const auto& edge = this_edges[edge_idx];
 	    if (edge.getLabel() != stop_edge_label) {
 		const auto& target = edge.getTarget();
-		c_GlobalNode other {rel_file_idx.at(node_ptr.file_idx).at(target.getDepIndex()), target.getNodeIndex()};
+		const c_GlobalNode other {rel_file_idx.at(node_ptr.file_idx).at(target.getDepIndex()), target.getNodeIndex()};
 
 		if (visited->find(other) == visited->end()) {
 		    (*visited)[other] = visit_time++;
@@ -841,7 +841,7 @@ static PyObject *get_def(const Graph::Reader & graph,
 	const auto def = node.getLabel().getDefinition();
 	def_hashes.emplace_back(node.getIdentity());
 	def_names.emplace_back(def.getName());
-	log_debug("at node_idx " + std::to_string(node_idx) + " " +  std::string(def.getName()));
+	//log_debug("at node_idx " + std::to_string(node_idx) + " " +  std::string(def.getName()));
     }
 
     return Py_BuildValue("NNN",
@@ -865,7 +865,7 @@ static PyObject *get_def_previouses(capnp::FlatArrayMessageReader *msg,
     const auto def_previous = def.getPrevious();
     PyObject * local_previouses;
     PyObject * external_previouses;
-    log_debug("previous_for_node " + std::to_string(def_node_idx) + " is " + std::to_string(def_previous) + ", n_graph_nodes is " + std::to_string(nodes.size()));
+    //log_debug("previous_for_node " + std::to_string(def_node_idx) + " is " + std::to_string(def_previous) + ", n_graph_nodes is " + std::to_string(nodes.size()));
     if (def_previous < nodes.size()) {
       local_previouses = numpy_ndarray1d(std::vector<uint32_t> {def_previous});
     } else {
@@ -1555,7 +1555,7 @@ static PyObject *c_get_subgraph_online(PyObject *self, PyObject *args) {
 
 
 	// FORWARD CLOSURE
-	auto [global_deps, global_visited] =  mmaped_forward_closure(
+	const auto [global_deps, global_visited] =  mmaped_forward_closure(
 	    p_data_online->graphs, roots,
 	    p_data_online->rel_file_idx,
 	    EdgeClassification::CONST_OPAQUE_DEF,
@@ -1579,8 +1579,6 @@ static PyObject *c_get_subgraph_online(PyObject *self, PyObject *args) {
 		node_label = p_data_online->def_node_to_idx.at(global_node) + base_node_label_num;
 	    } else {
 		node_label = static_cast<c_NodeLabel>(p_data_online->global_nodes.at(global_node.file_idx)[global_node.node_idx].getLabel().which());
-		//min_node_idx = std::min(min_node_idx, global_node.node_idx);
-		//max_node_idx = std::max(max_node_idx, global_node.node_idx);
 	    }
 	    node_labels[idx] = node_label;
 	}
@@ -1588,30 +1586,23 @@ static PyObject *c_get_subgraph_online(PyObject *self, PyObject *args) {
 
 	std::vector<std::vector<std::array<c_NodeIndex, 2>>> edges_split_by_label(conflate.size);
 
-	uint32_t min_edge_idx = UINT32_MAX;
-	uint32_t max_edge_idx = 0;
-
 	for (c_NodeIndex source_sub = 0; source_sub < sub_to_glob.size(); ++source_sub) {
 	    c_GlobalNode source = sub_to_glob.at(source_sub);
-//	for (const auto & [source, source_sub]: (*global_visited)) {
-	    auto node = p_data_online->global_nodes.at(source.file_idx)[source.node_idx];
+	    const auto node = p_data_online->global_nodes.at(source.file_idx)[source.node_idx];
 	    if (std::find(global_deps.begin(), global_deps.end(), source) == global_deps.end()) {
-		auto edge_idx_begin = node.getChildrenIndex();
-		auto edge_idx_end = edge_idx_begin + node.getChildrenCount();
-		auto edges = p_data_online->global_edges.at(source.file_idx);
+		const auto edge_idx_begin = node.getChildrenIndex();
+		const auto edge_idx_end = edge_idx_begin + node.getChildrenCount();
+		const auto edges = p_data_online->global_edges.at(source.file_idx);
 		for (uint32_t edge_idx = edge_idx_begin; edge_idx < edge_idx_end; ++edge_idx) {
 		    const auto& capnp_edge = edges[edge_idx];
 		    if (capnp_edge.getLabel() != EdgeClassification::CONST_OPAQUE_DEF) {
 			const auto& target = capnp_edge.getTarget();
-			auto rel_target_file_idx = target.getDepIndex();
-			auto target_node_idx = target.getNodeIndex();
-			auto target_file_idx = p_data_online->rel_file_idx.at(source.file_idx).at(rel_target_file_idx);
-			c_GlobalNode target_node {target_file_idx, target_node_idx};
+			const auto rel_target_file_idx = target.getDepIndex();
+			const auto target_node_idx = target.getNodeIndex();
+			const auto target_file_idx = p_data_online->rel_file_idx.at(source.file_idx).at(rel_target_file_idx);
+			const c_GlobalNode target_node {target_file_idx, target_node_idx};
 			if (global_visited->find(target_node) != global_visited->end()) {
-			    min_edge_idx = std::min(min_edge_idx, edge_idx);
-			    max_edge_idx = std::max(max_edge_idx, edge_idx);
-
-			    c_NodeIndex target_sub = static_cast<c_NodeIndex>(global_visited->at(target_node));
+			    const c_NodeIndex target_sub = static_cast<c_NodeIndex>(global_visited->at(target_node));
 			    edges_split_by_label[conflate.map.at(static_cast<c_EdgeLabel>(capnp_edge.getLabel()))].emplace_back(
 				std::array<c_NodeIndex, 2> {static_cast<c_NodeIndex>(source_sub), target_sub});
 			}
@@ -1805,7 +1796,7 @@ static PyObject *c_get_proof_step_online(PyObject *self, PyObject *args) {
 	auto root = capnp_proof_state.getRoot();
 	c_NodeIndex root_node_idx = root.getNodeIndex();
 	c_FileIndex root_file_idx = p_data_online->rel_file_idx.at(file_idx).at(root.getDepIndex());
-	log_debug("root_file_idx is " + std::to_string(root_file_idx) + " root_node_idx " + std::to_string(root_node_idx));
+	//log_debug("root_file_idx is " + std::to_string(root_file_idx) + " root_node_idx " + std::to_string(root_node_idx));
 	auto res = p_glob_to_sub->find(c_GlobalNode{root_file_idx, root_node_idx });
 	if (res == p_glob_to_sub->end()) {
 	    throw std::invalid_argument("the root is not in the subgraph and can't be encoded (this shouldn't happend for a subgraph of a positive size and indicates a severed bug A");
@@ -1949,7 +1940,7 @@ static PyObject * c_load_msg_online(PyObject *self, PyObject *args) {
 	}
 	c_FileIndex root_file_idx = p_data_online->rel_file_idx.at(file_idx).at(root_dep_idx);
 	auto res = p_glob_to_sub->find(c_GlobalNode{root_file_idx, root_node_idx});
-	log_debug("file_idx " + std::to_string(file_idx) + " root_node_idx " + std::to_string(root_node_idx));
+	//log_debug("file_idx " + std::to_string(file_idx) + " root_node_idx " + std::to_string(root_node_idx));
 	if (res != p_glob_to_sub->end()) {
 	    encoded_root = (*res).second;
 	} else {
