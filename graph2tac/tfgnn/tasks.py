@@ -712,7 +712,15 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
         @return: a mask for logits of the global context, taking into account the definitions that are actually available
         """
         global_context_ids = scalar_proofstate_graph.context['global_context_ids']
-        return tf.math.log(tf.reduce_sum(tf.one_hot(global_context_ids, global_context_size, axis=-1), axis=-2))
+
+        indices = tf.stack([
+            tf.cast(global_context_ids.value_rowids(), tf.int64),
+            global_context_ids.values
+        ], axis = -1)
+        updates = tf.ones_like(global_context_ids.values, dtype=tf.float32)
+        shape = [global_context_ids.nrows(), global_context_size]
+
+        return tf.math.log(tf.scatter_nd(indices, updates, shape))  # [batch_size, global_cxt]
 
     @staticmethod
     def _normalize_logits(local_arguments_logits: tf.Tensor, global_arguments_logits: tf.Tensor) -> Tuple[
