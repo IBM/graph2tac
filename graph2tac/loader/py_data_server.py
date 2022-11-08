@@ -7,6 +7,7 @@ from numpy.typing import NDArray
 import numpy as np
 from collections import deque
 import itertools
+import random
 from graph2tac.hash import get_split_label
 
 from graph2tac.loader.data_classes import *
@@ -35,6 +36,7 @@ class DataServer:
                  split_random_seed = 0,
                  restrict_to_spine: bool = False,
                  stop_at_definitions: bool = True,
+                 fname_order_key = None,
     ):
         self.data_dir = data_dir
         self.max_subgraph_size = max_subgraph_size
@@ -48,8 +50,16 @@ class DataServer:
 
         self._reader = pytact.data_reader.data_reader(Path(data_dir))
         self._data = self._reader.__enter__()
-        for name, file_data in self._data.items():
-            self._load_file(file_data)
+
+        if fname_order_key is None:
+            for name, file_data in self._data.items():
+                self._load_file(file_data)
+        else:
+            fnames = list(self._data.keys())
+            fnames.sort(key = fname_order_key)
+            for name in fnames:
+                file_data = self._data[name]
+                self._load_file(file_data)
 
     def graph_constants(self):
         total_node_label_num = len(self._node_i_to_name)
@@ -162,19 +172,20 @@ class DataServer:
         node_to_i = { node : i for i,node in enumerate(roots) }
         q = deque(enumerate(roots))
         edges = []
-        while q and len(nodes) < max_graph_size:
+        while q:
             if bfs_option: xi,x = q.popleft()
             else: xi,x = q.pop()
             for e,y in x.children:
+                el = e.raw
+                if el in self._edges_to_ignore: continue
                 yi = node_to_i.get(y, len(nodes))
                 if yi == len(nodes):
+                    if len(nodes) == max_graph_size: continue
                     node_to_i[y] = yi
                     nodes.append(y)
                     if y.label.which.raw != stop_at:
                         q.append((yi,y))
-                el = self._edge_labels[e.raw]
-                if el in self._edges_to_ignore: continue
-                edges.append((xi, yi, el))
+                edges.append((xi, yi, self._edge_labels[el]))
 
         node_labels = [
             self._get_node_label_index(node)
