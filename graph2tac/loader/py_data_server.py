@@ -11,10 +11,7 @@ import random
 from graph2tac.hash import get_split_label
 
 from graph2tac.loader.data_classes import *
-
-capnp.remove_import_hook()
-graph_api_capnp = pytact.common.graph_api_capnp()
-graph_api_capnp = capnp.load(graph_api_capnp)
+import pytact.graph_api_capnp as graph_api_capnp
 
 class IterableLen:
     def __init__(self, iterable, length):
@@ -145,10 +142,10 @@ class DataServer:
         self._node_i_in_spine.append(False)
         
     def _get_node_label_index(self, node):
-        if node.label.which.raw == self._definition_label:
+        if int(node.label.which) == self._definition_label:
             return self._def_node_to_i[node]
         else:
-            return node.label.which.raw
+            return int(node.label.which)
 
     def _register_tactic(self, tactic_usage):
         if tactic_usage.tactic.ident in self._tactic_to_i:
@@ -176,16 +173,15 @@ class DataServer:
             if bfs_option: xi,x = q.popleft()
             else: xi,x = q.pop()
             for e,y in x.children:
-                el = e.raw
-                if el in self._edges_to_ignore: continue
+                if e in self._edges_to_ignore: continue
                 yi = node_to_i.get(y, len(nodes))
                 if yi == len(nodes):
                     if len(nodes) == max_graph_size: continue
                     node_to_i[y] = yi
                     nodes.append(y)
-                    if y.label.which.raw != stop_at:
+                    if int(y.label.which) != stop_at:
                         q.append((yi,y))
-                edges.append((xi, yi, self._edge_labels[el]))
+                edges.append((xi, yi, self._edge_labels[e]))
 
         node_labels = [
             self._get_node_label_index(node)
