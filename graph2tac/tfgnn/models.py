@@ -21,10 +21,7 @@ class RepeatScalarGraph(tf.keras.layers.Layer):
         return tf.repeat(tf.expand_dims(tensor, axis=0), self.num_repetitions, axis=0)
 
     def repeat_ragged_tensor(self, ragged_tensor: tf.RaggedTensor):
-        flat_values = tf.repeat(ragged_tensor.flat_values, self.num_repetitions)
-        row_lengths = tf.repeat(ragged_tensor.row_lengths(), self.num_repetitions)
-        nrows = tf.fill(dims=(self.num_repetitions,), value=ragged_tensor.nrows())
-        return tf.RaggedTensor.from_nested_row_lengths(flat_values=flat_values, nested_row_lengths=(nrows, row_lengths))
+        return tf.ragged.stack([ragged_tensor] * self.num_repetitions)
 
     def repeat_feature(self, feature: Union[tf.Tensor, tf.RaggedTensor]):
         return self.repeat_ragged_tensor(feature) if isinstance(feature, tf.RaggedTensor) else self.repeat_tensor(
