@@ -36,207 +36,7 @@ from graph2tac.loader.clib.loader import (
     get_proof_step_online_text,
     get_graph_constants_online
 )
-
-def custom_dataclass_repr(obj) -> str:
-    """String repr for a dataclass, but removing the array data."""
-    kws = {k: f"array(shape={v.shape}, dytype={v.dtype})" if isinstance(v, np.ndarray) else repr(v) for k,v in obj.__dict__.items()}
-    return obj.__class__.__qualname__ + "(" + ", ".join(k + "=" + v for k,v in kws.items()) + ")"
-
-
-@dataclass(repr=False)
-class LoaderGraph:
-    """A single graph as it comes from the loader"""
-    nodes: NDArray[np.uint32]  # [nodes]
-    """Node class labels.  Shape: [number of nodes]"""
-    edges: NDArray[np.uint32]  # [edges,2]
-    """Edges as source-target pairs indexed into `nodes`.  Shape: [number of edges, 2]"""
-    edge_labels: NDArray[np.uint32]  # [edges]
-    """Edge labels.  Shape: [number of edges]"""
-    edge_offsets: NDArray[np.uint32]  # [edge_labels]
-    """Start position in `edges` of each edge label.  Shape: [number of edge labels]"""
-
-    def __repr__(self):
-        return custom_dataclass_repr(self)
-
-@dataclass(repr=False)
-class TF2Graph:
-    """A single graph as it is used for TF2 (before being converted to TF types)"""
-    nodes: NDArray[np.uint32]  # [nodes]
-    """Node class labels.  Shape: [number of nodes]"""
-    edges: tuple[NDArray[np.uint32], ...]  # ([edges_with_label_e,2] for e in edge_labels)
-    """Edges (source and target indices in `nodes`) for each edge labels
-    Tuple where each array has shape [number of edges with label, 2]"""
-    def __repr__(self):
-        return custom_dataclass_repr(self)
-
-@dataclass(repr=False)
-class TFGNNGraph:
-    """A single graph as it is used for TFGNN (before being converted to TF types)"""
-    nodes: NDArray[np.uint32]  # [nodes]
-    """Node class labels.  Shape: [number of nodes]"""
-    sources: NDArray[np.uint32]  # [edges]
-    targets: NDArray[np.uint32]  # [edges]
-    edge_labels: NDArray[np.uint32]  # [edges]
-
-    def __repr__(self):
-        return custom_dataclass_repr(self)
-
-@dataclass(repr=False)
-class ProofstateMetadata:
-    """Metadata for a single proof state"""
-    name: bytes
-    """Theorem name"""
-    step: int
-    """Step of the proof"""
-    is_faithful: bool
-    """Represents if the action is faithful, meaning that the action fully encodes the original tactic"""
-
-    def __repr__(self):
-        return custom_dataclass_repr(self)
-
-@dataclass(repr=False)
-class ProofstateContext:
-    """Local and global context for a single proofstate"""
-    local_context: NDArray[np.uint32]  # [loc_cxt]
-    """Local context as indices into the `node` field of the corresponding graph.  Shape: [size of local context]"""
-    global_context: NDArray[np.uint32]  # [global_cxt]
-    """
-    Global context as indices into list of all global identifiers.
-    Shape: [size of global context]
-    
-    The index is into the list of global definitions maintained by the dataserver and kept in the model
-    (not the list of node labels).  Hence the smallest `global_context` value is usually 0.
-    """
-
-    def __repr__(self):
-        return custom_dataclass_repr(self)
-
-@dataclass(repr=False)
-class LoaderProofstate:
-    """A single proofstate as it comes from the loader"""
-    graph: LoaderGraph
-    """Proofstate graph as it comes from the loader"""
-    root: int
-    """Index of the root node in `graph.nodes`.  Currently the root is always 0."""
-    context: ProofstateContext
-    """Local and global context"""
-    metadata: ProofstateMetadata
-    """Proofstate metadata"""
-
-    def __repr__(self):
-        return custom_dataclass_repr(self)
-
-@dataclass(repr=False)
-class LoaderAction:
-    """A single tactic as it comes from the loader"""
-    tactic_id: int
-    """Base tactic id"""
-    args: NDArray[np.uint32]
-    """
-    Tactic arguments (local or global or none).  Using the indices in the `context` field of the proofstate.
-    
-    If `args[i] == [0, l] for l < local_cxt_size`, then the `i`th arg is a local context variable with index `l`.
-    If `args[i] == [0, local_cxt_size]`, then the `i`th arg is a none argument (can't be represented).
-    If `args[i] == [1, g]` for `g > 0`, then the `i`th arg is a global definition with index `g`.
-    
-    The local argument is an index into `context.local_context` for the corresponding proofstate,
-    but the global argument is the index into the list of global definitions returned by the dataserver and kept
-    in the model.  In particular, the global argument is neither an index into `context.global_context`
-    for the proofstate nor the node label of a definition (which would instead be offset by the number of base node labels).
-
-    Hence the smallest possible global argument index is 0 and it can be larger than
-    `len(context.global_context)` for the corresponding proofstate.
-
-    Shape: [number of args for this tactic, 2]
-    """
-
-    def __repr__(self):
-        return custom_dataclass_repr(self)
-
-@dataclass(repr=False)
-class LoaderDefinition:
-    """A single definition declaration as it comes from the loader"""
-    graph: LoaderGraph
-    """Definition graph as it comes from the loader"""
-    num_definitions: int
-    """
-    Number of definitions in the graph.
-    
-    The roots for these definitions are the nodes of the `graph.nodes`.
-    (E.g. inductive types are packaged as a single graph with
-    mulitple definitions, one for the type and one for each constructor
-    """
-    definition_names: NDArray[np.object_]
-    """Names of the definitions.  Stored as either bytestrings or strings.  Shape: [number of definitions in the graph]"""
-
-    def __repr__(self):
-        return custom_dataclass_repr(self)
-
-@dataclass
-class GraphConstants:
-    tactic_num: int
-    edge_label_num: int
-    base_node_label_num: int
-    node_label_num: int
-    cluster_subgraphs_num: int
-    tactic_index_to_numargs: np.ndarray  # dtype = np.uint32
-    tactic_index_to_string: List[bytes]    # tactic names
-    tactic_index_to_hash: np.ndarray
-    global_context: np.ndarray
-    label_to_names: List[str]
-    label_in_spine: List[bool]
-    max_subgraph_size: int
-
-@dataclass
-class DataPoint:
-    """
-    A proofstate and action datapoint from the loader
-    
-    This is used mostly for investigation into the dataset.
-    """
-    proof_step_idx: int
-    """Datapoint unique index from the loader."""
-    graph: LoaderGraph
-    """Single proofstate graph"""
-    local_context: NDArray[np.uint32]
-    """Local context as indices into `graph.node` of the corresponding graph.  Shape: [size of local context]"""
-    available_global_context: NDArray[np.uint32]
-    """
-    Global context as indices into list of all global identifiers.
-    Shape: [size of global context]
-    
-    The index is into the list of global definitions maintained by the dataserver and kept in the model
-    (not the list of node labels).  Hence the smallest `global_context` value is usually 0.
-    """
-    root: int
-    """Index of the root node in `graph.nodes`.  Currently the root is always 0."""
-    action: LoaderAction
-    """The tactic applied to the proof state"""
-    state_text: bytes
-    """Plain text representation of the proof state"""
-    action_base_text: bytes
-    """The base tactic represented at plain text, e.g. 'apply _'"""
-    action_interm_text: bytes
-    """The tactic represented at plain text most similar to how it is represented coming out of the loader"""
-    action_text: bytes
-    """The tactic represented as plain text, representing the full"""
-    def_name: bytes
-    """The theorem this proof step is in.  Can be used to align to the orginal data."""
-    step_in_proof: int
-    """The step ix of the proof.  Can be used to align to the orginal data."""
-    file_name: Path
-    """The coq file this proof step is in.  Can be used to align to the orginal data."""
-
-
-@dataclass
-class DefIndexTable:
-    idx_to_global_node: list
-    global_node_to_idx: dict
-    idx_to_name: list
-    idx_to_hash: list
-    idx_in_spine: list[bool]
-    idx_to_global_context: list[set] 
-
+from graph2tac.loader.data_classes import *
 
 def find_bin_files(data_dir: Path) -> List[Path]:
     """
@@ -299,9 +99,7 @@ def process_def_previouses(buf_list, message_type, def_idx_to_global_context,
         previous_nodes.append((p_file_idx, representatives[p_file_idx]))
 
     def_global_context = set()
-
     for previous_global_node in previous_nodes:
-
         previous_idx = global_node_to_def_idx[previous_global_node]
         
         process_def_previouses(buf_list, message_type, def_idx_to_global_context,
@@ -364,7 +162,7 @@ def def_name_of_tactic_point(def_index_table, tactic_point):
 
 
 def def_hash_split(tactical_point, prob: List[float], seed: int) -> int:
-    return get_split_label(tactical_point[7].item(), prob, seed)
+    return get_split_label(tactical_point[8].item(), prob, seed)
 
 
 def get_tactic_hash_num_args_collision(tactical_data, fnames):
@@ -375,8 +173,8 @@ def get_tactic_hash_num_args_collision(tactical_data, fnames):
         if len(tactic_hash_arg_collisions) != 1:
             collision_examples = tactic_group_by_hash[tactic_hash_arg_collisions].tolist()
             for collision_example in collision_examples:
-                tactic_hash, num_args, file_idx, def_idx, proof_step_idx, outcome_idx = collision_example
-                data_error_report.append(f"tactic_hash {tactic_hash}, num_args {num_args}, file {fnames[file_idx]}, def {def_idx}, proof_step {proof_step_idx}, outcome {outcome_idx}")
+                tactic_hash, num_args, file_idx, def_idx, proof_step_idx, outcome_idx, file_idx_root, node_idx_root = collision_example
+                data_error_report.append(f"tactic_hash {tactic_hash}, num_args {num_args}, file {fnames[file_idx]}, def {def_idx}, proof_step {proof_step_idx}, outcome {outcome_idx}, file_idx_root {file_idx_root}, node_idx_root {node_idx_root}")
     return data_error_report
 
 
@@ -420,7 +218,7 @@ class Data2:
 
 
         global_nodes_in_spine = get_global_nodes_in_spine(buf_list, "dataset")
-        print("LOADING | definitions in spine: {len(global_nodes_in_spine)}")
+        print(f"LOADING | definitions in spine: {len(global_nodes_in_spine)}")
 
         self.__def_index_table = build_def_index(self.__global_def_table, global_nodes_in_spine, buf_list, "dataset", self.__local_to_global_files)
 
@@ -439,13 +237,15 @@ class Data2:
              def_node_indexes,
              proof_step_indexes,
              outcome_indexes,
-             local_roots) = get_buf_tactics(buf_object, def_table[0], fname)
-
+             local_dep_roots,
+             node_idx_roots
+             ) = get_buf_tactics(buf_object, def_table[0], fname)
+            file_idx_roots = self.__local_to_global_files[file_idx][local_dep_roots]
             file_indexes = np.full(def_node_indexes.shape, file_idx, dtype=np.uint64)
-            self.__tactical_data.append(np.transpose(np.stack([tactic_hashes, number_arguments, file_indexes, def_node_indexes, proof_step_indexes, outcome_indexes, local_roots])))
+            self.__tactical_data.append(np.transpose(np.stack([tactic_hashes, number_arguments, file_indexes, def_node_indexes, proof_step_indexes, outcome_indexes, file_idx_roots, node_idx_roots])))
 
         if len(self.__tactical_data) == 0:
-            self.__tactical_data = np.zeros(shape=(0,7), dtype=np.uint64)
+            self.__tactical_data = np.zeros(shape=(0,8), dtype=np.uint64)
             self.__max_num_args = None
         else:
             self.__tactical_data = np.concatenate(self.__tactical_data)
@@ -565,12 +365,12 @@ class Data2:
         skip_text: bool=False
     ) -> DataPoint:
         tactic_point = self.__tactical_data[data_point_idx]
-        tactic_hash, num_args, file_idx, def_node_idx, proof_step_idx, outcome_idx, state_root_node, def_hash = tactic_point
+        tactic_hash, num_args, file_idx, def_node_idx, proof_step_idx, outcome_idx, file_idx_root, node_idx_root, def_hash = tactic_point
         res = get_subgraph_online(
             self.__c_data_online,
-            np.array([(file_idx.item(), state_root_node.item())], dtype=np.uint32),
-            self.__bfs_option, self.__max_subgraph_size, False)
-        nodes, edges, edge_labels, edges_offset, global_visited, _, _, _, _ = res
+            np.array([(file_idx_root.item(), node_idx_root.item())], dtype=np.uint32),
+            self.__bfs_option, self.__max_subgraph_size)
+        nodes, edges, edge_labels, edges_offset, global_visited, _, _ = res
 
         context, root, tactic_index, args = get_proof_step_online(self.__c_data_online, tactic_point[2:6], global_visited)
 
@@ -669,7 +469,7 @@ class Data2:
         """
         return dynamic global context as a numpy array of indices into GraphConstants.global_context
         """
-        _, _, file_idx, def_node_idx, _, _, _, _  = self.__tactical_data[data_point_idx]
+        _, _, file_idx, def_node_idx, _, _, _, _, _  = self.__tactical_data[data_point_idx]
         def_idx = self.__def_index_table.global_node_to_idx[(file_idx, def_node_idx)]
         # def_name = self.__def_index_table.idx_to_name[def_idx]
         def_global_context = self.__def_index_table.idx_to_global_context[def_idx]
@@ -692,9 +492,9 @@ class Data2:
 
         def_cluster = self.__def_scc_clusters[cluster_idx]
 
-        res = get_subgraph_online(self.__c_data_online, self.__def_idx_to_node[def_cluster], self.__bfs_option, max_arg_size, False)
+        res = get_subgraph_online(self.__c_data_online, self.__def_idx_to_node[def_cluster], self.__bfs_option, max_arg_size)
 
-        nodes, edges, edge_labels, edges_offset, _ , _, _, _, _ = res
+        nodes, edges, edge_labels, edges_offset, _ , _, _ = res
 
         base_node_label_names, _ = get_graph_constants_online()
         label_to_names = np.array(base_node_label_names +  self.__def_index_table.idx_to_name)

@@ -21,26 +21,29 @@ anywhere in the code and make the capnp api to be loaded only as a function as a
 which is passed as an argument to the run scripts (Vasily)
 
 """
-def load_capnp(data_dir: str):
-    MAGIC_LABELLED_GRAPH_API_V3 = "@0xafda4797418def92;"
-    """
-    returns loaded capnp api of a single capnp file from data_dir
-    """
-    capnp_filenames = glob.glob(os.path.join(data_dir, '*.capnp'))
-    if len(capnp_filenames) != 1:
-        raise Exception(f"Error: expected to find unique capnp file in {data_dir},"
-                        f"but instead found {capnp_filenames}")
 
-    capnp_filename = capnp_filenames[0]
-    with open(capnp_filename) as f:
-        magic = f.readline().strip()
-        if magic != MAGIC_LABELLED_GRAPH_API_V3:
-            raise Exception(f"Error in loading {capnp_filename}:"
-                            f"unknown magic number of capnp protocol {magic}")
-        else:
-            capnp_api = capnp.load(capnp_filename)
-            print(f"LOADING | loaded capnp: {capnp_filename}")
-            return capnp_api
+# remove this chunk of code if nobody uses it
+
+# def load_capnp(data_dir: str):
+#     MAGIC_LABELLED_GRAPH_API_V3 = "@0xafda4797418def92;"
+#     """
+#     returns loaded capnp api of a single capnp file from data_dir
+#     """
+#     capnp_filenames = glob.glob(os.path.join(data_dir, '*.capnp'))
+#     if len(capnp_filenames) != 1:
+#         raise Exception(f"Error: expected to find unique capnp file in {data_dir},"
+#                         f"but instead found {capnp_filenames}")
+
+#     capnp_filename = capnp_filenames[0]
+#     with open(capnp_filename) as f:
+#         magic = f.readline().strip()
+#         if magic != MAGIC_LABELLED_GRAPH_API_V3:
+#             raise Exception(f"Error in loading {capnp_filename}:"
+#                             f"unknown magic number of capnp protocol {magic}")
+#         else:
+#             capnp_api = capnp.load(capnp_filename)
+#             print(f"LOADING | loaded capnp: {capnp_filename}")
+#             return capnp_api
 
 
 def uuid(data_dir: Path):

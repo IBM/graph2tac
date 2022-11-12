@@ -1,3 +1,11 @@
+#include <cstdint>
+#include <vector>
+#include <string>
+#include <iostream>
+#include <cstring>
+#include <unordered_map>
+#include <set>
+#include <map>
 typedef uint32_t c_FileIndex;
 typedef uint32_t c_NodeIndex;
 typedef uint32_t c_DefIndex;
@@ -29,10 +37,6 @@ struct c_Node {
 
 
 
-std::ostream& operator << ( std::ostream& outs, const c_GlobalNode & node)
-{
-  return outs << "(" << node.file_idx << "," << node.node_idx << ")";
-}
 
 
 inline bool operator<(c_GlobalNode a, c_GlobalNode b) {

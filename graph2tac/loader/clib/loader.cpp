@@ -1,5 +1,4 @@
-/* this code supports only capnp v8 and capnp v9 versions; the previous version deprecated */
-/* if you want dataloader for earlier versions, go to earlier tagged git commit */
+/* this code supports capnp v13 */
 
 #define GCC_VERSION (__GNUC__ * 10000 + __GNUC_MINOR__ * 100 + __GNUC_PATCH_LEVEL__)
 
@@ -9,7 +8,7 @@
 #include <numpy/arrayobject.h>
 
 
-#include "graph_api_v11.capnp.h"
+#include "graph_api_v13.capnp.h"
 
 
 
@@ -42,20 +41,14 @@
 #include <filesystem>
 #include <thread>
 #include <algorithm>
+#include <functional>
 #include "numpy_conversion.hpp"
 #include "simple_directed_graph.hpp"
 
 
-
-
-constexpr uint64_t ENCODE_ALL = 1;
-
-constexpr c_NodePrimitive NodeLabelDefinition = Graph::Node::Label::DEFINITION;
 const size_t  base_node_label_num = capnp::Schema::from<Graph::Node::Label>().getFields().size();
 
 
-
-// TODO: check for hash collisions between node hashes and basic labels, globally
 
 /* ---------------------------- HELPERS ---------------------------------- */
 /* ----------------------------------------------------------------------- */
@@ -69,7 +62,8 @@ char __glob_to_sub_capsule_name[]{"__c_data_glob_to_sub"};
 
 constexpr c_FileIndex __MISSING_FILE = std::numeric_limits<c_FileIndex>::max();
 constexpr c_NodeIndex __MISSING_NODE = std::numeric_limits<c_NodeIndex>::max();
-constexpr auto G2T_LOG_LEVEL  = "G2T_LOG_LEVEL";
+constexpr auto G2T_LOG_LEVEL = "G2T_LOG_LEVEL";
+constexpr auto G2T_LOG_FILE = "G2T_LOG_FILE";
 constexpr int CRITICAL = 50;
 constexpr int ERROR = 40;
 constexpr int WARNING = 30;
@@ -79,32 +73,48 @@ constexpr int DEBUG = 10;
 constexpr int NOTSET = 0;
 
 
+std::ostream& operator << ( std::ostream& outs, const c_GlobalNode & node)
+{
+  return outs << "(" << node.file_idx << "," << node.node_idx << ")";
+}
+
+
 void log_level(
     const std::string &msg,
     const int msg_level) {
     char * c_val = std::getenv(G2T_LOG_LEVEL);
+    char * log_fname = std::getenv(G2T_LOG_FILE);
     int log_level = INFO;
     if (c_val != nullptr) {
 	auto val = std::string(c_val);
 	log_level = std::stoi(val);
     }
+    static std::ofstream log_file;
+    std::ostream* log_output = &std::cerr;
+    if (log_fname != nullptr) {
+	if (!log_file.is_open()) {
+	    log_file.open(log_fname, std::ios_base::app);
+	}
+	log_output = &log_file;
+    }
     if (msg_level >= log_level) {
 	if (msg_level >= CRITICAL) {
-	    std::cerr << "C_LOADER CRITICAL | " <<  msg << std::endl;
+	    *log_output << "C_LOADER CRITICAL | " <<  msg << std::endl;
 	} else if (msg_level >= ERROR) {
-	    std::cerr << "C_LOADER ERROR | " <<  msg << std::endl;
+	    *log_output << "C_LOADER ERROR | " <<  msg << std::endl;
 	} else if (msg_level >= WARNING) {
-	    std::cerr << "C_LOADER WARNING | " <<  msg << std::endl;
+	    *log_output << "C_LOADER WARNING | " <<  msg << std::endl;
 	} else if (msg_level >= INFO) {
-	    std::cerr << "C_LOADER INFO | " <<  msg << std::endl;
+	    *log_output << "C_LOADER INFO | " <<  msg << std::endl;
 	} else if (msg_level >= VERBOSE) {
-	    std::cerr << "C_LOADER VERBOSE | " <<  msg << std::endl;
+	    *log_output << "C_LOADER VERBOSE | " <<  msg << std::endl;
 	} else if (msg_level >= DEBUG) {
-	    std::cerr << "C_LOADER DEBUG | " <<  msg << std::endl;
+	    *log_output << "C_LOADER DEBUG | " <<  msg << std::endl;
 	} else if (msg_level >= NOTSET) {
-	    std::cerr << "C_LOADER | " <<  msg << std::endl;
+	    *log_output << "C_LOADER | " <<  msg << std::endl;
 	}
     }
+    log_file.close();
 }
 
 
@@ -114,7 +124,7 @@ void log_level(std::map<T1, T2> map_object,
 	       const int msg_level) {
     std::string result;
     for (const auto & [k, v]: map_object) {
-	result += std::to_string(k) + " " + std::to_string(v) + std::endl;
+	result += std::to_string(k) + " => " + std::to_string(v) + std::endl;
     }
     log_level(result, msg_level);
 }
@@ -130,8 +140,9 @@ void log_level(std::unordered_map<T1, T2> map_object,
     std::string result;
     using std::to_string;
     using std::endl;
+    result = "\n";
     for (const auto & [k, v]: map_object) {
-	result += to_string(k) + " " + to_string(v) + "\n";
+	result += to_string(k) + " => " + to_string(v) + "\n";
     }
     log_level(result, msg_level);
 }
@@ -141,9 +152,10 @@ template <typename T>
 void log_level(std::vector<T> a,
 	       const int msg_level) {
     std::stringstream result;
-
+    size_t idx = 0;
+    result << "\n";
     for (const auto & e: a) {
-	result << e << ' ';
+	result << idx++ << ": " << e << "\n";
     }
     log_level(result.str(), msg_level);
 }
@@ -237,7 +249,7 @@ struct c_DataOnline {
     c_ConflateLabels conflate;
     std::unordered_map<c_TacticHash, c_TacticIndex> tactic_hash_to_idx;
     std::unordered_map<c_TacticIndex, c_TacticHash> tactic_idx_to_hash;
-    std::map<uint64_t, uint64_t> subgraph_node_counter;
+//    std::map<uint64_t, uint64_t> subgraph_node_counter;
 
     std::vector<std::string> fnames;
     std::vector<Py_buffer> views; //to remove them nicely
@@ -827,7 +839,7 @@ static PyObject *get_def(const Graph::Reader & graph,
 					"is not a definition but of type " + std::to_string(node.getLabel().which()));
 	}
 	const auto def = node.getLabel().getDefinition();
-	def_hashes.emplace_back(def.getHash());
+	def_hashes.emplace_back(node.getIdentity());
 	def_names.emplace_back(def.getName());
 	log_debug("at node_idx " + std::to_string(node_idx) + " " +  std::string(def.getName()));
     }
@@ -839,10 +851,9 @@ static PyObject *get_def(const Graph::Reader & graph,
 }
 
 static PyObject *get_def_previouses(capnp::FlatArrayMessageReader *msg,
-                                 const std::string message_type,
-                                 const c_NodeIndex def_node_idx) {
+				 const std::string message_type,
+				 const c_NodeIndex def_node_idx) {
     const auto graph = (message_type == "dataset" ? msg->getRoot<Dataset>().getGraph() : (message_type == "request.initialize" ? msg->getRoot<PredictionProtocol::Request>().getInitialize().getGraph() : msg->getRoot<PredictionProtocol::Request>().getCheckAlignment().getGraph()));
-    const auto definitions = (message_type == "dataset" ? msg->getRoot<Dataset>().getDefinitions() : (message_type == "request.initialize" ? msg->getRoot<PredictionProtocol::Request>().getInitialize().getDefinitions() :  msg->getRoot<PredictionProtocol::Request>().getInitialize().getDefinitions()));
     auto nodes = graph.getNodes();
     const auto node = nodes[def_node_idx];
     if (!node.getLabel().hasDefinition()) {
@@ -854,6 +865,7 @@ static PyObject *get_def_previouses(capnp::FlatArrayMessageReader *msg,
     const auto def_previous = def.getPrevious();
     PyObject * local_previouses;
     PyObject * external_previouses;
+    log_debug("previous_for_node " + std::to_string(def_node_idx) + " is " + std::to_string(def_previous) + ", n_graph_nodes is " + std::to_string(nodes.size()));
     if (def_previous < nodes.size()) {
       local_previouses = numpy_ndarray1d(std::vector<uint32_t> {def_previous});
     } else {
@@ -879,6 +891,7 @@ static PyObject *get_msg_def(capnp::FlatArrayMessageReader *msg,
     */
 
     std::vector<c_NodeIndex> def_nodes;
+    log_debug("entered get_msg_def");
     const auto graph = (message_type == "dataset" ? msg->getRoot<Dataset>().getGraph() : (message_type == "request.initialize" ? msg->getRoot<PredictionProtocol::Request>().getInitialize().getGraph() : msg->getRoot<PredictionProtocol::Request>().getCheckAlignment().getGraph()));
     const auto definitions = (message_type == "dataset" ? msg->getRoot<Dataset>().getDefinitions() : (message_type == "request.initialize" ? msg->getRoot<PredictionProtocol::Request>().getInitialize().getDefinitions() :  msg->getRoot<PredictionProtocol::Request>().getInitialize().getDefinitions()));
 
@@ -972,7 +985,7 @@ static PyObject *c_get_def_previouses(PyObject *self, PyObject *args) {
   }
   catch (const std::exception &ia) {
     log_critical("exception in loader.cpp c_get_def_previouses: " +
-                 std::string(ia.what()));
+		 std::string(ia.what()));
     PyErr_SetString(PyExc_TypeError, ia.what());
     return NULL;
   }
@@ -1151,9 +1164,9 @@ static PyObject *c_get_buf_tactics(PyObject *self, PyObject *args) {
 	std::vector<uint64_t> def_node_indexes;
 	std::vector<uint64_t> proof_step_indexes;
 	std::vector<uint64_t> outcome_indexes;
-	std::vector<uint64_t> context_local_roots;
+	std::vector<uint64_t> context_local_dep_roots;
+	std::vector<uint64_t> context_local_idx_roots;
 
-	uint64_t def_idx = 0;
 	for (const auto &node_idx: def_nodes) {
 	    const auto node = nodes[node_idx];
 	    if (!node.getLabel().hasDefinition()) {
@@ -1175,13 +1188,16 @@ static PyObject *c_get_buf_tactics(PyObject *self, PyObject *args) {
 			for (const auto &outcome: step_obj.getOutcomes()) {
 			    auto num_args = outcome.getTacticArguments().size();
 			    auto proof_state = outcome.getBefore();
-			    uint64_t local_root = proof_state.getRoot();
+			    auto local_root = proof_state.getRoot();
+			    uint64_t local_dep_root = local_root.getDepIndex();
+			    uint64_t local_idx_root = local_root.getNodeIndex();
 			    tactic_hashes.emplace_back(tactic_hash);
 			    number_arguments.emplace_back(num_args);
 			    def_node_indexes.emplace_back(node_idx);
 			    proof_step_indexes.emplace_back(proof_step_idx);
 			    outcome_indexes.emplace_back(outcome_idx);
-			    context_local_roots.emplace_back(local_root);
+			    context_local_dep_roots.emplace_back(local_dep_root);
+			    context_local_idx_roots.emplace_back(local_idx_root);
 			    ++outcome_idx ;
 			}
 		    }
@@ -1189,17 +1205,19 @@ static PyObject *c_get_buf_tactics(PyObject *self, PyObject *args) {
 		}
 
 	    }
-	    ++def_idx;
 	}
 	PyBuffer_Release(&view);
 
-	return Py_BuildValue("NNNNNN",
+	return Py_BuildValue("NNNNNNN",
 			     numpy_ndarray1d(tactic_hashes),
 			     numpy_ndarray1d(number_arguments),
 			     numpy_ndarray1d(def_node_indexes),
 			     numpy_ndarray1d(proof_step_indexes),
 			     numpy_ndarray1d(outcome_indexes),
-			     numpy_ndarray1d(context_local_roots));
+			     numpy_ndarray1d(context_local_dep_roots),
+			     numpy_ndarray1d(context_local_idx_roots)
+	    );
+
     } catch (const std::invalid_argument &ia) {
 	log_critical("exception caught");
 	log_critical(ia.what());
@@ -1217,7 +1235,7 @@ void check_size(const c_DataOnline * p_data_online) {
 					 p_data_online->global_nodes.size(),
 					 p_data_online->global_edges.size()};
 	if (*(std::max_element(check_sizes.begin(), check_sizes.end())) !=
-	    *(std::max_element(check_sizes.begin(), check_sizes.end()))) {
+	    *(std::min_element(check_sizes.begin(), check_sizes.end()))) {
 	    log_critical("the sizes of views,fnames, areaders,rel_file_idx,graphs,global_nodes,global_edges:" +
 			 std::to_string(p_data_online->views.size()) + "," +
 			 std::to_string(p_data_online->fnames.size()) + "," +
@@ -1348,7 +1366,8 @@ static PyObject * c_data_online_extend(PyObject *self, PyObject *args) {
 	// BUFFER GRAPHS
 	auto rel_file_idx_ext = PyListArray_AsVectorVector_uint32_t(p_PyArray_rel_file_idx);
 	auto names_ext = PyListBytes_AsVectorString(list_Obj_fnames);
-
+	log_debug("adding the list of files: ");
+	log_debug(names_ext);
 
 	for (Py_ssize_t cnt = 0; cnt < PyList_Size(list_buf_objects); ++cnt) {
 	    PyObject *buf_object = PyList_GetItem(list_buf_objects, cnt);
@@ -1508,11 +1527,10 @@ static PyObject *c_get_subgraph_online(PyObject *self, PyObject *args) {
     PyArrayObject *p_roots_uint32x2;
     int bfs_option {false};
     uint64_t max_subgraph_size;
-    int with_node_counter {false};
 
-    if (!PyArg_ParseTuple(args, "O!O!pKp", &PyCapsule_Type, &capsObj,
+    if (!PyArg_ParseTuple(args, "O!O!pK", &PyCapsule_Type, &capsObj,
 			  &PyArray_Type, &p_roots_uint32x2,
-			  &bfs_option, &max_subgraph_size, &with_node_counter)) {
+			  &bfs_option, &max_subgraph_size)) {
 	return NULL;
     }
 
@@ -1526,33 +1544,15 @@ static PyObject *c_get_subgraph_online(PyObject *self, PyObject *args) {
 	c_DataOnline *p_data_online = static_cast<c_DataOnline *>(
 	    PyCapsule_GetPointer(capsObj, __data_online_capsule_name));
 
-	uint32_t min_node_idx = UINT32_MAX;
-	uint32_t max_node_idx = 0;
 
-
-	std::vector<c_NodeIndex> local_roots;
 	std::vector<c_GlobalNode> roots;
 	for (const auto &e:  Py2dArray_AsVector_uint32_pair(p_roots_uint32x2)) {
-	    auto this_node = c_GlobalNode {e.first, e.second};
-	    if (roots.size() > 0) {
-		if (roots.back().file_idx != this_node.file_idx) {
-		    throw std::invalid_argument(
-			"sampling subgraph online for local_roots of different files is not supported");
-		}
-	    }
-	    roots.emplace_back(this_node);
-	    local_roots.emplace_back(this_node.node_idx);
-	    min_node_idx = std::min(min_node_idx, this_node.node_idx);
-	    max_node_idx = std::max(max_node_idx, this_node.node_idx);
-
-
+	    roots.emplace_back(c_GlobalNode {e.first, e.second});
 	}
 	if (roots.size() == 0) {
 	    throw std::invalid_argument("sampling subgraphs from empty set of roots is not supported");
 	}
 
-	c_FileIndex this_file_idx = roots.back().file_idx;
-	auto fname = p_data_online->fnames[this_file_idx];
 
 	// FORWARD CLOSURE
 	auto [global_deps, global_visited] =  mmaped_forward_closure(
@@ -1621,23 +1621,15 @@ static PyObject *c_get_subgraph_online(PyObject *self, PyObject *args) {
 	}
 	const auto [edges_label_offsets, edges_label_flat, edges_split_flat] = compute_offsets(edges_split_by_label);
 
-	std::map<uint64_t, uint64_t> report_node_counter;
-	//if (with_node_counter) {
-	//   report_node_counter = p_data_online->subgraph_node_counter;
-	//}
-	return Py_BuildValue("NNNNNKKII",
+	return Py_BuildValue("NNNNNKK",
 			     numpy_ndarray1d(node_labels),
 			     numpy_ndarray2d(edges_split_flat),
 			     numpy_ndarray1d(edges_label_flat),
 			     numpy_ndarray1d(edges_label_offsets),
 			     PyCapsule_New(global_visited, __glob_to_sub_capsule_name, glob_to_sub_destructor),
 			     static_cast<uint64_t>(roots.size()),
-			     global_deps.size(),
-			     max_node_idx - min_node_idx,
-			     max_edge_idx - min_edge_idx );
-//			     numpy_ndarray1d_uint64_of_node(sub_to_glob),
-//			     numpy_ndarray2d(report_node_counter)
-//	    );
+			     global_deps.size());
+
     } catch (const std::invalid_argument &ia) {
 	log_critical("exception caught");
 	log_critical(ia.what());
@@ -1767,22 +1759,56 @@ static PyObject *c_get_proof_step_online(PyObject *self, PyObject *args) {
 	encoded_context.reserve(capnp_context.size());
 
 	std::unordered_map<c_GlobalNode, size_t> global_to_context_idx;
-	for (const auto &node_idx: capnp_context) {
-	    auto res = p_glob_to_sub->find(c_GlobalNode{file_idx, node_idx});
+	for (const auto &node: capnp_context) {
+	    c_FileIndex context_node_file_idx = p_data_online->rel_file_idx.at(file_idx).at(node.getDepIndex());
+	    c_NodeIndex context_node_idx =  node.getNodeIndex();
+	    auto res = p_glob_to_sub->find(c_GlobalNode{context_node_file_idx, context_node_idx});
 	    if (res != p_glob_to_sub->end()) {
-		global_to_context_idx[c_GlobalNode{file_idx, node_idx}] = encoded_context.size();
+		global_to_context_idx[c_GlobalNode{context_node_file_idx, context_node_idx}] = encoded_context.size();
 		encoded_context.emplace_back(static_cast<uint32_t>((*res).second));
 	    } else {
-		log_warning("skipped the context node " + std::to_string(node_idx) +  " is not in the sampled subgraph at"
-			    + p_data_online->fnames.at(file_idx) + " def_node_idx=" + std::to_string(def_node_idx) +
-			    + ", step_idx=" + std::to_string(step_idx) + ", outcome_idx=" + std::to_string(outcome_idx) +
-			    " : max_subgraph_size is too small");
+		std::string state_text = capnp_proof_state.getText();
+		log_warning("the context node " + std::to_string(context_node_file_idx) + "," + std::to_string(context_node_idx) +
+			    " pointed from file " + std::to_string(file_idx) + ":" + p_data_online->fnames.at(file_idx) +
+			    " with depIndex " + std::to_string(node.getDepIndex()) +
+			    " to file " + std::to_string(context_node_file_idx) + ":" + p_data_online->fnames.at(context_node_file_idx) +
+			    " at "
+			    " def_node_idx " + std::to_string(def_node_idx) +
+			    " def name " + std::string(def.getName()) +
+			    " step_idx " + std::to_string(step_idx) + ", outcome_idx=" + std::to_string(outcome_idx) +
+			    " state: "  + state_text +
+			    " root node (dep, idx): " + std::to_string(capnp_proof_state.getRoot().getDepIndex()) +
+			    "," + std::to_string(capnp_proof_state.getRoot().getNodeIndex()) +
+			    " resolved to (global file_idx, idx): " + std::to_string(p_data_online->rel_file_idx.at(file_idx).at(
+											 capnp_proof_state.getRoot().getDepIndex())) +
+			    "," + std::to_string(capnp_proof_state.getRoot().getNodeIndex()) +
+			    " is not found in the subgraph of size " + std::to_string(p_glob_to_sub->size()) + "\n"
+			    " (global file_idx, node_idx) to subgraph node index mapping is: ");
+		log_warning(*p_glob_to_sub);
+		log_warning("all context nodes of this proof state (depIndex, nodeIndex) are:");
+		std::vector<c_GlobalNode> temp1;
+		for (const auto &node1: capnp_context) {
+		    temp1.emplace_back(c_GlobalNode{node1.getDepIndex(), node1.getNodeIndex()});
+		}
+		log_warning(temp1);
+
+		log_warning("all context nodes of this proof state (global file index, nodeIndex) are:");
+		std::vector<c_GlobalNode> temp2;
+		for (const auto &node2: capnp_context) {
+		    temp2.emplace_back(c_GlobalNode{
+			    p_data_online->rel_file_idx.at(file_idx).at(node2.getDepIndex()), node2.getNodeIndex()});
+		}
+		log_warning(temp2);
 	    }
 	}
 	uint32_t encoded_root;
-	auto res = p_glob_to_sub->find(c_GlobalNode{file_idx, capnp_proof_state.getRoot()});
+	auto root = capnp_proof_state.getRoot();
+	c_NodeIndex root_node_idx = root.getNodeIndex();
+	c_FileIndex root_file_idx = p_data_online->rel_file_idx.at(file_idx).at(root.getDepIndex());
+	log_debug("root_file_idx is " + std::to_string(root_file_idx) + " root_node_idx " + std::to_string(root_node_idx));
+	auto res = p_glob_to_sub->find(c_GlobalNode{root_file_idx, root_node_idx });
 	if (res == p_glob_to_sub->end()) {
-	    throw std::invalid_argument("the root is not in the subgraph and can't be encoded (this shouldn't happend for a subgraph of a positive size and indicates a severed bug");
+	    throw std::invalid_argument("the root is not in the subgraph and can't be encoded (this shouldn't happend for a subgraph of a positive size and indicates a severed bug A");
 	} else {
 	    encoded_root = (*res).second;
 	}
@@ -1882,56 +1908,73 @@ static PyObject *c_check(PyObject *self, PyObject *args) {
 
 
 static PyObject * c_load_msg_online(PyObject *self, PyObject *args) {
-    PyObject * p_msg_data;
+    PyObject *capsObj;
+    //PyObject * p_msg_data;
     PyObject * capsObj_glob_to_sub;
     c_FileIndex file_idx;
-    if (!PyArg_ParseTuple(args, "OO!I", &p_msg_data,
+    if (!PyArg_ParseTuple(args, "O!O!I",
+			  &PyCapsule_Type, &capsObj,
 			  &PyCapsule_Type, &capsObj_glob_to_sub, &file_idx)) {
 	return NULL;
     }
+    if (!PyCapsule_IsValid(capsObj, __data_online_capsule_name)) {
+	auto msg = "error: expected " + std::string(__data_online_capsule_name);
+	PyErr_SetString(PyExc_TypeError, msg.c_str());
+	return NULL;
+    }
+
+    if (!PyCapsule_IsValid(capsObj_glob_to_sub, __glob_to_sub_capsule_name)) {
+	auto msg = "error: expected " + std::string(__glob_to_sub_capsule_name);
+	PyErr_SetString(PyExc_TypeError, msg.c_str());
+	return NULL;
+    }
+
     try {
-	if (!PyObject_CheckBuffer(p_msg_data)) {
-	    throw std::invalid_argument("the first argument must be a message supporting buffer protocol");
-	}
-	if (!PyCapsule_IsValid(capsObj_glob_to_sub, __glob_to_sub_capsule_name)) {
-	    auto msg = "error: expected " + std::string(__glob_to_sub_capsule_name);
-	    PyErr_SetString(PyExc_TypeError, msg.c_str());
-	    return NULL;
-	}
+	c_DataOnline *p_data_online = static_cast<c_DataOnline *>(
+	    PyCapsule_GetPointer(capsObj, __data_online_capsule_name));
+	const auto capnp_predict = p_data_online->areaders.at(file_idx)->getRoot<PredictionProtocol::Request>().getPredict();
 
-
-	Py_buffer view;
-	PyObject_GetBuffer(p_msg_data, &view, PyBUF_SIMPLE);
-	const auto array_ptr = kj::ArrayPtr<const capnp::word>(
-		reinterpret_cast<const capnp::word*>(view.buf), view.len / sizeof(capnp::word));
-	capnp::FlatArrayMessageReader msg(array_ptr, capnp::ReaderOptions{SIZE_MAX});
-	const auto capnp_state = msg.getRoot<PredictionProtocol::Request>().getPredict().getState();
-
+	const auto capnp_state = capnp_predict.getState();
 
 	const std::unordered_map<c_GlobalNode, size_t>  * p_glob_to_sub = static_cast<std::unordered_map<c_GlobalNode, size_t>*>(
 	    PyCapsule_GetPointer(capsObj_glob_to_sub,  __glob_to_sub_capsule_name));
 
-
-
 	uint32_t encoded_root;
-	auto res = p_glob_to_sub->find(c_GlobalNode{file_idx, capnp_state.getRoot()});
+	auto root = capnp_state.getRoot();
+	c_NodeIndex root_node_idx = root.getNodeIndex();
+	c_FileIndex root_dep_idx = root.getDepIndex();
+	if (!(root_dep_idx <= 1)) {
+	    throw std::invalid_argument("error: received rootDepIndex " + std::to_string(root_dep_idx) +
+					" but only values 0 and 1 are allowed by the Request Protocol ");
+	}
+	c_FileIndex root_file_idx = p_data_online->rel_file_idx.at(file_idx).at(root_dep_idx);
+	auto res = p_glob_to_sub->find(c_GlobalNode{root_file_idx, root_node_idx});
+	log_debug("file_idx " + std::to_string(file_idx) + " root_node_idx " + std::to_string(root_node_idx));
 	if (res != p_glob_to_sub->end()) {
 	    encoded_root = (*res).second;
 	} else {
-	    throw std::invalid_argument("the root is not in the subgraph and can't be encoded (this shouldn't happend for a subgraph of a positive size and indicates a severed bug");
+	    log_critical("file_idx " + std::to_string(file_idx) + " root_node_idx " + std::to_string(root_node_idx) +
+			 " root_dep_idx " + std::to_string(root_dep_idx) +
+			 " root_file_idx " + std::to_string(root_file_idx));
+	    throw std::invalid_argument("the root is not in the subgraph and can't be encoded (this shouldn't happend for a subgraph of a positive size and indicates a severe bug B");
 	}
-
-
 
 	std::vector<uint32_t> encoded_context;
 	std::vector<uint32_t> context;
-	for (const auto &node_idx: capnp_state.getContext()) {
-	    auto res = p_glob_to_sub->find(c_GlobalNode{file_idx, node_idx});
+	for (const auto &node: capnp_state.getContext()) {
+	    c_NodeIndex node_node_idx = node.getNodeIndex();
+	    c_FileIndex node_dep_idx = node.getDepIndex();
+	    if (!(node_dep_idx <= 1)) {
+		throw std::invalid_argument("error: received context node depIndex " + std::to_string(node_dep_idx) +
+					" but only values 0 and 1 are allowed by the Request Protocol ");
+	    }
+	    c_FileIndex node_file_idx = p_data_online->rel_file_idx.at(file_idx).at(node_dep_idx);
+	    auto res = p_glob_to_sub->find(c_GlobalNode{node_file_idx, node_node_idx});
 	    if (res != p_glob_to_sub->end()) {
-		context.emplace_back(node_idx);
+		context.emplace_back(node_node_idx);
 		encoded_context.emplace_back(static_cast<uint32_t>((*res).second));
 	    } else {
-	    log_warning("skipped the context node " + std::to_string(node_idx) + " is not in the sampled subgraph at "
+	    log_warning("skipped the context node " + std::to_string(node_node_idx) + " is not in the sampled subgraph at "
 			+ " msg idx " + std::to_string(file_idx) );
 	    }
 	}
