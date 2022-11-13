@@ -114,6 +114,7 @@ setup(
         'tensor2tensor',
         'dataclasses-json',
         'pyyaml',
-        'graphviz'
+        'graphviz',
+        'pytact @ git+https://git@github.com/coq-tactician/coq-tactician-reinforce#f6992c129ad99aa47fb80a6322f6ead5e86bda92'
     ]
 )
