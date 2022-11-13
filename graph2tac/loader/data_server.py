@@ -98,15 +98,15 @@ def process_def_previouses(buf_list, message_type, def_idx_to_global_context,
         p_file_idx = local_to_global[def_file_idx][dep_idx]
         previous_nodes.append((p_file_idx, representatives[p_file_idx]))
 
-    def_global_context = set()
+    def_global_context = np.array([], dtype=np.uint32)
     for previous_global_node in previous_nodes:
         previous_idx = global_node_to_def_idx[previous_global_node]
 
         process_def_previouses(buf_list, message_type, def_idx_to_global_context,
                                def_idx_to_global_node, global_node_to_def_idx, previous_idx, local_to_global, representatives)
 
-        def_global_context.add(previous_idx)
-        def_global_context.update(def_idx_to_global_context[previous_idx])
+        def_global_context = np.union1d(np.array([previous_idx], dtype=np.uint32), def_global_context)
+        def_global_context = np.union1d(def_idx_to_global_context[previous_idx], def_global_context)
 
     def_idx_to_global_context[def_idx] = def_global_context
 
@@ -143,8 +143,6 @@ def build_def_index(global_def_table,
     for (def_idx, def_global_node) in enumerate(def_idx_to_global_node):
         process_def_previouses(buf_list, message_type, def_idx_to_global_context, def_idx_to_global_node, global_node_to_def_idx, def_idx, local_to_global, representatives)
 
-    for idx, def_global_context in enumerate(def_idx_to_global_context):
-        def_idx_to_global_context[idx] = np.fromiter(def_global_context, np.uint32, count=len(def_global_context))
     return DefIndexTable(def_idx_to_global_node, global_node_to_def_idx, def_idx_to_name, def_idx_to_hash, def_idx_in_spine, def_idx_to_global_context)
 
 
