@@ -36,7 +36,19 @@ from graph2tac.loader.clib.loader import (
     get_proof_step_online_text,
     get_graph_constants_online
 )
-from graph2tac.loader.data_classes import *
+from graph2tac.loader.data_classes import (
+    LoaderGraph,
+    TF2Graph,
+    TFGNNGraph,
+    ProofstateContext,
+    ProofstateMetadata,
+    LoaderAction,
+    LoaderDefinition,
+    LoaderProofstate,
+    GraphConstants,
+    DataPoint,
+    DefIndexTable)
+    
 
 def find_bin_files(data_dir: Path) -> List[Path]:
     """
@@ -111,8 +123,6 @@ def process_def_previouses(buf_list, message_type, def_idx_to_global_context,
     def_idx_to_global_context[def_idx] = def_global_context
 
 
-
-
 def build_def_index(global_def_table,
                     global_nodes_in_spine: set[tuple[int,int]],
                     buf_list,
@@ -146,35 +156,95 @@ def build_def_index(global_def_table,
     return DefIndexTable(def_idx_to_global_node, global_node_to_def_idx, def_idx_to_name, def_idx_to_hash, def_idx_in_spine, def_idx_to_global_context)
 
 
-
-
-
-def def_hash_of_tactic_point(def_index_table, tactic_point):
-    def_idx = def_index_table.global_node_to_idx[(tactic_point[2].item(), tactic_point[3].item())]
-
-    return def_index_table.idx_to_hash[def_idx]
-
-
-def def_name_of_tactic_point(def_index_table, tactic_point):
-    def_idx = def_index_table.global_node_to_idx[(tactic_point[2].item(), tactic_point[3].item())]
-    return def_index_table.idx_to_name[def_idx]
-
-
 def def_hash_split(tactical_point, prob: List[float], seed: int) -> int:
     return get_split_label(tactical_point[8].item(), prob, seed)
 
 
-def get_tactic_hash_num_args_collision(tactical_data, fnames):
-    tactical_data = tactical_data[np.lexsort((tactical_data[:,1], tactical_data[:,0]))]
-    data_error_report = []
-    for tactic_group_by_hash in np.split(tactical_data, np.unique(tactical_data[:, 0], axis=0, return_index=True)[1][1:]):
-        tactic_hash_arg_collisions = np.unique(tactic_group_by_hash[:,0:2], axis=0, return_index=True)[1]
-        if len(tactic_hash_arg_collisions) != 1:
-            collision_examples = tactic_group_by_hash[tactic_hash_arg_collisions].tolist()
-            for collision_example in collision_examples:
-                tactic_hash, num_args, file_idx, def_idx, proof_step_idx, outcome_idx, file_idx_root, node_idx_root = collision_example
-                data_error_report.append(f"tactic_hash {tactic_hash}, num_args {num_args}, file {fnames[file_idx]}, def {def_idx}, proof_step {proof_step_idx}, outcome {outcome_idx}, file_idx_root {file_idx_root}, node_idx_root {node_idx_root}")
-    return data_error_report
+class DataIndex:
+    """
+    a convenient wrapper on top of np.array for named access to dataindex
+    """
+    def __init__(self,
+                 base: NDArray,
+                 def_index_table: DefIndexTable):
+        self.base = base
+        self._def_index_table = def_index_table
+
+    @staticmethod
+    def get_tactic_hash_num_args_collision(tactical_data, fnames):
+        tactical_data = tactical_data[np.lexsort((tactical_data[:,1], tactical_data[:,0]))]
+        data_error_report = []
+        for tactic_group_by_hash in np.split(tactical_data, np.unique(tactical_data[:, 0], axis=0, return_index=True)[1][1:]):
+            tactic_hash_arg_collisions = np.unique(tactic_group_by_hash[:,0:2], axis=0, return_index=True)[1]
+            if len(tactic_hash_arg_collisions) != 1:
+                collision_examples = tactic_group_by_hash[tactic_hash_arg_collisions].tolist()
+                for collision_example in collision_examples:
+                    tactic_hash, num_args, file_idx, def_idx, proof_step_idx, outcome_idx, file_idx_root, node_idx_root = collision_example
+                    data_error_report.append(f"tactic_hash {tactic_hash}, num_args {num_args}, file {fnames[file_idx]}, def {def_idx}, proof_step {proof_step_idx}, outcome {outcome_idx}, file_idx_root {file_idx_root}, node_idx_root {node_idx_root}")
+        return data_error_report
+
+        
+
+    @staticmethod
+    def initialize_from_buffers(buf_list,
+                                fnames,
+                                local_to_global_files,
+                                global_def_table,
+                                def_index_table: DefIndexTable):
+        tactical_data = []
+        for file_idx, (buf_object, fname, (def_table, representative)) in enumerate(
+                zip(buf_list, map(os.fsencode, fnames), global_def_table)):
+            (tactic_hashes,
+             number_arguments,
+             def_node_indexes,
+             proof_step_indexes,
+             outcome_indexes,
+             local_dep_roots,
+             node_idx_roots
+             ) = get_buf_tactics(buf_object, def_table[0], fname)
+            file_idx_roots = local_to_global_files[file_idx][local_dep_roots]
+            file_indexes = np.full(def_node_indexes.shape, file_idx, dtype=np.uint64)
+            tactical_data.append(np.transpose(np.stack([
+                tactic_hashes,
+                number_arguments,
+                file_indexes,
+                def_node_indexes,
+                proof_step_indexes,
+                outcome_indexes,
+                file_idx_roots,
+                node_idx_roots])))
+
+        if len(tactical_data) == 0:
+            tactical_data = np.zeros(shape=(0,8), dtype=np.uint64)
+            max_num_args = None
+        else:
+            tactical_data = np.concatenate(tactical_data)
+            max_num_args  = np.max(tactical_data[:,1]).item()
+
+        data_error_report = DataIndex.get_tactic_hash_num_args_collision(tactical_data, fnames)
+        if data_error_report:
+            raise Exception(f"the data contains tactic_hash num_args collisions, for example \n"
+                            + "\n".join(data_error_report))
+
+        def def_hash_of_tactic_point(def_index_table, tactic_point):
+            def_idx = def_index_table.global_node_to_idx[(tactic_point[2].item(), tactic_point[3].item())]
+            return def_index_table.idx_to_hash[def_idx]
+        
+        def_hashes = np.array([def_hash_of_tactic_point(def_index_table, tactical_point)
+                               for tactical_point in tactical_data])
+        def_hashes = np.reshape(def_hashes, (len(tactical_data),1))
+        base = np.concatenate([tactical_data, def_hashes], axis=1)
+        return DataIndex(base, def_index_table)
+
+    def def_name(self, idx):
+        global_node = (self.base[idx,2], self.base[idx,3])
+        def_idx = self._def_index_table.global_node_to_idx[global_node]
+        return self._def_index_table.idx_to_name[def_idx]
+
+    def def_hash(self, idx):
+        global_node = (self.base[idx,2], self.base[idx,3])
+        def_idx = self._def_index_table.global_node_to_idx[global_node]
+        return self._def_index_table.idx_to_hash[def_idx]
 
 
 class Data2:
@@ -182,15 +252,15 @@ class Data2:
     this is low-level api for refactored online loader from mmaped capnp bin files
     """
 
-    # TODO (after TF2 deprecation): Remove data-splitting functionality, training logic should take care of this
     def __init__(self, data_dir, restrict_to_spine, bfs_option, max_subgraph_size, split=(8,1,1), split_random_seed=0):
         """
-
         """
         self.__bfs_option = bfs_option
         self.__max_subgraph_size = max_subgraph_size
         self.__split = split
         self.__split_random_seed = split_random_seed
+        self.__split_fun = lambda x: def_hash_split(x, self.__split, self.__split_random_seed)
+
         t00 = time.time()
         print(f"LOADING | indexing and top sorting bin files in {data_dir}...", end='')
         self.__fnames = top_sort_dataset_modules(data_dir)
@@ -229,49 +299,23 @@ class Data2:
         print(f"Indexed {len(self.__def_index_table.idx_to_global_node)} definitions in {t1-t0:.6f} seconds.")
         print(f"LOADING | indexing all tactical action-outcomes in {len(self.__fnames)} files...", end='')
         t0 = time.time()
-        self.__tactical_data = []
-        for file_idx, (buf_object, fname, (def_table, representative)) in enumerate(zip(buf_list, map(os.fsencode, self.__fnames), self.__global_def_table)):
-            (tactic_hashes,
-             number_arguments,
-             def_node_indexes,
-             proof_step_indexes,
-             outcome_indexes,
-             local_dep_roots,
-             node_idx_roots
-             ) = get_buf_tactics(buf_object, def_table[0], fname)
-            file_idx_roots = self.__local_to_global_files[file_idx][local_dep_roots]
-            file_indexes = np.full(def_node_indexes.shape, file_idx, dtype=np.uint64)
-            self.__tactical_data.append(np.transpose(np.stack([tactic_hashes, number_arguments, file_indexes, def_node_indexes, proof_step_indexes, outcome_indexes, file_idx_roots, node_idx_roots])))
 
-        if len(self.__tactical_data) == 0:
-            self.__tactical_data = np.zeros(shape=(0,8), dtype=np.uint64)
-            self.__max_num_args = None
-        else:
-            self.__tactical_data = np.concatenate(self.__tactical_data)
-            self.__max_num_args  = np.max(self.__tactical_data[:,1]).item()
-
-        data_error_report = get_tactic_hash_num_args_collision(self.__tactical_data, self.__fnames)
-        if data_error_report:
-            raise Exception(f"the data contains tactic_hash num_args collisions, for example \n" + "\n".join(data_error_report))
-        # use this line to order and index tactics by hash
-        # self.__tdataidx = np.unique(self.__tactical_data[:,0], return_index=True)[1].astype(np.uint64)
-
-        # use this line to order and index tactics chronologically
-        self.__tdataidx = np.sort(np.unique(self.__tactical_data[:,0], return_index=True)[1]).astype(np.uint64)
-
-        tactic_hashes = self.__tactical_data[self.__tdataidx, 0]
-        tactic_indexes = np.arange(len(tactic_hashes), dtype=np.uint32)
-        def_hashes = np.array([def_hash_of_tactic_point(self.__def_index_table, tactical_point) for tactical_point in self.__tactical_data])
-        def_hashes = np.reshape(def_hashes, (len(self.__tactical_data),1))
-        self.__tactical_data = np.concatenate([self.__tactical_data, def_hashes], axis=1)
-
+        self.__data_index = DataIndex.initialize_from_buffers(buf_list, self.__fnames,
+                                                             self.__local_to_global_files,
+                                                             self.__global_def_table, self.__def_index_table)
         t1 = time.time()
-        print(f"LOADING | Indexed {len(self.__tactical_data)} tactical action-outcomes in {t1-t0:.6f} seconds.")
-
+        print(f"LOADING | Indexed {len(self.__data_index.base)} tactical action-outcomes in {t1-t0:.6f} seconds.")
 
         print(f"LOADING | mmaping all capnp files and building data loader hash tables...", end='')
         t0 = time.time()
 
+        # use this line to order and index tactics by hash
+        # self.__tdataidx = np.unique(self.__tactical_data[:,0], return_index=True)[1].astype(np.uint64)
+
+        # use this line to order and index tactics chronologically
+        self.__tdataidx = np.sort(np.unique(self.__data_index.base[:,0], return_index=True)[1]).astype(np.uint64)
+        tactic_hashes = self.__data_index.base[self.__tdataidx, 0]
+        tactic_indexes = np.arange(len(tactic_hashes), dtype=np.uint32)
 
         self.__c_data_online = build_data_online_from_buf(
             self.__def_idx_to_node,
@@ -308,14 +352,14 @@ class Data2:
         print(f"LOADING | DataServer is fully initialized in {t01-t00:.6f} seconds and is ready to stream.")
 
     def tactical_data(self):
-        return self.__tactical_data
+        return self.__data_index.base
 
     def graph_constants(self):
         # if we want to switch to chronological order of tactics, let's use this:
-        # tactics_args = self.__tactical_data[np.sort(np.unique(self.__tactical_data[:,0], return_index=True)[1]),:2]
+        # tactics_args = self.__data_index.base[np.sort(np.unique(self.__data_index.base[:,0], return_index=True)[1]),:2]
 
         tdataidx = self.__tdataidx
-        thash_narg = self.__tactical_data[tdataidx, :2]
+        thash_narg = self.__data_index.base[tdataidx, :2]
         uniquetac_idx = np.arange(thash_narg.shape[0], dtype=thash_narg.dtype).reshape((thash_narg.shape[0], 1))
         tdataidx_reshaped = tdataidx.reshape(thash_narg.shape[0],1)
         idx_thash_narg_tdataidx = np.concatenate([uniquetac_idx, thash_narg, tdataidx_reshaped], axis=1)
@@ -354,12 +398,9 @@ class Data2:
     def def_index_table(self):
         return self.__def_index_table
 
-    def def_name_of_tactic_point(self, data_point_idx):
-        return def_name_of_tactic_point(self.__def_index_table, self.__tactical_data[data_point_idx])
-
     # TODO(jrute): This should return a dataclass if it is a public API
     def get_proof_step_text(self, data_point_idx) -> tuple[bytes, bytes, bytes, bytes]:
-        tactic_point = self.__tactical_data[data_point_idx]
+        tactic_point = self.__data_index.base[data_point_idx]
         state_text, action_base_text, action_interm_text, action_text = get_proof_step_online_text(self.__c_data_online, tactic_point[2:6])
         return state_text, action_base_text, action_interm_text, action_text
 
@@ -368,7 +409,7 @@ class Data2:
         data_point_idx: int,
         skip_text: bool=False
     ) -> DataPoint:
-        tactic_point = self.__tactical_data[data_point_idx]
+        tactic_point = self.__data_index.base[data_point_idx]
         tactic_hash, num_args, file_idx, def_node_idx, proof_step_idx, outcome_idx, file_idx_root, node_idx_root, def_hash = tactic_point
         res = get_subgraph_online(
             self.__c_data_online,
@@ -377,10 +418,7 @@ class Data2:
         nodes, edges, edge_labels, edges_offset, global_visited, _, _ = res
 
         context, root, tactic_index, args = get_proof_step_online(self.__c_data_online, tactic_point[2:6], global_visited)
-
-
-        def_name = def_name_of_tactic_point(self.__def_index_table, tactic_point)
-
+        def_name = self.__data_index.def_name(data_point_idx)
         if not skip_text:
             state_text, action_base_text, action_interm_text, action_text = self.get_proof_step_text(data_point_idx)
         else:
@@ -411,7 +449,6 @@ class Data2:
             file_name=self.__fnames[file_idx]
         )
 
-    # TODO (after TF2 deprecation): Remove data-splitting functionality, training logic should take care of this
     def select_data_points(self, split_fun: Callable[[...], int], label: int) -> List[int]:
         """
         returns a list of datapoint indices that have given label
@@ -421,21 +458,18 @@ class Data2:
         since datapoint has all fields addressing the datapoint (definition, file, proof step etc)
         you can be flexible with the splits
         """
-        return [i for i, tactical_point in enumerate(self.__tactical_data) if split_fun(tactical_point) == label]
+        return [i for i, tactical_point in enumerate(self.__data_index.base) if split_fun(tactical_point) == label]
 
-    # TODO (after TF2 deprecation): Remove data-splitting functionality, training logic should take care of this
     def data_train(self):
-        return self.select_data_points(split_fun=lambda x: def_hash_split(x, self.__split, self.__split_random_seed),
+        return self.select_data_points(split_fun=self.__split_fun,
                                        label=0)
 
-    # TODO (after TF2 deprecation): Remove data-splitting functionality, training logic should take care of this
     def data_valid(self):
-        return self.select_data_points(split_fun=lambda x: def_hash_split(x, self.__split, self.__split_random_seed),
+        return self.select_data_points(split_fun=self.__split_fun,
                                        label=1)
 
-    # TODO (after TF2 deprecation): Remove data-splitting functionality, training logic should take care of this
     def data_test(self):
-        return self.select_data_points(split_fun=lambda x: def_hash_split(x, self.__split, self.__split_random_seed),
+        return self.select_data_points(split_fun=self.__split_fun,
                                        label=2)
 
     def step_state(self, data_point_idx: int) -> LoaderProofstate:
@@ -473,7 +507,7 @@ class Data2:
         """
         return dynamic global context as a numpy array of indices into GraphConstants.global_context
         """
-        _, _, file_idx, def_node_idx, _, _, _, _, _  = self.__tactical_data[data_point_idx]
+        _, _, file_idx, def_node_idx, _, _, _, _, _  = self.__data_index.base[data_point_idx]
         def_idx = self.__def_index_table.global_node_to_idx[(file_idx, def_node_idx)]
         # def_name = self.__def_index_table.idx_to_name[def_idx]
         def_global_context = self.__def_index_table.idx_to_global_context[def_idx]
@@ -540,6 +574,7 @@ class Iterator:
 
     def __len__(self):
         return self.__size
+
 
 
 class DataServer:
