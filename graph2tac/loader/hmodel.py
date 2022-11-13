@@ -56,17 +56,21 @@ def args_decode(args,
 
 
 class Train:
-    def __init__(self, data_dir: Path, max_subgraph_size, with_context, loader, shuffled, dry):
+    def __init__(self, data_dir: Path, max_subgraph_size, with_context, loader, shuffled, dry,
+                 restrict_to_filenames):
         if loader == 'clib':
             from graph2tac.loader.data_server import DataServer
         elif loader == 'python':
             from graph2tac.loader.py_data_server import DataServer
 
+        print("restrict_to_filenames", restrict_to_filenames)
         self._data_server = DataServer(data_dir=data_dir,
                                        split=(1,0,0),
                                        bfs_option=True,
                                        restrict_to_spine=False,
-                                       max_subgraph_size=max_subgraph_size)
+                                       max_subgraph_size=max_subgraph_size,
+                                       restrict_to_filenames=restrict_to_filenames
+                                       )
         self._data = {}
         self._global_context = self._data_server.graph_constants().global_context
         self._tactic_index_to_hash = self._data_server.graph_constants().tactic_index_to_hash
@@ -231,13 +235,23 @@ def main():
                         action='store_true',
                         help='shuffle the training dataset')
 
+    parser.add_argument('--restrict_to_filenames',
+                        type=str,
+                        default='.*',
+                        help=("python re regexp expression defining selector mask "
+                              "on relative filenames in data_dir "
+                              "for example, 'coq-tactician-stdlib.dev/.*'")
+                        )
+                              
+
 
     args = parser.parse_args()
     if not args.loader in ['clib', 'python']:
         raise ValueError(f"provided loader argument {args.loader} is not in the supported list: clib, python")
 
     trainer = Train(Path(args.data_dir).expanduser().absolute(),
-                    args.max_subgraph_size, args.with_context, args.loader, args.shuffled, args.dry)
+                    args.max_subgraph_size, args.with_context, args.loader,
+                    args.shuffled, args.dry, args.restrict_to_filenames)
 
     trainer.train()
 

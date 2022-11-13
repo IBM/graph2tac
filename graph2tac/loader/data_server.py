@@ -11,6 +11,7 @@ import os
 import random
 import mmap
 import functools
+import re
 from pathlib import Path
 
 import numpy as np
@@ -48,7 +49,7 @@ from graph2tac.loader.data_classes import (
     GraphConstants,
     DataPoint,
     DefIndexTable)
-    
+
 
 def find_bin_files(data_dir: Path) -> List[Path]:
     """
@@ -64,9 +65,7 @@ def find_binx_files(data_dir: Path) -> List[Path]:
     return [Path(data_dir).joinpath(f + '.binx') for f in get_all_fnames(data_dir, '**/*.binx')]
 
 
-def top_sort_dataset_modules(data_dir: Path) -> List[Path]:
-    fnames = find_bin_files(data_dir)
-    root_dir = data_dir
+def top_sort_dataset_modules(fnames: List[Path], root_dir: Path) -> List[Path]:
     comp = files_get_scc_components(os.fsencode(root_dir), list(map(os.fsencode, fnames)))
     return list(map(lambda x: fnames[x], comp))
 
@@ -183,7 +182,7 @@ class DataIndex:
                     data_error_report.append(f"tactic_hash {tactic_hash}, num_args {num_args}, file {fnames[file_idx]}, def {def_idx}, proof_step {proof_step_idx}, outcome {outcome_idx}, file_idx_root {file_idx_root}, node_idx_root {node_idx_root}")
         return data_error_report
 
-        
+
 
     @staticmethod
     def initialize_from_buffers(buf_list,
@@ -229,7 +228,7 @@ class DataIndex:
         def def_hash_of_tactic_point(def_index_table, tactic_point):
             def_idx = def_index_table.global_node_to_idx[(tactic_point[2].item(), tactic_point[3].item())]
             return def_index_table.idx_to_hash[def_idx]
-        
+
         def_hashes = np.array([def_hash_of_tactic_point(def_index_table, tactical_point)
                                for tactical_point in tactical_data])
         def_hashes = np.reshape(def_hashes, (len(tactical_data),1))
@@ -246,14 +245,29 @@ class DataIndex:
         def_idx = self._def_index_table.global_node_to_idx[global_node]
         return self._def_index_table.idx_to_hash[def_idx]
 
+def select_files(fnames: List[Path],
+                 data_dir: Path,
+                 restrict_to_filenames):
+    return [ data_dir / fname for fname in fnames if
+             re.fullmatch(restrict_to_filenames, str(fname.relative_to(data_dir)))]
+
+
+def col_fmt(fnames, data_dir):
+    return '\n' + '\n'.join(str(fname.relative_to(data_dir)) for fname in fnames) + '\n'
+
 
 class Data2:
     """
     this is low-level api for refactored online loader from mmaped capnp bin files
     """
 
-    def __init__(self, data_dir, restrict_to_spine, bfs_option, max_subgraph_size, split=(8,1,1), split_random_seed=0):
+    def __init__(self, data_dir, restrict_to_spine, bfs_option, max_subgraph_size,
+                 split=(8,1,1), split_random_seed=0,
+                 restrict_to_filenames: str = ".*"
+                 ):
         """
+        restrict_to_modules is a regexp that defines a filter that applies
+        to the list of all bin files found recursively in the data_dir
         """
         self.__bfs_option = bfs_option
         self.__max_subgraph_size = max_subgraph_size
@@ -262,9 +276,21 @@ class Data2:
         self.__split_fun = lambda x: def_hash_split(x, self.__split, self.__split_random_seed)
 
         t00 = time.time()
-        print(f"LOADING | indexing and top sorting bin files in {data_dir}...", end='')
-        self.__fnames = top_sort_dataset_modules(data_dir)
-        print(f"done.")
+        print(f"LOADING | collecting bin files in {data_dir}")
+        all_bin_files = find_bin_files(data_dir)
+        all_bin_files_top_sorted = top_sort_dataset_modules(all_bin_files, data_dir)
+        print(f"LOADING | collected {len(all_bin_files_top_sorted)} files: {col_fmt(all_bin_files_top_sorted, data_dir)}")
+
+        fnames = select_files(all_bin_files, data_dir, restrict_to_filenames)
+
+        print(f"LOADING | using selector mask {restrict_to_filenames}")
+        print(f"LOADING | selected for loading {len(fnames)} files {col_fmt(fnames, data_dir)}:")
+
+
+        print(f"LOADING | top sorting selected files in {data_dir}...")
+
+        self.__fnames = top_sort_dataset_modules(fnames, data_dir)
+
         print(f"LOADING | preparing data from {len(self.__fnames)} files.")
 
         print(f"LOADING | constructing file reference table...", end='')
@@ -590,9 +616,23 @@ class DataServer:
                  bfs_option = True,
                  split_random_seed = 0,
                  restrict_to_spine: bool = False,
+                 restrict_to_filenames: str = ".*"
     ):
         """
         - data_dir is the directory containing capnp schema file and *.bin files
+
+        - restrict to filenames is a python regexp for the mask on filenames relative
+        to data_dir that will be loaded and processed by the loader. The regexp needs
+        to be fullmatch to the relative filename
+
+        using the python re module regexp syntax of the OR regexp operator you can construct
+        masks that select on several prefix package names
+
+        for example, to select only stdlib package for training use
+        restrict_to_filenames = "coq-tactician-stdlib.dev/.*"
+
+        not selected files remain invisible to the loader
+        the (train, valid, test) split applies to the datapoints in selected files
 
         - split is a len 3 tuple of integers defining the relative
         proportion of split as (train, valid, test).
@@ -603,7 +643,7 @@ class DataServer:
         ignore_def_hash: used uint64 of (file_idx, node_idx) instead of def hash
         for internal def tables
         """
-        self.__online_data = Data2(data_dir, restrict_to_spine, bfs_option, max_subgraph_size, split, split_random_seed=split_random_seed)
+        self.__online_data = Data2(data_dir, restrict_to_spine, bfs_option, max_subgraph_size, split, split_random_seed=split_random_seed, restrict_to_filenames=restrict_to_filenames)
         self.__cluster_subgraphs = None
 
     # TODO (after TF2 deprecation): Remove this API, data should be accessible in bulk, use Data2 for debugging
