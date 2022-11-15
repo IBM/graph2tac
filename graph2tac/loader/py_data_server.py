@@ -58,6 +58,9 @@ class DataServer:
                 file_data = self._data[name]
                 self._load_file(file_data)
 
+        for fname self._data.keys():
+            self._fname_to_global_ctx[fname] = self._get_fname_global_ctx(str(fname))
+
     def graph_constants(self):
         total_node_label_num = len(self._node_i_to_name)
         return GraphConstants(
@@ -89,6 +92,9 @@ class DataServer:
         self._tactic_i_to_hash = []
         self._proof_steps : list[tuple[Outcome, Definition, int]] = []
         self._def_clusters : list[list[Definition]] = []
+        self._fname_to_spine : dict[str, NDArray[np.uint32]] = dict()
+        self._fname_to_recdeps : dict[str, tuple[list[str],set[str]]] = dict()
+        self._fname_to_global_ctx : dict[str, NDArray[np.uint32]] = dict()
 
     def _initialize_edge_labels(self):
         total_labels = len(graph_api_capnp.EdgeClassification.schema.enumerants)
@@ -114,6 +120,7 @@ class DataServer:
         self._edge_label_num = edge_label_num
         
     def _load_file(self, file_data):
+        fname = str(file_data.file_name)
         # load proof steps
         for d in file_data.definitions(spine_only = self.restrict_to_spine):
             self._register_definition(d)
@@ -123,15 +130,45 @@ class DataServer:
                 if tactic_usage.tactic is None: continue
                 self._register_tactic(tactic_usage)
                 for outcome in tactic_usage.outcomes:
-                    self._proof_steps.append((outcome,d,index))
+                    self._proof_steps.append((fname,outcome,d,index))
 
         # load clusters
         self._def_clusters.extend(file_data.clustered_definitions())
 
         # set node_i_in_spine
+        spine = []
         for d in file_data.definitions(spine_only = True, across_files = False):
             node_i = self._def_node_to_i[d.node]
+            spine.append(node_i)
             self._node_i_in_spine[node_i] = True
+        self.fname_to_spine[str(file_data.filename)] = np.array(spine, dtype = np.uint32)
+
+    def get_recdeps(self, fname : str):
+        res = self._fname_to_recdeps.get(fname, None)
+        if res is not None: return res
+
+        data = self._data[fname]
+        deps_list = []
+        deps_set = []
+        for dep in data.dependencies():
+            dep = str(dep)
+            if dep in deps_set: continue
+            deps_list.append(dep)
+            deps_set.append(dep)
+            subdeps_list = self.get_recdeps(dep)
+            deps_list.extend(filter(lambda x: x not in deps_set, subdeps_list))
+            deps_set.update(subdeps_list)
+        self._fname_to_recdeps[fname] = deps_list
+        return deps_list
+
+    def _get_fname_global_ctx(self, fname):
+        dep_fnames = self.get_recdeps(fname)
+        if not dep_fnames:
+            return np.zeros([0], dtype = uint32)
+        return np.concatenate([
+            self.fname_to_spine[dep_fname]
+            for dep_fname in dep_fnames
+        ])
 
     def _register_definition(self, d):
         node = d.node
@@ -210,7 +247,7 @@ class DataServer:
         return graph, node_to_i
 
     def _datapoint_graph(self, i):
-        proof_step, definition, index = self._proof_steps[i]
+        fname, proof_step, definition, index = self._proof_steps[i]
         graph, node_to_i = self._downward_closure(
             [proof_step.before.root]
         )
@@ -219,8 +256,12 @@ class DataServer:
         local_context_i = [node_to_i[n] for n in local_context]
         available_global_context = [
             self._def_node_to_i[ctx_def.node] - self._base_node_label_num
-            for ctx_def in definition.global_context()
+            for ctx_def in definition.global_context(across_files = False)
         ]
+        available_global_context = np.concatenate([
+            self._fname_to_global_ctx[fname],
+            np.array(available_global_context, dtype = np.uint32),
+        ])
 
         context = ProofstateContext(
             local_context=np.array(local_context_i, dtype = np.uint32),
@@ -269,14 +310,14 @@ class DataServer:
         return proofstate, action, i
 
     def _datapoint_text(self, i):
-        proof_step, _, _ = self._proof_steps[i]
+        _, proof_step, _, _ = self._proof_steps[i]
         state_text = proof_step.before.text
         label_text = proof_step.tactic.text
         return state_text, label_text
 
     def _select_data_points(self, label):
         return [
-            i for i,(_,d,_) in enumerate(self._proof_steps)
+            i for i,(_,_,d,_) in enumerate(self._proof_steps)
             if get_split_label(
                     np.array(d.node.identity, dtype = np.uint64).item(),
                     self.split, self.split_random_seed
