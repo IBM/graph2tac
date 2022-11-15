@@ -58,6 +58,11 @@ class DataServer:
                 file_data = self._data[name]
                 self._load_file(file_data)
 
+        # precalculate def_file_ctx in a forward order to prevent stack overflow
+        for cluster in self._def_clusters:
+            for d in cluster:
+                self.get_def_file_ctx(d)
+
     def graph_constants(self):
         total_node_label_num = len(self._node_i_to_name)
         return GraphConstants(
@@ -146,7 +151,7 @@ class DataServer:
             self._repr_to_spine[r] = np.array(spine, dtype = np.uint32)
             self._repr_to_filedeps[r] = filedeps
 
-    def get_recdeps(self, representative : Definition):
+    def get_recdeps(self, representative):
         res = self._repr_to_recdeps.get(representative, None)
         if res is not None: return res
 
@@ -160,24 +165,24 @@ class DataServer:
         self._repr_to_recdeps[representative] = deps_list
         return deps_list
 
-    def get_def_file_ctx(self, definition : Definition):
-        res = self._def_to_file_ctx.get(res, None)
+    def get_def_file_ctx(self, definition):
+        res = self._def_to_file_ctx.get(definition, None)
         if res is not None: return res
 
         if definition.previous is not None:
-            prev_filedeps, prev_filectx = get_def_file_ctx(definition.previous)
+            prev_filedeps, prev_filectx = self.get_def_file_ctx(definition.previous)
         else:
-            prev_filedeps, prev_filectx = [], np.array([0], dtype = uint32)
+            prev_filedeps, prev_filectx = [], np.array([0], dtype = np.uint32)
 
         if not definition.external_previous:
-            filedeps, files_ctx = prev_filedeps, prev_filectx
+            filedeps, filectx = prev_filedeps, prev_filectx
         else:
             filedeps = list(prev_filedeps)
             filedeps_s = set(prev_filedeps)
             for dep in definition.external_previous:
                 if dep in filedeps_s: continue
                 subdeps_list = self.get_recdeps(dep)
-                filedeps.extend(filter(lambda x: x not in deps_set, subdeps_list))
+                filedeps.extend(filter(lambda x: x not in filedeps_s, subdeps_list))
                 filedeps_s.update(subdeps_list)
 
             if not filedeps: filectx = prev_filectx
@@ -187,7 +192,7 @@ class DataServer:
             ])
 
         res = filedeps, filectx
-        self._def_to_file_ctx = res        
+        self._def_to_file_ctx[definition] = res        
         return res
 
     def _register_definition(self, d):
