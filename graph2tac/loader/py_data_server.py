@@ -58,8 +58,8 @@ class DataServer:
                 file_data = self._data[name]
                 self._load_file(file_data)
 
-        for fname self._data.keys():
-            self._fname_to_global_ctx[fname] = self._get_fname_global_ctx(str(fname))
+        for fname in self._data.keys():
+            self._fname_to_global_ctx[fname] = self._get_fname_global_ctx(fname)
 
     def graph_constants(self):
         total_node_label_num = len(self._node_i_to_name)
@@ -120,7 +120,7 @@ class DataServer:
         self._edge_label_num = edge_label_num
         
     def _load_file(self, file_data):
-        fname = str(file_data.file_name)
+        fname = file_data.filename
         # load proof steps
         for d in file_data.definitions(spine_only = self.restrict_to_spine):
             self._register_definition(d)
@@ -141,20 +141,20 @@ class DataServer:
             node_i = self._def_node_to_i[d.node]
             spine.append(node_i)
             self._node_i_in_spine[node_i] = True
-        self.fname_to_spine[str(file_data.filename)] = np.array(spine, dtype = np.uint32)
+        self._fname_to_spine[file_data.filename] = np.array(spine, dtype = np.uint32)
 
-    def get_recdeps(self, fname : str):
+    def get_recdeps(self, fname : Path):
         res = self._fname_to_recdeps.get(fname, None)
         if res is not None: return res
 
         data = self._data[fname]
         deps_list = []
-        deps_set = []
-        for dep in data.dependencies():
-            dep = str(dep)
+        deps_set = set()
+        for dep in data.dependencies:
+            dep = dep
             if dep in deps_set: continue
             deps_list.append(dep)
-            deps_set.append(dep)
+            deps_set.add(dep)
             subdeps_list = self.get_recdeps(dep)
             deps_list.extend(filter(lambda x: x not in deps_set, subdeps_list))
             deps_set.update(subdeps_list)
@@ -164,9 +164,9 @@ class DataServer:
     def _get_fname_global_ctx(self, fname):
         dep_fnames = self.get_recdeps(fname)
         if not dep_fnames:
-            return np.zeros([0], dtype = uint32)
+            return np.zeros([0], dtype = np.uint32)
         return np.concatenate([
-            self.fname_to_spine[dep_fname]
+            self._fname_to_spine[dep_fname]
             for dep_fname in dep_fnames
         ])
 
