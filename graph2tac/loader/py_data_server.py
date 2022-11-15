@@ -58,9 +58,6 @@ class DataServer:
                 file_data = self._data[name]
                 self._load_file(file_data)
 
-        for fname in self._data.keys():
-            self._fname_to_global_ctx[fname] = self._get_fname_global_ctx(fname)
-
     def graph_constants(self):
         total_node_label_num = len(self._node_i_to_name)
         return GraphConstants(
@@ -92,9 +89,10 @@ class DataServer:
         self._tactic_i_to_hash = []
         self._proof_steps : list[tuple[Outcome, Definition, int]] = []
         self._def_clusters : list[list[Definition]] = []
-        self._fname_to_spine : dict[str, NDArray[np.uint32]] = dict()
-        self._fname_to_recdeps : dict[str, tuple[list[str],set[str]]] = dict()
-        self._fname_to_global_ctx : dict[str, NDArray[np.uint32]] = dict()
+        self._repr_to_spine : dict[Definition, NDArray[np.uint32]] = dict()
+        self._repr_to_filedeps : dict[Definition, list[Definition]] = dict()
+        self._repr_to_recdeps : dict[Definition, list[Definition]] = dict()
+        self._def_to_file_ctx : dict[Definition, tuple[list[Definition], NDArray[np.uint32]]] = dict()
 
     def _initialize_edge_labels(self):
         total_labels = len(graph_api_capnp.EdgeClassification.schema.enumerants)
@@ -120,7 +118,6 @@ class DataServer:
         self._edge_label_num = edge_label_num
         
     def _load_file(self, file_data):
-        fname = file_data.filename
         # load proof steps
         for d in file_data.definitions(spine_only = self.restrict_to_spine):
             self._register_definition(d)
@@ -130,45 +127,68 @@ class DataServer:
                 if tactic_usage.tactic is None: continue
                 self._register_tactic(tactic_usage)
                 for outcome in tactic_usage.outcomes:
-                    self._proof_steps.append((fname,outcome,d,index))
+                    self._proof_steps.append((outcome,d,index))
 
         # load clusters
         self._def_clusters.extend(file_data.clustered_definitions())
 
-        # set node_i_in_spine
-        spine = []
-        for d in file_data.definitions(spine_only = True, across_files = False):
-            node_i = self._def_node_to_i[d.node]
-            spine.append(node_i)
-            self._node_i_in_spine[node_i] = True
-        self._fname_to_spine[file_data.filename] = np.array(spine, dtype = np.uint32)
+        if file_data.representative is not None:
+            # set node_i_in_spine
+            spine = []
+            filedeps = []
+            for d in file_data.definitions(spine_only = True, across_files = False):
+                node_i = self._def_node_to_i[d.node]
+                spine.append(node_i)
+                self._node_i_in_spine[node_i] = True
+                filedeps.extend(d.external_previous)
 
-    def get_recdeps(self, fname : Path):
-        res = self._fname_to_recdeps.get(fname, None)
+            r = file_data.representative
+            self._repr_to_spine[r] = np.array(spine, dtype = np.uint32)
+            self._repr_to_filedeps[r] = filedeps
+
+    def get_recdeps(self, representative : Definition):
+        res = self._repr_to_recdeps.get(representative, None)
         if res is not None: return res
 
-        data = self._data[fname]
-        deps_list = []
-        deps_set = set()
-        for dep in data.dependencies:
-            dep = dep
+        deps_list = [representative]
+        deps_set = set([representative])
+        for dep in self._repr_to_filedeps[representative]:
             if dep in deps_set: continue
-            deps_list.append(dep)
-            deps_set.add(dep)
             subdeps_list = self.get_recdeps(dep)
             deps_list.extend(filter(lambda x: x not in deps_set, subdeps_list))
             deps_set.update(subdeps_list)
-        self._fname_to_recdeps[fname] = deps_list
+        self._repr_to_recdeps[representative] = deps_list
         return deps_list
 
-    def _get_fname_global_ctx(self, fname):
-        dep_fnames = self.get_recdeps(fname)
-        if not dep_fnames:
-            return np.zeros([0], dtype = np.uint32)
-        return np.concatenate([
-            self._fname_to_spine[dep_fname]
-            for dep_fname in dep_fnames
-        ])
+    def get_def_file_ctx(self, definition : Definition):
+        res = self._def_to_file_ctx.get(res, None)
+        if res is not None: return res
+
+        if definition.previous is not None:
+            prev_filedeps, prev_filectx = get_def_file_ctx(definition.previous)
+        else:
+            prev_filedeps, prev_filectx = [], np.array([0], dtype = uint32)
+
+        if not definition.external_previous:
+            filedeps, files_ctx = prev_filedeps, prev_filectx
+        else:
+            filedeps = list(prev_filedeps)
+            filedeps_s = set(prev_filedeps)
+            for dep in definition.external_previous:
+                if dep in filedeps_s: continue
+                subdeps_list = self.get_recdeps(dep)
+                filedeps.extend(filter(lambda x: x not in deps_set, subdeps_list))
+                filedeps_s.update(subdeps_list)
+
+            if not filedeps: filectx = prev_filectx
+            filectx = np.concatenate([
+                self._repr_to_spine[dep]
+                for dep in filedeps
+            ])
+
+        res = filedeps, filectx
+        self._def_to_file_ctx = res        
+        return res
 
     def _register_definition(self, d):
         node = d.node
@@ -247,20 +267,22 @@ class DataServer:
         return graph, node_to_i
 
     def _datapoint_graph(self, i):
-        fname, proof_step, definition, index = self._proof_steps[i]
+        proof_step, definition, index = self._proof_steps[i]
         graph, node_to_i = self._downward_closure(
             [proof_step.before.root]
         )
         root_i = 0
         local_context = proof_step.before.context
         local_context_i = [node_to_i[n] for n in local_context]
-        available_global_context = [
-            self._def_node_to_i[ctx_def.node] - self._base_node_label_num
+
+        available_global_context = np.array([
+            self._def_node_to_i[ctx_def.node]
             for ctx_def in definition.global_context(across_files = False)
-        ]
+        ], dtype = np.uint32) - self._base_node_label_num
+        filedeps, filectx = self.get_def_file_ctx(definition)
         available_global_context = np.concatenate([
-            self._fname_to_global_ctx[fname],
-            np.array(available_global_context, dtype = np.uint32),
+            filectx,
+            available_global_context,
         ])
 
         context = ProofstateContext(
@@ -310,14 +332,14 @@ class DataServer:
         return proofstate, action, i
 
     def _datapoint_text(self, i):
-        _, proof_step, _, _ = self._proof_steps[i]
+        proof_step, _, _ = self._proof_steps[i]
         state_text = proof_step.before.text
         label_text = proof_step.tactic.text
         return state_text, label_text
 
     def _select_data_points(self, label):
         return [
-            i for i,(_,_,d,_) in enumerate(self._proof_steps)
+            i for i,(_,d,_) in enumerate(self._proof_steps)
             if get_split_label(
                     np.array(d.node.identity, dtype = np.uint64).item(),
                     self.split, self.split_random_seed
