@@ -148,7 +148,7 @@ class DataServer:
                 filedeps.extend(d.external_previous)
 
             r = file_data.representative
-            self._repr_to_spine[r] = np.array(spine, dtype = np.uint32)
+            self._repr_to_spine[r] = np.array(spine, dtype = np.uint32) - self._base_node_label_num
             self._repr_to_filedeps[r] = filedeps
 
     def get_recdeps(self, representative):
@@ -172,7 +172,7 @@ class DataServer:
         if definition.previous is not None:
             prev_filedeps, prev_filectx = self.get_def_file_ctx(definition.previous)
         else:
-            prev_filedeps, prev_filectx = [], np.array([0], dtype = np.uint32)
+            prev_filedeps, prev_filectx = [], np.zeros([0], dtype = np.uint32)
 
         if not definition.external_previous:
             filedeps, filectx = prev_filedeps, prev_filectx
