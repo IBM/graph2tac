@@ -1,5 +1,4 @@
 from pathlib import Path
-import capnp
 import pytact.common
 import pytact.data_reader
 from dataclasses import dataclass

@@ -20,13 +20,15 @@ from dataclasses import dataclass
 from dataclasses_json import dataclass_json
 import yaml
 
+import graph2tac.loader.py_data_server   # import capnp before tensorflow
+
 # Turn off TF log messages besides errors before loading tensorflow (may get turned back on below)
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 import tensorflow as tf
 from tensorflow import keras
 import tensor2tensor
 
-from graph2tac.loader.data_server import DataServer
+from graph2tac.loader.py_data_server import DataServer
 
 from graph2tac.tf2.model_params import ModelDatasetConstants, ModelParams
 from graph2tac.tf2.model import ModelWrapper,\

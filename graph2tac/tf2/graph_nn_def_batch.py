@@ -10,7 +10,7 @@ from typing import List
 from numpy.typing import NDArray
 import numpy as np
 
-from graph2tac.loader.data_server import LoaderDefinition
+from graph2tac.loader.data_classes import LoaderDefinition
 
 # TODO(jrute): This code is unique to the model in model.py,
 # and it now depends on the dataset constants saved with that model.
