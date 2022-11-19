@@ -61,10 +61,13 @@ class DataServer:
             file_data = self._data[name]
             self._load_file(file_data)
 
+        max_def_name_len = 0
         # precalculate def_file_ctx in a forward order to prevent stack overflow
         for cluster in self._def_clusters:
             for d in cluster:
                 self.get_def_file_ctx(d)
+                max_def_name_len = max(len(d.name), max_def_name_len)
+        self._def_name_dtype = "S"+str(max_def_name_len)
 
     def graph_constants(self):
         total_node_label_num = len(self._node_i_to_name)
@@ -383,7 +386,7 @@ class DataServer:
             definition_names = np.array([
                 n.definition.name
                 for n in roots
-            ], dtype = 'S61')
+            ], dtype = self._def_name_dtype)
         )
 
     def def_cluster_subgraphs(self):
