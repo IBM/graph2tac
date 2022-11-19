@@ -12,6 +12,8 @@ from graph2tac.hash import get_split_label
 from graph2tac.loader.data_classes import *
 import pytact.graph_api_capnp as graph_api_capnp
 
+from graph2tac.loader.data_server import top_sort_dataset_modules
+
 class IterableLen:
     def __init__(self, iterable, length):
         self.iterable = iterable
@@ -47,15 +49,17 @@ class DataServer:
         self._reader = pytact.data_reader.data_reader(Path(data_dir))
         self._data = self._reader.__enter__()
 
-        if fname_order_key is None:
-            for name, file_data in self._data.items():
-                self._load_file(file_data)
-        else:
-            fnames = list(self._data.keys())
+        #fnames = list(self._data.keys())
+        fnames = [
+            fname.relative_to(data_dir)
+            for fname in top_sort_dataset_modules(data_dir)
+        ]
+        assert set(fnames) == set(self._data.keys())
+        if fname_order_key is not None:
             fnames.sort(key = fname_order_key)
-            for name in fnames:
-                file_data = self._data[name]
-                self._load_file(file_data)
+        for name in fnames:
+            file_data = self._data[name]
+            self._load_file(file_data)
 
         # precalculate def_file_ctx in a forward order to prevent stack overflow
         for cluster in self._def_clusters:
@@ -70,10 +74,10 @@ class DataServer:
             base_node_label_num = self._base_node_label_num,
             node_label_num = total_node_label_num,
             cluster_subgraphs_num = len(self._def_clusters),
-            tactic_index_to_numargs = np.array(self._tactic_i_to_numargs, dtype = np.uint32),
+            tactic_index_to_numargs = np.array(self._tactic_i_to_numargs, dtype = np.uint64),
             tactic_index_to_string = list(self._tactic_i_to_bytes),
-            tactic_index_to_hash = np.array(self._tactic_i_to_hash, dtype = np.uint32),
-            global_context = np.arange(self._base_node_label_num, total_node_label_num),
+            tactic_index_to_hash = np.array(self._tactic_i_to_hash, dtype = np.uint64),
+            global_context = np.arange(self._base_node_label_num, total_node_label_num, dtype = np.uint32),
             label_to_names = self._node_i_to_name,
             label_in_spine = self._node_i_in_spine,
             max_subgraph_size = self.max_subgraph_size,
