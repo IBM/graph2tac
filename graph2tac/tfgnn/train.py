@@ -325,8 +325,7 @@ class Trainer:
 
             # logs for this run
             tensorboard_callback.log_run(trainer_config=self.get_config(),
-                                         dataset_stats=self.dataset.stats(split=split,
-                                                                          split_random_seed=split_random_seed),
+                                         dataset_stats={},
                                          run_config={
                                              'total_epochs': total_epochs,
                                              'batch-size': batch_size,
