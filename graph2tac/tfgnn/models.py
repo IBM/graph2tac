@@ -385,7 +385,7 @@ class GCNConvolution(tf.keras.layers.Layer):
         """
         self._hidden_size = hidden_size
         self._dense_activation = dense_activation
-        self._residual_activation = dense_activation
+        self._residual_activation = residual_activation
         self._dropout_rate = dropout_rate
         self._source_feature_name = source_feature_name
         self._target_feature_name = target_feature_name

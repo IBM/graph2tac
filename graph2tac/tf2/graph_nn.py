@@ -174,8 +174,6 @@ class GraphBlock(GraphLayer):
             if nonlin_position == "after_norm":
                 layers.append(nonlin)
 
-            assert nonlin is None, f"Nonlinearity not used.  Incorrect position: {nonlin_position}"
-
         else:
             # nonlinearity (position doesn't matter since no residual)
             if nonlin is not None:
