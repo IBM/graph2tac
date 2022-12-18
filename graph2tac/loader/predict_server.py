@@ -454,9 +454,9 @@ def main_loop(reader, sock, predict: Predict, debug_dir, process_uuid, session_i
 
 
             logger.info(f"generating clusters from initialization message")
-            map_eval_label_to_train_label = np.array(eval_label_to_train_label, dtype=np.int32)
+            map_eval_label_to_train_label = np.array(eval_label_to_train_label, dtype=np.uint32)
 
-            global_context = map_eval_label_to_train_label[len(BASE_NAMES):].astype(np.int32)
+            global_context = map_eval_label_to_train_label[len(BASE_NAMES):].astype(np.uint32)
             # available_global = np.arange(0, len(global_context), 1, dtype=np.uint64)
 
             logger.verbose(f"online global_context (indexed from 0): {global_context}")
