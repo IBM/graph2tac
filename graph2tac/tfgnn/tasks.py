@@ -96,6 +96,68 @@ class GlobalArgumentSparseCategoricalCrossentropy(tf.keras.losses.Loss):
             # the context is non-empty and we have at least one argument, so the following doesn't fail
             return -tf.gather(arguments_pred, arguments_true, batch_dims=1)
 
+class GlobalArgumentSparseCategoricalCrossentropy2(tf.keras.losses.Loss):
+    """
+    Used to compute the sparse categorical crossentropy loss for the global argument prediction task.
+
+    NOTES:
+        - `-1` arguments correspond to `None` or a different type of argument
+        - logits **are** assumed to be normalized
+        - the losses are summed across all elements within a batch
+        - assuming the tactic and argument loss weights are 1.0 then this is one part of
+          the negative log probability of the entire tactic prediction.  As the losses get summed with other
+          losses (form other argument types and from the tactic) we will recover the full neg log prob.
+    """
+
+    def arguments_filter(self, y_true: tf.RaggedTensor, y_pred: tf.Tensor) -> Tuple[tf.RaggedTensor, tf.RaggedTensor]:
+        """
+        Extracts the local arguments which are not None from the ground truth and predictions.
+        
+        Returns a pair of ragged tensors with shapes:
+        - [batch_size, None(num_nonempty_args)]
+        - [batch_size, None(num_nonempty_args), context_size]
+
+        @param y_true: the labels for the arguments, with shape [batch_size, 1, None(num_arguments)]
+        @param y_pred: the logits for the arguments, with shape [batch_size, max(num_arguments), context_size]
+        @return: a tuple whose first element contains the not-None arguments, the second element being the logits corresponding to each not-None argument
+        """
+        # convert y_true to a dense tensor padding with -1 values (also used for None arguments);
+        # remove spurious dimension (y_true was created from a non-scalar graph)
+        # [ batch_size, max(num_arguments) ]
+        arguments_tensor = tf.squeeze(y_true.to_tensor(default_value=-1), axis=1)
+
+        # we want to compute only go over the positions that are not None
+        nrows = y_true.shape[0]
+        positions = tf.where(arguments_tensor != -1)
+        row_ids = positions[:, 0]
+
+        # keep only these positions in the both y_true and y_pred
+        arguments_true = tf.RaggedTensor.from_value_rowids(
+            values=tf.gather_nd(arguments_tensor, positions),
+            value_rowids=row_ids,
+            nrows=nrows
+        )
+        arguments_pred = tf.RaggedTensor.from_value_rowids(
+            values=tf.gather_nd(y_pred, positions),
+            value_rowids=row_ids,
+            nrows=nrows
+        )
+        return arguments_true, arguments_pred
+
+    def call(self, y_true, y_pred):
+        """
+        @param y_true: ids for the arguments, with shape [ batch_size, 1, None(num_arguments) ]
+        @param y_pred: logits for each argument position, with shape [ batch_size, None(num_arguments), num_categories ]
+        @return: a vector of length equal to the size of the batch
+        """
+        # filter out any arguments which have index -1, i.e. are None or of a different kind (global vs local)
+        arguments_true, arguments_pred = self.arguments_filter(y_true, y_pred)
+        # for every element of the batch:
+        # 1. compute the cross entropy loss by using gather to find the corresponding logit
+        #    (and flip the sign)
+        # 2. sum the losses within a batch element
+        return tf.reduce_sum(-tf.gather(arguments_pred, arguments_true, batch_dims=2), axis=-1)
+
 
 class ArgumentSparseCategoricalAccuracy(tf.keras.metrics.SparseCategoricalAccuracy):
     """
@@ -850,8 +912,8 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
     @staticmethod
     def loss() -> Dict[str, tf.keras.losses.Loss]:
         return {GlobalArgumentPrediction.TACTIC_LOGITS: tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True),
-                GlobalArgumentPrediction.LOCAL_ARGUMENTS_LOGITS: GlobalArgumentSparseCategoricalCrossentropy(),
-                GlobalArgumentPrediction.GLOBAL_ARGUMENTS_LOGITS: GlobalArgumentSparseCategoricalCrossentropy()}
+                GlobalArgumentPrediction.LOCAL_ARGUMENTS_LOGITS: GlobalArgumentSparseCategoricalCrossentropy2(),
+                GlobalArgumentPrediction.GLOBAL_ARGUMENTS_LOGITS: GlobalArgumentSparseCategoricalCrossentropy2()}
 
     def loss_weights(self) -> Dict[str, float]:
         return {GlobalArgumentPrediction.TACTIC_LOGITS: 1.0,

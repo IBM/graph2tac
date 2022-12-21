@@ -581,7 +581,11 @@ class SimpleConvolutionGNN(tf.keras.layers.Layer):
 
     def _nodes_next_state_factory(self, node_set_name: tfgnn.NodeSetName) -> tfgnn.keras.layers.ResidualNextState:
         return tfgnn.keras.layers.ResidualNextState(
-            residual_block=tf.keras.layers.Dense(units=self._hidden_size, name=f'dense'),
+            residual_block=tf.keras.Sequential([
+                tf.keras.layers.Dense(units=self._hidden_size, activation='relu', name=f'dense1'),
+                tf.keras.layers.Dense(units=self._hidden_size, name=f'dense2'),
+                tf.keras.layers.Dropout(rate=self._dropout_rate)
+            ]),
             activation=self._residual_activation,
             name='residual'
         )
@@ -592,7 +596,7 @@ class SimpleConvolutionGNN(tf.keras.layers.Layer):
              ) -> tfgnn.GraphTensor:
         for convolution in self._convolutions:
             embedded_graph = convolution(embedded_graph, training=training)
-            embedded_graph = self._dropout(embedded_graph, training=training)  # noqa [ PyCallingNonCallable ]
+            #embedded_graph = self._dropout(embedded_graph, training=training)  # noqa [ PyCallingNonCallable ]
             if self._layer_norm:
                 embedded_graph = self._layer_normalization(embedded_graph, training=training)  # noqa [ PyCallingNonCallable ]
 
