@@ -25,66 +25,19 @@ class IterableLen:
     def __len__(self):
         return self.length
 
-class DataServer:
+class AbstractDataServer:
     def __init__(self,
-                 data_dir: Path,
                  max_subgraph_size,
-                 split: tuple[int, int, int] = (8, 1, 1),
                  bfs_option = True,
-                 split_random_seed = 0,
-                 restrict_to_spine: bool = False,
                  stop_at_definitions: bool = True,
-                 fname_order_key = None,
     ):
-        self.data_dir = data_dir
         self.max_subgraph_size = max_subgraph_size
-        self.split = split
         self.bfs_option = bfs_option
-        self.split_random_seed = split_random_seed
-        self.restrict_to_spine = restrict_to_spine
         self.stop_at_definitions = stop_at_definitions
 
         self._initialize()
 
-        self._reader = pytact.data_reader.data_reader(Path(data_dir))
-        self._data = self._reader.__enter__()
-
-        #fnames = list(self._data.keys())
-        fnames = [
-            fname.relative_to(data_dir)
-            for fname in top_sort_dataset_modules(data_dir)
-        ]
-        assert set(fnames) == set(self._data.keys())
-        if fname_order_key is not None:
-            fnames.sort(key = fname_order_key)
-        for name in fnames:
-            file_data = self._data[name]
-            self._load_file(file_data)
-
-        max_def_name_len = 0
-        # precalculate def_file_ctx in a forward order to prevent stack overflow
-        for cluster in self._def_clusters:
-            for d in cluster:
-                self.get_def_file_ctx(d)
-                max_def_name_len = max(len(d.name), max_def_name_len)
-        self._def_name_dtype = "S"+str(max_def_name_len)
-
-    def graph_constants(self):
-        total_node_label_num = len(self._node_i_to_name)
-        return GraphConstants(
-            tactic_num = len(self._tactic_to_i),
-            edge_label_num = self._edge_label_num,
-            base_node_label_num = self._base_node_label_num,
-            node_label_num = total_node_label_num,
-            cluster_subgraphs_num = len(self._def_clusters),
-            tactic_index_to_numargs = np.array(self._tactic_i_to_numargs, dtype = np.uint64),
-            tactic_index_to_string = list(self._tactic_i_to_bytes),
-            tactic_index_to_hash = np.array(self._tactic_i_to_hash, dtype = np.uint64),
-            global_context = np.arange(self._base_node_label_num, total_node_label_num, dtype = np.uint32),
-            label_to_names = self._node_i_to_name,
-            label_in_spine = self._node_i_in_spine,
-            max_subgraph_size = self.max_subgraph_size,
-        )
+    # Initialization
 
     def _initialize(self):
         self._initialize_edge_labels()
@@ -98,12 +51,7 @@ class DataServer:
         self._tactic_i_to_numargs = []
         self._tactic_i_to_bytes = []
         self._tactic_i_to_hash = []
-        self._proof_steps : list[tuple[Outcome, Definition, int]] = []
-        self._def_clusters : list[list[Definition]] = []
-        self._repr_to_spine : dict[Definition, NDArray[np.uint32]] = dict()
-        self._repr_to_filedeps : dict[Definition, list[Definition]] = dict()
-        self._repr_to_recdeps : dict[Definition, list[Definition]] = dict()
-        self._def_to_file_ctx : dict[Definition, tuple[list[Definition], NDArray[np.uint32]]] = dict()
+        self._def_name_dtype = str
 
     def _initialize_edge_labels(self):
         total_labels = len(graph_api_capnp.EdgeClassification.schema.enumerants)
@@ -127,6 +75,167 @@ class DataServer:
             edge_label_num += 1
         self._edge_labels = edge_labels
         self._edge_label_num = edge_label_num
+
+    # Definition / Tactic registration
+
+    def _register_definition(self, d):
+        node = d.node
+        if node in self._def_node_to_i:
+            return self._def_node_to_i[node]
+        new_i = len(self._node_i_to_name)
+        self._def_node_to_i[node] = new_i
+        self._node_i_to_name.append(d.name)
+        self._node_i_in_spine.append(False)
+        return new_i
+        
+    def _get_node_label_index(self, node):
+        if int(node.label.which) == self._definition_label:
+            return self._def_node_to_i[node]
+        else:
+            return int(node.label.which)
+
+    def _register_tactic(self, tactic_usage):
+        if tactic_usage.tactic.ident in self._tactic_to_i:
+            return
+        if len(tactic_usage.outcomes) == 0:
+            return
+        index = len(self._tactic_to_i)
+        self._tactic_to_i[tactic_usage.tactic.ident] = index
+        self._tactic_i_to_numargs.append(len(tactic_usage.outcomes[0].tactic_arguments))
+        self._tactic_i_to_bytes.append(bytes(tactic_usage.tactic.base_text, 'utf-8'))
+        self._tactic_i_to_hash.append(tactic_usage.tactic.ident)
+
+    # Obtaining data
+
+    def _downward_closure(self, roots):
+        bfs_option = self.bfs_option
+        max_graph_size = self.max_subgraph_size
+        if self.stop_at_definitions:
+            stop_at = self._definition_label
+        else:
+            stop_at = None
+        nodes = list(roots)
+        node_to_i = { node : i for i,node in enumerate(roots) }
+        q = deque(enumerate(roots))
+        edges = []
+        while q:
+            if bfs_option: xi,x = q.popleft()
+            else: xi,x = q.pop()
+            for e,y in x.children:
+                if e in self._edges_to_ignore: continue
+                yi = node_to_i.get(y, len(nodes))
+                if yi == len(nodes):
+                    if len(nodes) == max_graph_size: continue
+                    node_to_i[y] = yi
+                    nodes.append(y)
+                    if int(y.label.which) != stop_at:
+                        q.append((yi,y))
+                edges.append((xi, yi, self._edge_labels[e]))
+
+        node_labels = [
+            self._get_node_label_index(node)
+            for node in nodes
+        ]
+
+        if edges:
+            edges_by_labels = [[] for _ in range(self._edge_label_num)]
+            for edge in edges:
+                edges_by_labels[edge[2]].append(edge)
+            edge_offsets = np.cumsum([
+                len(x) for x in edges_by_labels
+            ])[:-1].astype(np.uint32)
+            edges = list(itertools.chain.from_iterable(edges_by_labels))
+            edges = np.array(edges, dtype = np.uint32)
+        else:
+            edges = np.zeros([0,3], dtype = np.uint32)
+            edge_offsets = np.zeros(self._edge_label_num, dtype = np.uint32)
+        graph = LoaderGraph(
+            nodes = np.array(node_labels, dtype=np.uint32),
+            edges = edges[:,:2],
+            edge_labels = edges[:,2],
+            edge_offsets = edge_offsets,
+        )
+
+        return graph, node_to_i
+
+    def cluster_to_graph(self, cluster):
+        roots = [x.node for x in cluster]
+        graph, _ = self._downward_closure(roots)
+
+        return LoaderDefinition(
+            graph = graph,
+            num_definitions = len(roots),
+            definition_names = np.array([
+                n.definition.name
+                for n in roots
+            ], dtype = self._def_name_dtype)
+        )
+
+    
+class DataServer(AbstractDataServer):
+    def __init__(self,
+                 data_dir: Path,
+                 max_subgraph_size,
+                 split: tuple[int, int, int] = (8, 1, 1),
+                 bfs_option = True,
+                 split_random_seed = 0,
+                 restrict_to_spine: bool = False,
+                 stop_at_definitions: bool = True,
+                 fname_order_key = None,
+    ):
+        super().__init__(max_subgraph_size, bfs_option, stop_at_definitions)
+        self.data_dir = data_dir
+        self.split = split
+        self.split_random_seed = split_random_seed
+        self.restrict_to_spine = restrict_to_spine
+
+        self._proof_steps : list[tuple[Outcome, Definition, int]] = []
+        self._def_clusters : list[list[Definition]] = []
+        self._repr_to_spine : dict[Definition, NDArray[np.uint32]] = dict()
+        self._repr_to_filedeps : dict[Definition, list[Definition]] = dict()
+        self._repr_to_recdeps : dict[Definition, list[Definition]] = dict()
+        self._def_to_file_ctx : dict[Definition, tuple[list[Definition], NDArray[np.uint32]]] = dict()
+
+        self._reader = pytact.data_reader.data_reader(Path(data_dir))
+        self._data = self._reader.__enter__()
+
+        #fnames = list(self._data.keys())
+        fnames = [
+            fname.relative_to(data_dir)
+            for fname in top_sort_dataset_modules(data_dir)
+        ]
+        assert set(fnames) == set(self._data.keys())
+        if fname_order_key is not None:
+            fnames.sort(key = fname_order_key)
+        for name in fnames:
+            file_data = self._data[name]
+            self._load_file(file_data)
+
+        # precalculate def_file_ctx in a forward order to prevent stack overflow,
+        # calculate the maximum definition length
+        max_def_name_len = 0
+        for cluster in self._def_clusters:
+            for d in cluster:
+                self.get_def_file_ctx(d)
+                max_def_name_len = max(len(d.name), max_def_name_len)
+        self._def_name_dtype = "S"+str(max_def_name_len)
+
+    def graph_constants(self):
+        total_node_label_num = len(self._node_i_to_name)
+        return GraphConstants(
+            tactic_num = len(self._tactic_to_i),
+            edge_label_num = self._edge_label_num,
+            base_node_label_num = self._base_node_label_num,
+            node_label_num = total_node_label_num,
+            cluster_subgraphs_num = len(self._def_clusters),
+            tactic_index_to_numargs = np.array(self._tactic_i_to_numargs, dtype = np.uint64),
+            tactic_index_to_string = list(self._tactic_i_to_bytes),
+            tactic_index_to_hash = np.array(self._tactic_i_to_hash, dtype = np.uint64),
+            global_context = np.arange(self._base_node_label_num, total_node_label_num, dtype = np.uint32),
+            label_to_names = self._node_i_to_name,
+            label_in_spine = self._node_i_in_spine,
+            max_subgraph_size = self.max_subgraph_size,
+        )
         
     def _load_file(self, file_data):
         # load proof steps
@@ -200,82 +309,6 @@ class DataServer:
         res = filedeps, filectx
         self._def_to_file_ctx[definition] = res        
         return res
-
-    def _register_definition(self, d):
-        node = d.node
-        if node in self._def_node_to_i: return
-        new_i = len(self._node_i_to_name)
-        self._def_node_to_i[node] = new_i
-        self._node_i_to_name.append(d.name)
-        self._node_i_in_spine.append(False)
-        
-    def _get_node_label_index(self, node):
-        if int(node.label.which) == self._definition_label:
-            return self._def_node_to_i[node]
-        else:
-            return int(node.label.which)
-
-    def _register_tactic(self, tactic_usage):
-        if tactic_usage.tactic.ident in self._tactic_to_i:
-            return
-        if len(tactic_usage.outcomes) == 0:
-            return
-        index = len(self._tactic_to_i)
-        self._tactic_to_i[tactic_usage.tactic.ident] = index
-        self._tactic_i_to_numargs.append(len(tactic_usage.outcomes[0].tactic_arguments))
-        self._tactic_i_to_bytes.append(bytes(tactic_usage.tactic.base_text, 'utf-8'))
-        self._tactic_i_to_hash.append(tactic_usage.tactic.ident)
-
-    def _downward_closure(self, roots):
-        bfs_option = self.bfs_option
-        max_graph_size = self.max_subgraph_size
-        if self.stop_at_definitions:
-            stop_at = self._definition_label
-        else:
-            stop_at = None
-        nodes = list(roots)
-        node_to_i = { node : i for i,node in enumerate(roots) }
-        q = deque(enumerate(roots))
-        edges = []
-        while q:
-            if bfs_option: xi,x = q.popleft()
-            else: xi,x = q.pop()
-            for e,y in x.children:
-                if e in self._edges_to_ignore: continue
-                yi = node_to_i.get(y, len(nodes))
-                if yi == len(nodes):
-                    if len(nodes) == max_graph_size: continue
-                    node_to_i[y] = yi
-                    nodes.append(y)
-                    if int(y.label.which) != stop_at:
-                        q.append((yi,y))
-                edges.append((xi, yi, self._edge_labels[e]))
-
-        node_labels = [
-            self._get_node_label_index(node)
-            for node in nodes
-        ]
-
-        if edges:
-            edges_by_labels = [[] for _ in range(self._edge_label_num)]
-            for edge in edges:
-                edges_by_labels[edge[2]].append(edge)
-            edge_offsets = np.cumsum([
-                len(x) for x in edges_by_labels
-            ])[:-1].astype(np.uint32)
-            edges = list(itertools.chain.from_iterable(edges_by_labels))
-            edges = np.array(edges, dtype = np.uint32)
-        else:
-            edges = np.zeros([0,3], dtype = np.uint32)
-            edge_offsets = np.zeros(self._edge_label_num, dtype = np.uint32)
-        graph = LoaderGraph(
-            nodes = np.array(node_labels, dtype=np.uint32),
-            edges = edges[:,:2],
-            edge_labels = edges[:,2],
-            edge_offsets = edge_offsets,
-        )
-
-        return graph, node_to_i
 
     def _datapoint_graph(self, i):
         proof_step, definition, index = self._proof_steps[i]
@@ -376,18 +409,7 @@ class DataServer:
             return IterableLen(map(self._datapoint_graph, valid_ids), len(valid_ids))
 
     def def_cluster_subgraph(self, i):
-        cluster = self._def_clusters[i]
-        roots = [x.node for x in cluster]
-        graph, _ = self._downward_closure(roots)
-
-        return LoaderDefinition(
-            graph = graph,
-            num_definitions = len(roots),
-            definition_names = np.array([
-                n.definition.name
-                for n in roots
-            ], dtype = self._def_name_dtype)
-        )
+        return self.cluster_to_graph(self._def_clusters[i])
 
     def def_cluster_subgraphs(self):
         return IterableLen(map(self.def_cluster_subgraph, range(len(self._def_clusters))), len(self._def_clusters))
