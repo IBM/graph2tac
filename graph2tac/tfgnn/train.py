@@ -229,13 +229,13 @@ class Trainer:
 
         return (proofstate_graph, definition_graph), outputs
 
-    def _prepare_dataset(self, dataset: tf.data.Dataset) -> tf.data.Dataset:
+    def _prepare_dataset(self, dataset: tf.data.Dataset, definitions: Optional[tf.data.Dataset]) -> tf.data.Dataset:
         # create input-output pairs
         dataset = dataset.map(self.prediction_task.create_input_output)
 
         # add definitions if necessary
-        if self.definition_task is not None:
-            definitions = self.dataset.definitions(shuffle=False).map(self.dataset.tokenize_definition_graph)
+        if definitions is not None:
+            definitions = definitions.map(self.dataset.tokenize_definition_graph)
             definitions = definitions.repeat().shuffle(self.dataset.SHUFFLE_BUFFER_SIZE)
             dataset = tf.data.Dataset.zip(datasets=(dataset, definitions))
             dataset = dataset.map(self._input_output_mixing)
@@ -312,8 +312,21 @@ class Trainer:
         train_proofstates, valid_proofstates = self.dataset.proofstates(split=split,
                                                                         split_random_seed=split_random_seed,
                                                                         shuffle=True)
-        train_proofstates = train_proofstates.apply(self._prepare_dataset).batch(batch_size).prefetch(tf.data.AUTOTUNE)
-        valid_proofstates = valid_proofstates.apply(self._prepare_dataset).batch(batch_size).prefetch(tf.data.AUTOTUNE)
+        if self.definition_task:
+            definitions = self.dataset.definitions(shuffle=False)
+        else:
+            definitions = None
+
+        train_proofstates = (train_proofstates
+            .apply(lambda dataset: self._prepare_dataset(dataset, definitions))
+            .batch(batch_size)
+            .prefetch(tf.data.AUTOTUNE)
+        )
+        valid_proofstates = (valid_proofstates
+            .apply(lambda dataset: self._prepare_dataset(dataset, definitions))
+            .batch(batch_size)
+            .prefetch(tf.data.AUTOTUNE)
+        )
 
         # prepare callbacks
         callbacks = self._callbacks()
@@ -327,8 +340,7 @@ class Trainer:
 
             # logs for this run
             tensorboard_callback.log_run(trainer_config=self.get_config(),
-                                         dataset_stats=self.dataset.stats(split=split,
-                                                                          split_random_seed=split_random_seed),
+                                         dataset_stats={},
                                          run_config={
                                              'total_epochs': total_epochs,
                                              'batch-size': batch_size,

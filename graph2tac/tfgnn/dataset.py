@@ -107,6 +107,7 @@ class Dataset:
 
         # apply the symmetrization and self-edge transformations
         proofstate_dataset = proofstate_dataset.apply(self._preprocess)
+        proofstate_dataset = proofstate_dataset.cache()
 
         # create dataset of split labels
         split_logits = tf.math.log(tf.constant(split, dtype=tf.float32) / sum(split))
@@ -120,13 +121,16 @@ class Dataset:
 
         # get train dataset (shuffling if necessary)
         train = pair_dataset.filter(lambda _, label: label == 0).map(lambda proofstate_graph, _: proofstate_graph)
+        train = train.cache()
+
         if shuffle:
             train = train.shuffle(buffer_size=self.SHUFFLE_BUFFER_SIZE)
 
         # get validation dataset
         valid = pair_dataset.filter(lambda _, label: label == 1).map(lambda proofstate_graph, _: proofstate_graph)
+        valid = valid.cache()
 
-        return train.cache(), valid.cache()
+        return train, valid
 
     def definitions(self, shuffle: bool = False) -> tf.data.Dataset:
         """
@@ -136,9 +140,10 @@ class Dataset:
         @return: a dataset with all the definition clusters
         """
         definitions = self._definitions().apply(self._preprocess)
+        definitions = definitions.cache()
         if shuffle:
             definitions = definitions.shuffle(buffer_size=self.SHUFFLE_BUFFER_SIZE)
-        return definitions.cache()
+        return definitions
 
     def tokenize_definition_graph(self, definition_graph: tfgnn.GraphTensor) -> tfgnn.GraphTensor:
         """
