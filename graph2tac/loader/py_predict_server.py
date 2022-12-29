@@ -414,8 +414,7 @@ def main():
     config = parse_args()
 
     if config.record is not None:
-        os.makedirs(config.record, exist_ok=True)
-        logger.warning(f"WARNING!!!! the directory {config.record} was provided to record messages for debugging purposes. The capnp bin messages will be recorded to {config.record}. Please do not provide --record if you do not want to record messages for later debugging and inspection purposes!")
+        logger.warning(f"WARNING!!!! the file {config.record} was provided to record messages for debugging purposes. The capnp bin messages will be recorded to {config.record}. Please do not provide --record if you do not want to record messages for later debugging and inspection purposes!")
     
     log_levels = {'debug':'10',
                   'verbose':'15',
