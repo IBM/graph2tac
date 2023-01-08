@@ -687,6 +687,7 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
             embedding_matrix=self.graph_embedding._node_embedding.embeddings,
             valid_indices=tf.constant(self._graph_constants.global_context, dtype=tf.int32)
         )
+        self.global_arguments_logits.trainable = False
 
         # we use trivial lambda layers to appropriately rename outputs
         self.local_arguments_logits_output = tf.keras.layers.Lambda(lambda x: x, name=self.LOCAL_ARGUMENTS_LOGITS)

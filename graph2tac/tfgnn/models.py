@@ -246,11 +246,13 @@ class GraphEmbedding(tfgnn.keras.layers.MapFeatures):
 
         self._node_embedding = tf.keras.layers.Embedding(input_dim=node_label_num,
                                                          output_dim=hidden_size,
-                                                         name=f'{name}_node_embedding')
+                                                         name=f'{name}_node_embedding',
+                                                         trainable=False)
 
         self._edge_embedding = tf.keras.layers.Embedding(input_dim=edge_label_num,
                                                          output_dim=hidden_size,
-                                                         name=f'{name}_edge_embedding')
+                                                         name=f'{name}_edge_embedding',
+                                                         trainable=False)
 
         self._total_size = tfgnn.keras.layers.TotalSize()
         super().__init__(node_sets_fn=self._node_sets_fn,
