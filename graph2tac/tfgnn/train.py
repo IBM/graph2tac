@@ -267,6 +267,10 @@ class Trainer:
         definition_nodes = tf.ragged.range(tf.squeeze(definition_graph.context['num_definitions'], axis=-1)) + tf.cast(cumulative_sizes, dtype=tf.int64)
         defined_labels = tf.gather(definition_graph.node_sets['node']['node_label'].flat_values, definition_nodes)
         return defined_labels
+    
+    @staticmethod
+    def normalize(x):
+        return tf.linalg.normalize(x, axis=-1)[0]
 
     def _create_train_model(self):
         train_model = self.prediction_task.create_train_model()
@@ -282,6 +286,7 @@ class Trainer:
             # get learned definition embeddings
             defined_labels = self._get_defined_labels(definition_graph)
             definition_id_embeddings = self.prediction_task.graph_embedding.calc_node_embedding(defined_labels)
+            definition_id_embeddings = tf.ragged.map_flat_values(self.normalize, definition_id_embeddings)
 
             normalization = tf.sqrt(tf.cast(definition_graph.context['num_definitions'], dtype=tf.float32))
             embedding_difference = (definition_body_embeddings - definition_id_embeddings) / tf.expand_dims(normalization, axis=-1)

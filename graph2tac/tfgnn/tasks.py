@@ -112,7 +112,7 @@ class DefinitionLoss(tf.keras.losses.Loss):
     """
     def call(self, y_true, y_pred):
         # ignore y_true as it is zero
-        return tf.reduce_sum(y_true * y_true, axis=-1)
+        return tf.reduce_sum(y_pred * y_pred, axis=-1)
 
 class DefinitionMeanSquaredError(tf.keras.losses.MeanSquaredError):
     """

@@ -71,7 +71,8 @@ class LogitsFromEmbeddings(tf.keras.layers.Layer):
         super().__init__(name=name, **kwargs)
 
     def call(self, hidden_state, training=False):
-        return tf.matmul(a=hidden_state, b=tf.gather(self._embedding_matrix, self._valid_indices), transpose_b=True)
+        emb_matrix = tf.linalg.normalize(self._embedding_matrix, axis=-1)[0]
+        return tf.matmul(a=hidden_state, b=tf.gather(emb_matrix, self._valid_indices), transpose_b=True)
 
 
 class NodeSetDropout(tfgnn.keras.layers.MapFeatures):
@@ -270,12 +271,10 @@ class GraphEmbedding(tfgnn.keras.layers.MapFeatures):
 
     def calc_node_embedding(self, indices):
         embs = self._inner_node_embedding(indices)
-        #embs = tf.linalg.normalize(embs, axis=-1)[0]
         return embs
     
     def get_node_embeddings(self):
         embs = self._inner_node_embedding.embeddings
-        #embs = tf.linalg.normalize(embs, axis=-1)[0]
         return embs
     
     def set_node_embeddings(self, embeddings):
@@ -294,7 +293,9 @@ class GraphEmbedding(tfgnn.keras.layers.MapFeatures):
                       node_set: tfgnn.NodeSet,
                       node_set_name: tfgnn.NodeSetName
                       ) -> Dict[tfgnn.FieldName, Any]:
-        return {'hidden_state': self.calc_node_embedding(node_set['node_label'])}
+        hidden_state = self.calc_node_embedding(node_set['node_label'])
+        hidden_state = tf.linalg.normalize(hidden_state, axis=-1)[0]
+        return {'hidden_state': hidden_state}
 
     def _edge_sets_fn(self,
                       edge_set: tfgnn.EdgeSet,
