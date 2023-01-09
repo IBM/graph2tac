@@ -106,6 +106,13 @@ class ArgumentSparseCategoricalAccuracy(tf.keras.metrics.SparseCategoricalAccura
         if tf.shape(arguments_pred)[-1] > 0:
             super().update_state(arguments_true, arguments_pred, sample_weight)
 
+class DefinitionLoss(tf.keras.losses.Loss):
+    """
+    Norm squared loss
+    """
+    def call(self, y_true, y_pred):
+        # ignore y_true as it is zero
+        return tf.reduce_sum(y_true * y_true, axis=-1)
 
 class DefinitionMeanSquaredError(tf.keras.losses.MeanSquaredError):
     """
@@ -258,7 +265,7 @@ class PredictionTask:
         self.graph_embedding = GraphEmbedding(node_label_num=graph_constants.node_label_num,
                                               edge_label_num=graph_constants.edge_label_num,
                                               hidden_size=hidden_size)
-        self.graph_embedding._node_embedding(tf.range(graph_constants.node_label_num))
+        self.graph_embedding.calc_node_embedding(tf.range(graph_constants.node_label_num))
 
         # create the GNN component
         gnn_constructor = get_gnn_constructor(gnn_type)
@@ -684,10 +691,9 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
 
         # create a layer to extract logits from the node label embeddings
         self.global_arguments_logits = LogitsFromEmbeddings(
-            embedding_matrix=self.graph_embedding._node_embedding.embeddings,
+            embedding_matrix=self.graph_embedding.get_node_embeddings(),
             valid_indices=tf.constant(self._graph_constants.global_context, dtype=tf.int32)
         )
-        self.global_arguments_logits.trainable = False
 
         # we use trivial lambda layers to appropriately rename outputs
         self.local_arguments_logits_output = tf.keras.layers.Lambda(lambda x: x, name=self.LOCAL_ARGUMENTS_LOGITS)
@@ -938,6 +944,10 @@ class DefinitionTask(tf.keras.layers.Layer):
         masked_hidden_state = embedded_graph.node_sets['node']['hidden_state'] * mask
         return embedded_graph.replace_features(node_sets={'node': {'hidden_state': masked_hidden_state}})
 
+    @staticmethod
+    def normalize(x):
+        return tf.linalg.normalize(x, axis=-1)[0]
+    
     def call(self, scalar_definition_graph: tfgnn.GraphTensor, training: bool = False):
         bare_graph = strip_graph(scalar_definition_graph)
         embedded_graph = self._graph_embedding(bare_graph, training=training)
@@ -947,6 +957,7 @@ class DefinitionTask(tf.keras.layers.Layer):
         num_definitions = scalar_definition_graph.context['num_definitions']
         definition_name_vectors = scalar_definition_graph.context['definition_name_vectors']
         definition_body_embeddings = self.definition_head((hidden_graph, num_definitions, definition_name_vectors), training=training)
+        definition_body_embeddings = tf.ragged.map_flat_values(self.normalize, definition_body_embeddings)
         return definition_body_embeddings
 
 

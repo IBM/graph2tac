@@ -244,15 +244,13 @@ class GraphEmbedding(tfgnn.keras.layers.MapFeatures):
         self._edge_label_num = edge_label_num
         self._hidden_size = hidden_size
 
-        self._node_embedding = tf.keras.layers.Embedding(input_dim=node_label_num,
+        self._inner_node_embedding = tf.keras.layers.Embedding(input_dim=node_label_num,
                                                          output_dim=hidden_size,
-                                                         name=f'{name}_node_embedding',
-                                                         trainable=False)
+                                                         name=f'{name}_node_embedding')
 
         self._edge_embedding = tf.keras.layers.Embedding(input_dim=edge_label_num,
                                                          output_dim=hidden_size,
-                                                         name=f'{name}_edge_embedding',
-                                                         trainable=False)
+                                                         name=f'{name}_edge_embedding')
 
         self._total_size = tfgnn.keras.layers.TotalSize()
         super().__init__(node_sets_fn=self._node_sets_fn,
@@ -270,11 +268,33 @@ class GraphEmbedding(tfgnn.keras.layers.MapFeatures):
         })
         return config
 
+    def calc_node_embedding(self, indices):
+        embs = self._inner_node_embedding(indices)
+        #embs = tf.linalg.normalize(embs, axis=-1)[0]
+        return embs
+    
+    def get_node_embeddings(self):
+        embs = self._inner_node_embedding.embeddings
+        #embs = tf.linalg.normalize(embs, axis=-1)[0]
+        return embs
+    
+    def set_node_embeddings(self, embeddings):
+        return self._inner_node_embedding.embeddings.set_weights([embeddings])
+    
+    def update_node_embeddings(self, embeddings, indices):
+        emb_vars = self._inner_node_embedding.embeddings
+        emb_vars.scatter_update(
+            tf.IndexedSlices(
+                embeddings,
+                indices,
+            )
+        )
+
     def _node_sets_fn(self,
                       node_set: tfgnn.NodeSet,
                       node_set_name: tfgnn.NodeSetName
                       ) -> Dict[tfgnn.FieldName, Any]:
-        return {'hidden_state': self._node_embedding(node_set['node_label'])}
+        return {'hidden_state': self.calc_node_embedding(node_set['node_label'])}
 
     def _edge_sets_fn(self,
                       edge_set: tfgnn.EdgeSet,

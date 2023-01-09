@@ -10,11 +10,21 @@ from pathlib import Path
 
 from graph2tac.loader.data_server import DataServer
 from graph2tac.tfgnn.dataset import Dataset, DataServerDataset, TFRecordDataset
-from graph2tac.tfgnn.tasks import PredictionTask, DefinitionTask, DefinitionMeanSquaredError
+from graph2tac.tfgnn.tasks import PredictionTask, DefinitionTask, DefinitionLoss
 from graph2tac.tfgnn.graph_schema import vectorized_definition_graph_spec, batch_graph_spec
 from graph2tac.tfgnn.train_utils import QCheckpointManager, ExtendedTensorBoard, DefinitionLossScheduler
 from graph2tac.common import logger
 
+class RecomputeEmbeddingsCallback(tf.keras.callbacks.Callback):
+    def __init__(self, data_server, compute_new_definitions):
+        super().__init__()
+        self.data_server = data_server
+        self.compute_new_definitions = compute_new_definitions
+
+    def on_epoch_begin(self, epoch, logs=None):
+        print("Precomputing embeddings...")
+        for cluster in self.data_server.def_cluster_subgraphs():
+            self.compute_new_definitions([cluster])
 
 class Trainer:
     """
@@ -196,17 +206,11 @@ class Trainer:
 
         prediction_task = PredictionTask.from_yaml_config(graph_constants=dataset.graph_constants(),
                                                           yaml_filepath=prediction_task_config)
-        # this dummy prediction task is just to get a gnn for the definition task
-        # which is decoupled from the prediction task
-        dummy_prediction_task = PredictionTask.from_yaml_config(graph_constants=dataset.graph_constants(),
-                                                          yaml_filepath=prediction_task_config)
-        dummy_prediction_task.trainable = False
         
         if definition_task_config is not None:
             definition_task = DefinitionTask.from_yaml_config(graph_embedding=prediction_task.graph_embedding,
-                                                              gnn=dummy_prediction_task.gnn,
+                                                              gnn=prediction_task.gnn,
                                                               yaml_filepath=definition_task_config)
-            definition_task.trainable = False
         else:
             definition_task = None
 
@@ -277,7 +281,7 @@ class Trainer:
 
             # get learned definition embeddings
             defined_labels = self._get_defined_labels(definition_graph)
-            definition_id_embeddings = self.prediction_task.graph_embedding._node_embedding(defined_labels)
+            definition_id_embeddings = self.prediction_task.graph_embedding.calc_node_embedding(defined_labels)
 
             normalization = tf.sqrt(tf.cast(definition_graph.context['num_definitions'], dtype=tf.float32))
             embedding_difference = (definition_body_embeddings - definition_id_embeddings) / tf.expand_dims(normalization, axis=-1)
@@ -292,7 +296,7 @@ class Trainer:
     def _loss(self) -> Dict[str, tf.keras.losses.Loss]:
         loss = self.prediction_task.loss()
         if self.definition_task is not None:
-            loss.update({self.DEFINITION_EMBEDDING: DefinitionMeanSquaredError()})
+            loss.update({self.DEFINITION_EMBEDDING: DefinitionLoss()})
         return loss
 
     def _loss_weights(self) -> Dict[str, float]:
@@ -380,12 +384,9 @@ class Trainer:
             definition_embeddings = self.definition_task(scalar_definition_graph).flat_values
             defined_labels = Trainer._get_defined_labels(definition_graph).flat_values
 
-            emb_vars = self.prediction_task.graph_embedding._node_embedding.embeddings
-            emb_vars.scatter_update(
-                tf.IndexedSlices(
-                    definition_embeddings,
-                    defined_labels,
-                )
+            self.prediction_task.graph_embedding.update_node_embeddings(
+                embeddings=definition_embeddings,
+                indices=defined_labels,
             )
         
         self.cached_definition_computation = _compute_and_replace_definition_embs
@@ -439,7 +440,7 @@ class Trainer:
             .batch(batch_size)
             .prefetch(tf.data.AUTOTUNE)
         )
-
+                
         # prepare callbacks
         callbacks = self._callbacks()
         if self.log_dir is not None:
@@ -461,24 +462,18 @@ class Trainer:
                                          }
                                          )
 
-        if self.trained_epochs.numpy() == 0:
-            print("Precomputing embeddings...")
-            precomputed_set = set()
-            for cluster in self.data_server.def_cluster_subgraphs():
-                for n in cluster.graph.nodes[cluster.num_definitions:]:
-                    if n not in precomputed_set:
-                        print(f"Warning: definition label {n} not precomputed before it is used")
-                        precomputed_set.add(n)
-                for n in cluster.graph.nodes[:cluster.num_definitions]:
-                    precomputed_set.add(n)
-                self.compute_new_definitions([cluster])
-
+        recompute_emb_callback = RecomputeEmbeddingsCallback(
+            data_server=self.data_server,
+            compute_new_definitions=self.compute_new_definitions
+        )
+        callbacks.append(recompute_emb_callback)
+        
         # run fit
         history = self.train_model.fit(train_proofstates,
-                                       validation_data=valid_proofstates,
-                                       initial_epoch=self.trained_epochs.numpy(),
-                                       epochs=total_epochs,
-                                       callbacks=callbacks)
+                                    validation_data=valid_proofstates,
+                                    initial_epoch=self.trained_epochs.numpy(),
+                                    epochs=total_epochs,
+                                    callbacks=callbacks)
         return history
 
 

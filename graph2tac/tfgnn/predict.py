@@ -276,9 +276,9 @@ class TFGNNPredict(Predict):
         new_graph_embedding._edge_embedding = graph_embedding._edge_embedding
 
         new_labels = graph_embedding._node_label_num + tf.range(new_node_label_num - graph_embedding._node_label_num)
-        new_embeddings = tf.concat([graph_embedding._node_embedding.embeddings, new_graph_embedding._node_embedding(new_labels)], axis=0)
+        new_embeddings = tf.concat([graph_embedding.get_node_embeddings(), new_graph_embedding.calc_node_embedding(new_labels)], axis=0)
 
-        new_graph_embedding._node_embedding.set_weights([new_embeddings])
+        new_graph_embedding.set_node_embeddings(new_embeddings)
         return new_graph_embedding
 
     @predict_api_debugging
@@ -304,7 +304,7 @@ class TFGNNPredict(Predict):
 
             # update the global arguments logits head (always necessary, because the global context may shrink!)
             self.prediction_task.global_arguments_logits = LogitsFromEmbeddings(
-                embedding_matrix=self.prediction_task.graph_embedding._node_embedding.embeddings,
+                embedding_matrix=self.prediction_task.graph_embedding.get_node_embeddings(),
                 valid_indices=tf.constant(self._graph_constants.global_context, dtype=tf.int32)
             )
 
@@ -333,12 +333,9 @@ class TFGNNPredict(Predict):
             definition_embeddings = self.definition_task(scalar_definition_graph).flat_values
             defined_labels = Trainer._get_defined_labels(definition_graph).flat_values
 
-            emb_vars = self.prediction_task.graph_embedding._node_embedding.embeddings
-            emb_vars.scatter_update(
-                tf.IndexedSlices(
-                    definition_embeddings,
-                    defined_labels,
-                )
+            self.prediction_task.graph_embedding.update_node_embeddings(
+                embeddings=definition_embeddings,
+                indices=defined_labels,
             )
         
         self.cached_definition_computation = _compute_and_replace_definition_embs
