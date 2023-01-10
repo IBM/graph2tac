@@ -103,6 +103,13 @@ class Predict:
         return self._graph_constants.tactic_index_to_hash
 
     @predict_api_debugging
+    def get_tactic_index_to_string(self) -> np.ndarray:
+        """
+        [ Public API ] Returns the tactic_index_to_string seen during training
+        """
+        return self._graph_constants.tactic_index_to_string
+
+    @predict_api_debugging
     def get_label_to_name(self) -> List[str]:
         """
         [ Public API ] Returns the label_to_names seen during training

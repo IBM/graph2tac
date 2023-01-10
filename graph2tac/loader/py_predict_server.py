@@ -7,11 +7,16 @@ from pathlib import Path
 import numpy as np
 import pickle
 import tqdm
+import os
+import uuid
+import logging
+import contextlib
 
 from py_data_server import AbstractDataServer, DataServer
 from pytact import graph_api_capnp
 from pytact.data_reader import online_definitions_initialize, online_data_predict, capnp_message_generator
 from pytact.graph_api_capnp_cython import PredictionProtocol_Request_Reader
+from graph2tac.common import logger
 from graph2tac.loader.data_classes import *
 
 def apply_temperature(confidences, temperature):
@@ -40,7 +45,7 @@ class PredictServer(AbstractDataServer):
             stop_at_definitions = stop_at_definitions,
         )
         self.model = model
-        self.config = predict_config
+        self.config = config
         self.current_definitions = None # only with a coq context
 
         self._tactic_i_to_numargs = list(model.get_tactic_index_to_numargs())
@@ -379,7 +384,7 @@ def load_model(config, log_levels):
 
         logger.info("importing TF2Predict class..")
         from graph2tac.tf2.predict import TF2Predict
-        predict = TF2Predict(checkpoint_dir=Path(config.model).expanduser().absolute(), debug_dir=config.debug_predict)
+        model = TF2Predict(checkpoint_dir=Path(config.model).expanduser().absolute(), debug_dir=config.debug_predict)
     elif config.arch == 'tfgnn':
         logger.info("importing tensorflow...")
         import tensorflow as tf
@@ -395,14 +400,14 @@ def load_model(config, log_levels):
 
         logger.info("importing TFGNNPredict class...")
         from graph2tac.tfgnn.predict import TFGNNPredict
-        predict = TFGNNPredict(log_dir=Path(config.model).expanduser().absolute(),
+        model = TFGNNPredict(log_dir=Path(config.model).expanduser().absolute(),
                                debug_dir=config.debug_predict,
                                checkpoint_number=config.checkpoint_number,
                                exclude_tactics=exclude_tactics)
     elif config.arch == 'hmodel':
         logger.info("importing HPredict class..")
         from graph2tac.loader.hmodel import HPredict
-        predict = HPredict(checkpoint_dir=Path(config.model).expanduser().absolute(), debug_dir=config.debug_predict)
+        model = HPredict(checkpoint_dir=Path(config.model).expanduser().absolute(), debug_dir=config.debug_predict)
     else:
         Exception(f'the provided model architecture {config.arch} is not supported')
 
@@ -447,7 +452,7 @@ def main():
             capnp_socket = socket.socket(fileno=sys.stdin.fileno())
             prediction_loop(predict_server, capnp_socket, record_file)
         else:
-            logger.info(f"starting tcp/ip server on port {args.port}")
+            logger.info(f"starting tcp/ip server on port {config.port}")
             addr = (config.host, config.port)
             if socket.has_dualstack_ipv6():
                 try:
@@ -461,7 +466,7 @@ def main():
                 server_sock = socket.create_server(addr)
             try:
                 server_sock.listen(1)
-                logger.info(f"tcp/ip server is listening on {args.port}")
+                logger.info(f"tcp/ip server is listening on {config.port}")
                 while True:
                     capnp_socket, remote_addr = server_sock.accept()
                     logger.info(f"coq client connected {remote_addr}")
@@ -469,7 +474,7 @@ def main():
                     prediction_loop(predict_server, capnp_socket, record_file)
                     logger.info(f"coq client disconnected {remote_addr}")
             finally:
-                print(f'closing the server on port {args.port}')
+                print(f'closing the server on port {config.port}')
                 server_sock.close()
 
 if __name__ == '__main__':
