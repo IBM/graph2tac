@@ -278,7 +278,7 @@ class GraphEmbedding(tfgnn.keras.layers.MapFeatures):
         return embs
     
     def set_node_embeddings(self, embeddings):
-        return self._inner_node_embedding.embeddings.set_weights([embeddings])
+        return self._inner_node_embedding.set_weights([embeddings])
     
     def update_node_embeddings(self, embeddings, indices):
         emb_vars = self._inner_node_embedding.embeddings
