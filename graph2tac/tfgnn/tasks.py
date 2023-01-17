@@ -72,24 +72,31 @@ class LocalArgumentSparseCategoricalCrossentropy(tf.keras.losses.Loss):
             return tf.nn.sparse_softmax_cross_entropy_with_logits(arguments_true, arguments_pred)
 
 
-class GlobalArgumentSparseCategoricalCrossentropy(tf.keras.losses.Loss):
+class ArgumentSparseCategoricalCrossentropy(tf.keras.losses.Loss):
     """
-    Used to compute the sparse categorical crossentropy loss for the global argument prediction task.
+    Sparse categorical crossentropy loss for local and global args in the global argument prediction task.
+    
     NOTES:
-        - `-1` arguments correspond to `None` or a different type of argument
+        - `-1` arguments correspond to `None` or a different type of argument (e.g. local vs global)
         - logits **are** assumed to be normalized
-        - the losses are summed across all elements within a batch
-        - assuming the tactic and argument loss weights are 1.0 then this is one part of
-          the negative log probability of the entire tactic prediction.  As the losses get summed with other
-          losses (form other argument types and from the tactic) we will recover the full neg log prob.
+        - `sum_loss_over_tactic` parameter:
+            - If `True`, the losses are summed across all arguments within a batch.
+              When the local and global losses are added together, the combined loss is the negative
+              log probability of the ground truth sequence of (non-None) arguments.
+              Further, if argument loss weight is 1.0 then when the tactic, local, and global
+              losses are added together, the combined loss is equal to the negative log probability of
+              the full ground truth tactic, including base tactic and all (non-None) arguments.
+            - If `False`, the "batch_size" of the output will not necessarily be the same as the number
+              of elements in the batch.  This has the effect that the loss will be averaged by the number
+              of global (or local) arguments in the batch before combining with other losses.
     """
 
-    def __init__(self, average_per_tactic: bool=True, **kwargs):
+    def __init__(self, sum_loss_over_tactic: bool, **kwargs):
         """
-        @param average_per_tactic: whether to average the argument losses per tactic or argument
+        @param average_per_tactic: whether to sum the argument losses over tactic count argument
         """
         super().__init__(**kwargs)
-        self.average_per_tactic = average_per_tactic
+        self.sum_loss_over_tactic = sum_loss_over_tactic
 
     def arguments_filter(self, y_true: tf.RaggedTensor, y_pred: tf.Tensor) -> Tuple[tf.RaggedTensor, tf.RaggedTensor]:
         """
@@ -123,34 +130,39 @@ class GlobalArgumentSparseCategoricalCrossentropy(tf.keras.losses.Loss):
             value_rowids=row_ids,
             nrows=nrows
         )
+        # output shape: [batch, None(args)], [batch, None(args), globals]
         return arguments_true, arguments_pred
 
     def call(self, y_true, y_pred):
         """
         @param y_true: ids for the arguments, with shape [ batch_size, 1, None(num_arguments) ]
         @param y_pred: logits for each argument position, with shape [ batch_size, None(num_arguments), num_categories ]
-        @return: a vector of length equal to the size of the batch
+        @return: a vector of length equal to either the size of the batch or the number of arguments of the given type
         """
-        if self.average_per_tactic:
-            # filter out any arguments which have index -1, i.e. are None or of a different kind (global vs local)
-            # keep track of which batch element the argument came from
-            arguments_true, arguments_pred = self.arguments_filter(y_true, y_pred)
-            # for every element of the batch:
-            # 1. compute the cross entropy loss by using gather to find the corresponding logit
-            #    (and flip the sign)
-            # 2. sum the losses within a batch element
-            return tf.reduce_sum(-tf.gather(arguments_pred, arguments_true, batch_dims=2), axis=-1)
+        # filter out any arguments which have index -1, i.e. are None or of a different kind (global vs local)
+        # keep track of which batch element the argument came from
+        # shape: [batch, None(args)], [batch, None(args), globals]
+        arguments_true, arguments_pred = self.arguments_filter(y_true, y_pred)
+        
+        # compute the cross entropy loss by using gather to find the corresponding logit
+        # (and flip the sign)
+        # shape: [batch, None(args)]
+        if tf.size(arguments_pred) == 0:
+            # deal with the edge case where there is no global context or no global arguments to predict in the batch
+            arg_losses = tf.zeros_like(arguments_true, dtype=tf.float32)
         else:
-            # filter out any arguments which have index -1, i.e. are None or of a different kind (global vs local)
-            # combine all into one list
-            arguments_true, arguments_pred = arguments_filter(y_true, y_pred)
-
-            if tf.size(arguments_pred) == 0:
-                # deal with the edge case where there is no global context or no global arguments to predict in the batch
-                return tf.zeros_like(arguments_true, dtype=tf.float32)
-            else:
-                # the context is non-empty and we have at least one argument, so the following doesn't fail
-                return -tf.gather(arguments_pred, arguments_true, batch_dims=1)
+            # the context is non-empty and we have at least one argument, so the following doesn't fail
+            arg_losses = -tf.gather(arguments_pred, arguments_true, batch_dims=2)
+        
+        # return the losses as a list of losses (it will be reduced automatically by keras to a single number)
+        if self.sum_loss_over_tactic:
+            # sum over all arguments in a batch element
+            # shape: [batch]
+            return tf.reduce_sum(arg_losses, axis=-1)
+        else:
+            # return one loss for each argument in the in the batch
+            # shape: [num of args in ground truth for batch]
+            return arg_losses.flat_values
 
 
 class ArgumentSparseCategoricalAccuracy(tf.keras.metrics.SparseCategoricalAccuracy):
@@ -730,13 +742,16 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
 
     def __init__(self,
                  dynamic_global_context: bool = False,
+                 sum_loss_over_tactic: bool = False,
                  **kwargs):
         """
         @param dynamic_global_context: whether to restrict the global context to available definitions only
+        @param sum_loss_over_tactic: whether to sum the argument losses over the tactic
         @param kwargs: arguments to be passed to the LocalArgumentPrediction constructor
         """
         super().__init__(**kwargs)
         self._dynamic_global_context = dynamic_global_context
+        self._sum_loss_over_tactic = sum_loss_over_tactic
 
         # create a layer to extract logits from the node label embeddings
         self.global_arguments_logits = LogitsFromEmbeddings(
@@ -755,7 +770,8 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
 
         config.update({
             'prediction_task_type': GLOBAL_ARGUMENT_PREDICTION,
-            'dynamic_global_context': self._dynamic_global_context
+            'dynamic_global_context': self._dynamic_global_context,
+            'sum_loss_over_tactic': self._sum_loss_over_tactic
         })
         return config
 
@@ -903,11 +919,10 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
                    GlobalArgumentPrediction.GLOBAL_ARGUMENTS_LOGITS: graph_tensor.context['global_arguments']}
         return graph_tensor, outputs
 
-    @staticmethod
-    def loss() -> Dict[str, tf.keras.losses.Loss]:
+    def loss(self) -> Dict[str, tf.keras.losses.Loss]:
         return {GlobalArgumentPrediction.TACTIC_LOGITS: tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True),
-                GlobalArgumentPrediction.LOCAL_ARGUMENTS_LOGITS: GlobalArgumentSparseCategoricalCrossentropy(),
-                GlobalArgumentPrediction.GLOBAL_ARGUMENTS_LOGITS: GlobalArgumentSparseCategoricalCrossentropy()}
+                GlobalArgumentPrediction.LOCAL_ARGUMENTS_LOGITS: ArgumentSparseCategoricalCrossentropy(sum_loss_over_tactic=self._sum_loss_over_tactic),
+                GlobalArgumentPrediction.GLOBAL_ARGUMENTS_LOGITS: ArgumentSparseCategoricalCrossentropy(sum_loss_over_tactic=self._sum_loss_over_tactic)}
 
     def loss_weights(self) -> Dict[str, float]:
         return {GlobalArgumentPrediction.TACTIC_LOGITS: 1.0,
