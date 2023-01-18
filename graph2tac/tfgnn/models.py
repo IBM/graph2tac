@@ -538,7 +538,7 @@ class SimpleConvolutionGNN(tf.keras.layers.Layer):
         self._dense_activation = dense_activation
         self._ffn_layers = []
         for i, layer_config in enumerate(ffn_layers):
-            layer_config['name'] = f'{name}_residual_dense_{i}'
+            layer_config['name'] = f'{name}_ffn_dense_{i}'
             self._ffn_layers.append(tf.keras.layers.Dense.from_config(layer_config))
 
         self._residual_activation = residual_activation
@@ -568,7 +568,8 @@ class SimpleConvolutionGNN(tf.keras.layers.Layer):
             'dropout_rate': self._dropout_rate,
             'layer_norm': self._layer_norm,
             'reduce_type': self._reduce_type,
-            'final_reduce_type': self._final_reduce_type
+            'final_reduce_type': self._final_reduce_type,
+            'ffn_layers': [layer.get_config() for layer in self._ffn_layers]
         })
         return config
 
@@ -589,7 +590,10 @@ class SimpleConvolutionGNN(tf.keras.layers.Layer):
     def _nodes_next_state_factory(self, node_set_name: tfgnn.NodeSetName) -> tfgnn.keras.layers.ResidualNextState:
         return tfgnn.keras.layers.ResidualNextState(
             residual_block=tf.keras.Sequential(
-                self._ffn_layers + [tf.keras.layers.Dropout(rate=self._dropout_rate)]
+                self._ffn_layers + [
+                    tf.keras.layers.Dense(units=self._hidden_size, name=f'ffn_final_dense'),
+                    tf.keras.layers.Dropout(rate=self._dropout_rate)
+                ]
             ),
             activation=self._residual_activation,
             name='residual'
