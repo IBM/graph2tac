@@ -27,6 +27,7 @@ def apply_temperature(confidences, temperature):
     """
     res = np.array(confidences, np.float64)**(1/temperature)
     res /= res.sum() + (1-sum(confidences))**(1/temperature)
+    return res
 
 # TODO: add logging messages
 # TODO: LoggingCounters
@@ -99,10 +100,10 @@ class PredictServer(AbstractDataServer):
 
         # definition recalculation
 
-        if update_all_definitions:
+        if self.config.update_all_definitions:
             def_clusters_for_update = list(definitions.clustered_definitions)
             logger.info(f"Prepared for update all {len(def_clusters_for_update)} definition clusters")
-        elif update_new_definitions:
+        elif self.config.update_new_definitions:
             def_clusters_for_update = [
                 cluster for cluster in definitions.clustered_definitions
                 if self._def_node_to_i[cluster[0].node] >= self._num_train_nodes
@@ -241,20 +242,20 @@ def prediction_loop(predict_server, capnp_socket, record_file):
             response = graph_api_capnp.PredictionProtocol.Response.new_message(
                 synchronized=msg.synchronize
             )
-            response.write_packed(capnp_socket)
+            message_generator.send(response)
             msg = next(message_generator, None)
         elif msg.is_check_alignment:
             response = predict_server.check_alignment(msg.check_alignment)
-            response.write_packed(capnp_socket)
+            message_generator.send(response)
             msg = next(message_generator, None)
         elif msg.is_initialize:
             with predict_server.coq_context(msg.initialize):
                 response = graph_api_capnp.PredictionProtocol.Response.new_message(initialized=None)
-                response.write_packed(capnp_socket)
+                message_generator.send(response)
                 msg = next(message_generator, None)
                 while msg is not None and msg.is_predict:
                     response = predict_server.predict(msg.predict)
-                    response.write_packed(capnp_socket)
+                    message_generator.send(response)
                     msg = next(message_generator, None)
         else:
             raise Exception("Capnp protocol error")
