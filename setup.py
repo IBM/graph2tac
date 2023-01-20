@@ -115,7 +115,6 @@ setup(
         'dataclasses-json',
         'pyyaml',
         'graphviz',
-        #'pytact @ git+https://git@github.com/coq-tactician/coq-tactician-reinforce@5d3f779a76ff64023816ef0fb908afc71dd46cc8',
-        'pytact @ git+https://git@github.com/coq-tactician/coq-tactician-reinforce@d2ff2d7271b1680b6b7ffe1c75f3a1990e2ab130',
+        'pytact @ git+https://git@github.com/coq-tactician/coq-tactician-reinforce@77f4ba43af8794d76745f9eacf8e91e7b88c3158',
     ]
 )

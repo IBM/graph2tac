@@ -14,7 +14,9 @@ import contextlib
 
 from py_data_server import AbstractDataServer, DataServer
 from pytact import graph_api_capnp
-from pytact.data_reader import online_definitions_initialize, online_data_predict, capnp_message_generator
+from pytact.data_reader import (capnp_message_generator,
+                                TacticPredictionGraph, TacticPredictionsGraph,
+                                GlobalContextMessage, CheckAlignmentMessage, CheckAlignmentResponse)
 from pytact.graph_api_capnp_cython import PredictionProtocol_Request_Reader
 from graph2tac.common import logger
 from graph2tac.loader.data_classes import *
@@ -82,7 +84,7 @@ class PredictServer(AbstractDataServer):
 
         # definitions
 
-        self._globarg_i_to_nodeid = []
+        self._globarg_i_to_node = []
         global_context = []
         self._def_node_to_i = dict()
         for d in definitions.definitions:
@@ -91,7 +93,7 @@ class PredictServer(AbstractDataServer):
                 i = self._register_definition(d)
             else:
                 self._def_node_to_i[d.node] = i
-            self._globarg_i_to_nodeid.append(d.node.nodeid)
+            self._globarg_i_to_node.append(d.node)
             global_context.append(i)
 
         global_context = np.array(global_context, dtype = np.int32)
@@ -126,138 +128,104 @@ class PredictServer(AbstractDataServer):
         self.current_definitions = None
 
         del self.current_allowed_tactics
-        del self._globarg_i_to_nodeid
+        del self._globarg_i_to_node
         del self._def_node_to_i
         del self._node_i_to_name[self._num_train_nodes:]
         del self._node_i_in_spine[self._num_train_nodes:]
 
     @contextmanager
     def coq_context(self, msg):
-        with online_definitions_initialize(msg.graph, msg.representative) as definitions:
-            self._enter_coq_context(definitions, msg.tactics)
-            yield
-            self._exit_coq_context()
+        self._enter_coq_context(msg.definitions, msg.tactics)
+        yield
+        self._exit_coq_context()
 
     def _decode_action(self, action, confidence, proof_state):
-        res = dict()
         tactic = action[0,0]
         arguments = []
         for arg_type, arg_index in action[1:]:
             if arg_type == 0: # local argument
-                arguments.append({'term' : {
-                    'depIndex' : 0,
-                    'nodeIndex': proof_state.context[arg_index].nodeid,
-                }})
+                arguments.append(proof_state.context[arg_index])
             else:
-                arguments.append({'term' : {
-                    'depIndex' : 1,
-                    'nodeIndex': int(self._globarg_i_to_nodeid[arg_index]),
-                }})
-                print(self._globarg_i_to_nodeid[arg_index])
-                print(self.global_context[arg_index])
-                print(self._node_i_to_name[self.global_context[arg_index]])
-        res['tactic'] = {'ident' : int(self._tactic_i_to_hash[tactic])}
-        #print("LENGTHS:", len(self._tactic_i_to_hash), len(self._tactic_i_to_bytes))
-        #print(res['tactic'], ':', self._tactic_i_to_bytes[tactic])
-        res['confidence'] = float(confidence)
-        res['arguments'] = arguments
-        return res
+                arguments.append(self._globarg_i_to_node[arg_index])
 
-    def predict(self, msg):
+        return TacticPredictionGraph(
+            int(self._tactic_i_to_hash[tactic]),
+            arguments,
+            float(confidence),
+        )
+
+    def predict(self, proof_state):
         if self.current_definitions is None:
             raise Exception("Cannot predict outside 'with predict_server.coq_context()'")
-        with online_data_predict(
-                self.current_definitions,
-                msg) as proof_state:
 
-            root = proof_state.root
-            graph, node_to_i = self._downward_closure(
-                [root]
-            )
-            root_i = 0
-            local_context = proof_state.context
-            local_context_i = [node_to_i[n] for n in local_context]
-            dynamic_global_context = np.arange(len(self.global_context), dtype=np.uint32)
+        root = proof_state.root
+        graph, node_to_i = self._downward_closure(
+            [root]
+        )
+        root_i = 0
+        local_context = proof_state.context
+        local_context_i = [node_to_i[n] for n in local_context]
+        dynamic_global_context = np.arange(len(self.global_context), dtype=np.uint32)
 
-            context = ProofstateContext(
-                local_context=np.array(local_context_i, dtype = np.uint32),
-                global_context=np.array(dynamic_global_context, dtype = np.uint32),
-            )
-            dummy_proofstate_info = ProofstateMetadata(b'dummy_proofstate_name', -1, True)
+        context = ProofstateContext(
+            local_context=np.array(local_context_i, dtype = np.uint32),
+            global_context=np.array(dynamic_global_context, dtype = np.uint32),
+        )
+        dummy_proofstate_info = ProofstateMetadata(b'dummy_proofstate_name', -1, True)
 
-            actions, confidences = self.model.ranked_predictions(
-                state=LoaderProofstate(
-                    graph=graph,
-                    root=root_i,
-                    context=context,
-                    metadata=dummy_proofstate_info
-                ),
-                tactic_expand_bound=self.config.tactic_expand_bound,
-                total_expand_bound=self.config.total_expand_bound,
-                allowed_model_tactics=self.current_allowed_tactics,
-                available_global=None
-            )
-            confidences = apply_temperature(confidences, self.config.temperature)
-            # use only top-k
-            actions = actions[:self.config.search_expand_bound]
-            confidences = confidences[:self.config.search_expand_bound]
-            response = graph_api_capnp.PredictionProtocol.Response.new_message(
-                prediction = [
-                    self._decode_action(action, confidence, proof_state)
-                    for action, confidence in zip(actions, confidences)
-                ]
-            )
-            print(response)
-            return response
+        actions, confidences = self.model.ranked_predictions(
+            state=LoaderProofstate(
+                graph=graph,
+                root=root_i,
+                context=context,
+                metadata=dummy_proofstate_info
+            ),
+            tactic_expand_bound=self.config.tactic_expand_bound,
+            total_expand_bound=self.config.total_expand_bound,
+            allowed_model_tactics=self.current_allowed_tactics,
+            available_global=None
+        )
+        confidences = apply_temperature(confidences, self.config.temperature)
+        # use only top-k
+        actions = actions[:self.config.search_expand_bound]
+        confidences = confidences[:self.config.search_expand_bound]
+        return TacticPredictionsGraph([
+            self._decode_action(action, confidence, proof_state)
+            for action, confidence in zip(actions, confidences)
+        ])
 
     def check_alignment(msg):
-        with online_definitions_initialize(
-                    msg.graph,
-                    msg.representative) as definitions:
-            unaligned_tactics = [
-                tactic.ident for tactic in msg.tactics
-                if tactic.ident not in self._tactic_to_i
-            ]
-            unaligned_definitions = [
-                d.node.nodeid for d in definitions.definitions
-                if d.name not in self._def_name_to_i
-            ]
+        unaligned_tactics = [
+            tactic.ident for tactic in msg.tactics
+            if tactic.ident not in self._tactic_to_i
+        ]
+        unaligned_definitions = [
+            d.node.nodeid for d in msg.definitions.definitions
+            if d.name not in self._def_name_to_i
+        ]
 
-            unaligned_tactics = sorted(unaligned_tactics)
-            unaligned_definitions = sorted(unaligned_definitions)
-            return {
-                'unalignedTactics': unaligned_tactics,
-                'unalignedDefinitions': unaligned_definitions,
-            }
+        unaligned_tactics = sorted(unaligned_tactics)
+        unaligned_definitions = sorted(unaligned_definitions)
+        return CheckAlignmentResponse(
+            unalignedTactics = unaligned_tactics,
+            unalignedDefinitions = unaligned_definitions,
+        )
 
 def prediction_loop(predict_server, capnp_socket, record_file):
     if predict_server.config.with_meter:
         capnp_socket = tqdm.tqdm(capnp_socket)
     message_generator = capnp_message_generator(capnp_socket, record_file)
 
-    msg = next(message_generator, None)
-    while msg is not None:
-        if msg.is_predict:
-            raise Exception('Predict message received without a preceding initialize message')
-        elif msg.is_synchronize:
-            response = graph_api_capnp.PredictionProtocol.Response.new_message(
-                synchronized=msg.synchronize
-            )
+    for msg in message_generator:
+        if isinstance(msg, CheckAlignmentMessage):
+            response = predict_server.check_alignment(msg)
             message_generator.send(response)
-            msg = next(message_generator, None)
-        elif msg.is_check_alignment:
-            response = predict_server.check_alignment(msg.check_alignment)
-            message_generator.send(response)
-            msg = next(message_generator, None)
-        elif msg.is_initialize:
-            with predict_server.coq_context(msg.initialize):
-                response = graph_api_capnp.PredictionProtocol.Response.new_message(initialized=None)
-                message_generator.send(response)
-                msg = next(message_generator, None)
-                while msg is not None and msg.is_predict:
-                    response = predict_server.predict(msg.predict)
-                    message_generator.send(response)
-                    msg = next(message_generator, None)
+        elif isinstance(msg, GlobalContextMessage):
+            with predict_server.coq_context(msg):
+                prediction_requests = msg.prediction_requests
+                for proof_state in prediction_requests:
+                    response = predict_server.predict(proof_state)
+                    prediction_requests.send(response)
         else:
             raise Exception("Capnp protocol error")
 
