@@ -158,7 +158,7 @@ class PredictServer(AbstractDataServer):
                 print(self._node_i_to_name[self.global_context[arg_index]])
         res['tactic'] = {'ident' : int(self._tactic_i_to_hash[tactic])}
         print(res['tactic'], ':', self._tactic_i_to_bytes[tactic])
-        res['confidence'] = confidence
+        res['confidence'] = float(confidence)
         res['arguments'] = arguments
         return res
 
