@@ -56,7 +56,7 @@ class PredictServer(AbstractDataServer):
             for i,h in enumerate(self._tactic_i_to_hash)
         }
         #self._tactic_i_to_bytes = [b'UNKNOWN']*len(self._tactic_i_to_hash)
-        self._tactic_i_to_bytes = list(model.get_tactic_index_to_string())
+        #self._tactic_i_to_bytes = list(model.get_tactic_index_to_string())
 
         self._node_i_to_name = model.get_label_to_name()
         self._node_i_in_spine = model.get_label_in_spine()
@@ -157,7 +157,8 @@ class PredictServer(AbstractDataServer):
                 print(self.global_context[arg_index])
                 print(self._node_i_to_name[self.global_context[arg_index]])
         res['tactic'] = {'ident' : int(self._tactic_i_to_hash[tactic])}
-        print(res['tactic'], ':', self._tactic_i_to_bytes[tactic])
+        #print("LENGTHS:", len(self._tactic_i_to_hash), len(self._tactic_i_to_bytes))
+        #print(res['tactic'], ':', self._tactic_i_to_bytes[tactic])
         res['confidence'] = float(confidence)
         res['arguments'] = arguments
         return res
