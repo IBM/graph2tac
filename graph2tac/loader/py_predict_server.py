@@ -113,7 +113,7 @@ class PredictServer(AbstractDataServer):
             def_clusters_for_update = []
             logger.info(f"No update of the definition clusters requested")
 
-        if def_clusters_for_update and self.config.proggress_bar:
+        if def_clusters_for_update and self.config.progress_bar:
             def_clusters_for_update = tqdm.tqdm(def_clusters_for_update)
 
         for cluster in def_clusters_for_update:
