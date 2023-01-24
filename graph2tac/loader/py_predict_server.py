@@ -417,7 +417,7 @@ def main():
         record_context = contextlib.nullcontext()
 
     with record_context as record_file:
-        if config.tcp:
+        if not config.tcp:
             logger.info("starting stdin server")
             capnp_socket = socket.socket(fileno=sys.stdin.fileno())
             prediction_loop(predict_server, capnp_socket, record_file)
