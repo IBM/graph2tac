@@ -33,7 +33,7 @@ from graph2tac.loader.data_server import DataServer, ProofstateContext, Proofsta
 Tactic = NewType('Tactic', object)
 
 capnp.remove_import_hook()
-graph_api_filename = pkg_resources.resource_filename('graph2tac.loader','clib/graph_api_v13.capnp')
+graph_api_filename = pkg_resources.resource_filename('graph2tac.loader','clib/graph_api_v14.capnp')
 graph_api_capnp = capnp.load(graph_api_filename)
 
 
