@@ -12,7 +12,7 @@ import uuid
 import logging
 import contextlib
 
-from py_data_server import AbstractDataServer, DataServer
+from graph2tac.loader.py_data_server import AbstractDataServer, DataServer
 from pytact import graph_api_capnp
 from pytact.data_reader import (capnp_message_generator,
                                 TacticPredictionGraph, TacticPredictionsGraph,
