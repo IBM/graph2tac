@@ -1,4 +1,4 @@
-/* this code supports capnp v13 */
+/* this code supports capnp v14 */
 
 #define GCC_VERSION (__GNUC__ * 10000 + __GNUC_MINOR__ * 100 + __GNUC_PATCH_LEVEL__)
 
@@ -8,7 +8,7 @@
 #include <numpy/arrayobject.h>
 
 
-#include "graph_api_v13.capnp.h"
+#include "graph_api_v14.capnp.h"
 
 
 
