@@ -9,6 +9,8 @@ import pickle
 import tqdm
 import os
 import uuid
+import time
+import psutil
 import logging
 import contextlib
 
@@ -103,20 +105,16 @@ class LoggingCounters:
             "Session" : f"{self.session_idx}",
             "Theorem" : f"{self.thm_idx}",
             "Annotation" : f"{self.thm_annotation}",
-            "Initialize|Message size (B)" : f"{self.init_data_online_size}",
             "Initialize|Network build time (s)" : f"{self.build_network_time:.6f}",
             "Initialize|Def clusters to update" : f"{self.n_def_clusters_updated}",
             "Initialize|Def update time (s)" : f"{self.update_def_time:.6f}",
             "Predict|Messages cnt" : f"{self.msg_idx}",
-            "Predict|Avg message size (B/msg)" : 
-                f"{self.init_data_online_size/self.msg_idx:.1f}" if self.msg_idx else "NA",
             "Predict|Avg predict time (s/msg)" : 
                 f"{self.t_predict/self.n_predict:.6f}" if self.n_predict else "NA",
             "Predict|Max predict time (s/msg)" : f"{self.max_t_predict:.6f}",
             "Predict|Max time predict msg ix" : f"{self.argmax_t_predict}",
             "Predict|Avg Coq wait time (s/msg)":
                 f"{self.t_coq/self.n_coq:.6f}" if self.n_coq else "NA",
-            "Memory|Total data in msgs (MB)" : f"{self.total_data_online_size/10**6:.3f}",
             "Memory|Total memory (MB)": f"{self.total_mem/10**6:.3f}",
             "Memory|Physical memory (MB)": f"{self.physical_mem/10**6:.3f}",
             "Memory|Total mem diff (MB)": f"{self.total_mem_diff/10**6:.3f}",
@@ -329,6 +327,7 @@ def prediction_loop(predict_server, capnp_socket, record_file):
     message_generator = capnp_message_generator(capnp_socket, record_file)
     log_cnts = predict_server.log_cnts
     log_cnts.session_idx += 1
+    log_cnts.thm_idx = -1
 
     for msg in message_generator:
         if isinstance(msg, CheckAlignmentMessage):
@@ -343,7 +342,7 @@ def prediction_loop(predict_server, capnp_socket, record_file):
             with predict_server.coq_context(msg):
                 prediction_requests = msg.prediction_requests
 
-                log_cnts.msg_idx = 0
+                log_cnts.msg_idx = -1
                 log_cnts.t_predict = 0.0
                 log_cnts.n_predict = 0
                 log_cnts.max_t_predict = 0.0
@@ -364,7 +363,7 @@ def prediction_loop(predict_server, capnp_socket, record_file):
                     t1 = time.time()
                     if t1-t0 > log_cnts.max_t_predict:
                         log_cnts.max_t_predict = t1-t0
-                        log_cnts.argmax_t_predict = log_cnts.msg_idx - 1  
+                        log_cnts.argmax_t_predict = log_cnts.msg_idx
 
                     log_cnts.t_predict += (t1 - t0)
                     log_cnts.n_predict += 1
