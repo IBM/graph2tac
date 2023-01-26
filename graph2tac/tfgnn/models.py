@@ -517,6 +517,7 @@ class SimpleConvolutionGNN(tf.keras.layers.Layer):
                  layer_norm: bool,
                  reduce_type: str,
                  final_reduce_type: str,
+                 ffn_layers: Iterable[dict] = (),
                  name: str = 'simple_convolution_gnn',
                  **kwargs):
         """
@@ -528,12 +529,18 @@ class SimpleConvolutionGNN(tf.keras.layers.Layer):
         @param layer_norm: whether to use layer normalization on node hidden states
         @param reduce_type: the reduction to perform after each convolution
         @param final_reduce_type: the reduction to perform on the final step
+        @param ffn_layers: dense_layers after convolution, before dropout and residual connection
         @param name: the name of the layer
         @param kwargs: passed on to parent constructor
         """
         super().__init__(name=name, **kwargs)
         self._hidden_size = hidden_size
         self._dense_activation = dense_activation
+        self._ffn_layers = []
+        for i, layer_config in enumerate(ffn_layers):
+            layer_config['name'] = f'{name}_ffn_dense_{i}'
+            self._ffn_layers.append(tf.keras.layers.Dense.from_config(layer_config))
+
         self._residual_activation = residual_activation
         self._dropout_rate = dropout_rate
         self._layer_norm = layer_norm
@@ -561,7 +568,8 @@ class SimpleConvolutionGNN(tf.keras.layers.Layer):
             'dropout_rate': self._dropout_rate,
             'layer_norm': self._layer_norm,
             'reduce_type': self._reduce_type,
-            'final_reduce_type': self._final_reduce_type
+            'final_reduce_type': self._final_reduce_type,
+            'ffn_layers': [layer.get_config() for layer in self._ffn_layers]
         })
         return config
 
@@ -581,7 +589,12 @@ class SimpleConvolutionGNN(tf.keras.layers.Layer):
 
     def _nodes_next_state_factory(self, node_set_name: tfgnn.NodeSetName) -> tfgnn.keras.layers.ResidualNextState:
         return tfgnn.keras.layers.ResidualNextState(
-            residual_block=tf.keras.layers.Dense(units=self._hidden_size, name=f'dense'),
+            residual_block=tf.keras.Sequential(
+                self._ffn_layers + [
+                    tf.keras.layers.Dense(units=self._hidden_size, name=f'ffn_final_dense'),
+                    tf.keras.layers.Dropout(rate=self._dropout_rate)
+                ]
+            ),
             activation=self._residual_activation,
             name='residual'
         )
@@ -592,7 +605,6 @@ class SimpleConvolutionGNN(tf.keras.layers.Layer):
              ) -> tfgnn.GraphTensor:
         for convolution in self._convolutions:
             embedded_graph = convolution(embedded_graph, training=training)
-            embedded_graph = self._dropout(embedded_graph, training=training)  # noqa [ PyCallingNonCallable ]
             if self._layer_norm:
                 embedded_graph = self._layer_normalization(embedded_graph, training=training)  # noqa [ PyCallingNonCallable ]
 
