@@ -31,13 +31,108 @@ def apply_temperature(confidences, temperature):
     res /= res.sum() + (1-sum(confidences))**(1/temperature)
     return res
 
-# TODO: add logging messages
-# TODO: LoggingCounters
+@dataclass
+class LoggingCounters:
+    """
+    The counters recorded in the logs and debug output.
+    """
+    process_uuid: uuid.UUID
+    """
+    UUID for the process.
+    
+    Used to distinguish logs when multiple processes get logged to the same file.
+    """
+    session_idx: int = -1
+    """Index for the current session"""
+    thm_idx: int = -1
+    """Index of the current theorem (based on number of `initialization` messages seen)"""    
+    thm_annotation: str = ""
+    """A theorem identifier (including file and linenumber if Coq is using coqc)"""
+    msg_idx: int = -1
+    """Number of 'prediction' messages recieved since last 'intitialize' message"""
+    t_predict: float = 0.0
+    """Total time (in seconds) spent on predict since last 'initialize'"""
+    n_predict: int = 0
+    """Number of 'prediction' messages recieved since last 'intialize'"""
+    max_t_predict: float = 0.0
+    """Max time (in seconds) spent on single predict since last 'initialize'"""
+    argmax_t_predict: int = -1
+    """Index of last maximum time single predict since last 'initialize'"""
+    t_coq: int = 0
+    """Total time (in seconds) spent waiting on Coq since last 'initialize'"""
+    n_coq: int = 0
+    """Number of 'prediction' requests made by Coq"""
+    build_network_time: float = 0.0
+    """Time (in seconds) to build network when processing most recent 'intitialize' message"""
+    update_def_time: float = 0.0
+    """Time (in seconds) to update the definitions processing most recent 'intitialize' message"""
+    n_def_clusters_updated: int = 0
+    """Number of definition clusters updated when processing most recent 'initialize' message"""
+    proc = psutil.Process()
+    """This process, used to get memory and cpu statistics."""
+    total_mem: float = 0.0
+    """Total memory (in bytes) at time of most recent 'initialize' message"""
+    physical_mem: float = 0.0
+    """Total physical memory (in bytes) at time of most recent 'initialize' message"""
+    total_mem_diff: float = 0.0
+    """Difference in memory (in bytes) since last 'initialize' message"""
+    physical_mem_diff: float = 0.0
+    """Difference in physical memory (in bytes) since last 'initialize' message"""
+    cpu_pct = 0.0
+    """
+    CPU utilization since the last 'initialize' message.
+
+    Can be > 100% if using multiple cores (same as in htop).
+    May incorrectly be 0.0 if there isn't enough time between 'initialize' calls.
+    """
+
+    def update_process_stats(self):
+        """
+        Update the CPU and memory statistics recording the difference 
+        """
+        self.cpu_pct = self.proc.cpu_percent()
+        new_mem = self.proc.memory_info()
+        self.total_mem_diff = new_mem.vms - self.total_mem
+        self.physical_mem_diff = new_mem.rss - self.physical_mem
+        self.total_mem = new_mem.vms
+        self.physical_mem = new_mem.rss
+
+    def summary_log_message(self) -> str:
+        summary_data = {
+            "UUID" : f"{self.process_uuid}",
+            "Session" : f"{self.session_idx}",
+            "Theorem" : f"{self.thm_idx}",
+            "Annotation" : f"{self.thm_annotation}",
+            "Initialize|Message size (B)" : f"{self.init_data_online_size}",
+            "Initialize|Network build time (s)" : f"{self.build_network_time:.6f}",
+            "Initialize|Def clusters to update" : f"{self.n_def_clusters_updated}",
+            "Initialize|Def update time (s)" : f"{self.update_def_time:.6f}",
+            "Predict|Messages cnt" : f"{self.msg_idx}",
+            "Predict|Avg message size (B/msg)" : 
+                f"{self.init_data_online_size/self.msg_idx:.1f}" if self.msg_idx else "NA",
+            "Predict|Avg predict time (s/msg)" : 
+                f"{self.t_predict/self.n_predict:.6f}" if self.n_predict else "NA",
+            "Predict|Max predict time (s/msg)" : f"{self.max_t_predict:.6f}",
+            "Predict|Max time predict msg ix" : f"{self.argmax_t_predict}",
+            "Predict|Avg Coq wait time (s/msg)":
+                f"{self.t_coq/self.n_coq:.6f}" if self.n_coq else "NA",
+            "Memory|Total data in msgs (MB)" : f"{self.total_data_online_size/10**6:.3f}",
+            "Memory|Total memory (MB)": f"{self.total_mem/10**6:.3f}",
+            "Memory|Physical memory (MB)": f"{self.physical_mem/10**6:.3f}",
+            "Memory|Total mem diff (MB)": f"{self.total_mem_diff/10**6:.3f}",
+            "Memory|Physical mem diff (MB)": f"{self.physical_mem_diff/10**6:.3f}",
+            "Avg CPU (%)": f"{self.cpu_pct}"
+        }
+        return (
+            f"Thm Summary:\n" +
+            "\n".join(f"[g2t-sum] {k}\t{v}" for k, v in summary_data.items())
+        )
 
 class PredictServer(AbstractDataServer):
     def __init__(self,
                  model,
                  config,
+                 log_cnts,
     ):
         max_subgraph_size = model.get_max_subgraph_size()
         bfs_option = True
@@ -49,6 +144,7 @@ class PredictServer(AbstractDataServer):
         )
         self.model = model
         self.config = config
+        self.log_cnts = log_cnts
         self.current_definitions = None # only with a coq context
 
         self._tactic_i_to_numargs = list(model.get_tactic_index_to_numargs())
@@ -98,7 +194,14 @@ class PredictServer(AbstractDataServer):
 
         global_context = np.array(global_context, dtype = np.int32)
         self.global_context = global_context
+
+        logger.info(f"initializing network with {len(global_context)} defs in global context")
+        t0 = time.time()
+
         self.model.initialize(global_context)
+        t1 = time.time()
+        self.log_cnts.build_network_time = t1-t0
+        logger.info(f"Building network model completed in {self.log_cnts.build_network_time:.6f} seconds")
 
         # definition recalculation
 
@@ -115,14 +218,23 @@ class PredictServer(AbstractDataServer):
             def_clusters_for_update = []
             logger.info(f"No update of the definition clusters requested")
 
-        if def_clusters_for_update and self.config.progress_bar:
-            def_clusters_for_update = tqdm.tqdm(def_clusters_for_update)
+        t0 = time.time()
+        if def_clusters_for_update:
+            logger.info(f"Updating definition clusters...")
+            if self.config.progress_bar:
+                def_clusters_for_update = tqdm.tqdm(def_clusters_for_update)
 
-        for cluster in def_clusters_for_update:
-            cluster_state = self.cluster_to_graph(cluster)
-            self.model.compute_new_definitions([cluster_state])
+            for cluster in def_clusters_for_update:
+                cluster_state = self.cluster_to_graph(cluster)
+                self.model.compute_new_definitions([cluster_state])
 
-        logger.info(f"Definition clusters updated.")
+            logger.info(f"Definition clusters updated.")
+        else:
+            logger.info(f"No cluster to update.")
+
+        t1 = time.time()
+        self.log_cnts.n_def_clusters_updated = len(def_clusters_for_update)
+        self.log_cnts.update_def_time = t1 - t0
 
     def _exit_coq_context(self):
         self.current_definitions = None
@@ -215,17 +327,53 @@ def prediction_loop(predict_server, capnp_socket, record_file):
     if predict_server.config.with_meter:
         capnp_socket = tqdm.tqdm(capnp_socket)
     message_generator = capnp_message_generator(capnp_socket, record_file)
+    log_cnts = predict_server.log_cnts
+    log_cnts.session_idx += 1
 
     for msg in message_generator:
         if isinstance(msg, CheckAlignmentMessage):
+            logger.info("checkAlignment request")
             response = predict_server.check_alignment(msg)
+            logger.info("sending checkAlignment response to coq")
             message_generator.send(response)
         elif isinstance(msg, GlobalContextMessage):
+            log_cnts.thm_idx += 1
+            log_cnts.thm_annotation = msg.log_annotation
+
             with predict_server.coq_context(msg):
                 prediction_requests = msg.prediction_requests
+
+                log_cnts.msg_idx = 0
+                log_cnts.t_predict = 0.0
+                log_cnts.n_predict = 0
+                log_cnts.max_t_predict = 0.0
+                log_cnts.argmax_t_predict = -1
+                log_cnts.t_coq = 0.0
+                log_cnts.n_coq = 0
+                t0_coq = time.time()
                 for proof_state in prediction_requests:
+                    log_cnts.t_coq += (time.time() - t0_coq)
+                    log_cnts.n_coq += 1
+                    log_cnts.msg_idx += 1
+
+                    t0 = time.time()
+
+                    # important line -- getting prediction
                     response = predict_server.predict(proof_state)
+
+                    t1 = time.time()
+                    if t1-t0 > log_cnts.max_t_predict:
+                        log_cnts.max_t_predict = t1-t0
+                        log_cnts.argmax_t_predict = log_cnts.msg_idx - 1  
+
+                    log_cnts.t_predict += (t1 - t0)
+                    log_cnts.n_predict += 1
+                    
+                    # important line -- sending prediction
                     prediction_requests.send(response)
+
+            log_cnts.update_process_stats()
+            logger.summary(log_cnts.summary_log_message())
         else:
             raise Exception("Capnp protocol error")
 
@@ -391,14 +539,15 @@ def main():
     if config.record is not None:
         logger.warning(f"WARNING!!!! the file {config.record} was provided to record messages for debugging purposes. The capnp bin messages will be recorded to {config.record}. Please do not provide --record if you do not want to record messages for later debugging and inspection purposes!")
     
-    log_levels = {'debug':'10',
-                  'verbose':'15',
-                  'info':'20',
-                  'summary':'25',
-                  'warning':'30',
-                  'error':'40',
-                  'critical':'50'}
-
+    log_levels = {
+        'debug':'10',
+        'verbose':'15',
+        'info':'20',
+        'summary':'25',
+        'warning':'30',
+        'error':'40',
+        'critical':'50',
+    }
 
     os.environ['G2T_LOG_LEVEL'] = log_levels[config.log_level]
     logger.setLevel(int(log_levels[config.log_level]))
@@ -408,8 +557,9 @@ def main():
     process_uuid = uuid.uuid1()
     logger.info(f"UUID: {process_uuid}")
 
+    log_cnts = LoggingCounters(process_uuid=process_uuid)
     model = load_model(config, log_levels)
-    predict_server = PredictServer(model, config)
+    predict_server = PredictServer(model, config, log_cnts)
 
     if config.record is not None:
         record_context = open(config.record, 'wb')
@@ -444,7 +594,7 @@ def main():
                     prediction_loop(predict_server, capnp_socket, record_file)
                     logger.info(f"coq client disconnected {remote_addr}")
             finally:
-                print(f'closing the server on port {config.port}')
+                logger.info(f'closing the server on port {config.port}')
                 server_sock.close()
 
 if __name__ == '__main__':
