@@ -24,7 +24,7 @@ arguments_head_config:
   activation: linear
   recurrent_activation: relu
   recurrent_depth: 2
-global_cosign_similarity: true
+global_cosine_similarity: true
 arguments_loss_coefficient: 1.0
 sum_loss_over_tactic: true
 dynamic_global_context: true

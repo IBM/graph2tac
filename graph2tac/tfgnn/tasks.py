@@ -752,19 +752,19 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
 
     def __init__(self,
                  dynamic_global_context: bool = False,
-                 global_cosign_similarity: bool = False,
+                 global_cosine_similarity: bool = False,
                  sum_loss_over_tactic: bool = False,
                  **kwargs):
         """
         @param dynamic_global_context: whether to restrict the global context to available definitions only
-        @param global_cosign_similarity: whether to use cosign similarity to calculate global arg logits
+        @param global_cosine_similarity: whether to use cosine similarity to calculate global arg logits
         @param sum_loss_over_tactic: whether to sum the argument losses over the tactic
         @param kwargs: arguments to be passed to the LocalArgumentPrediction constructor
         """
         super().__init__(**kwargs)
         self._dynamic_global_context = dynamic_global_context
         self._sum_loss_over_tactic = sum_loss_over_tactic
-        self._global_cosine_similarity = global_cosign_similarity
+        self._global_cosine_similarity = global_cosine_similarity
         
         self.global_arguments_head = tf.keras.layers.Dense(self._hidden_size)
         self.local_arguments_head = tf.keras.layers.Dense(self._hidden_size)
