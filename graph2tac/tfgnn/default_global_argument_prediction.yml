@@ -1,5 +1,6 @@
 prediction_task_type: global_argument_prediction
 hidden_size: 128
+unit_norm_embs: true
 tactic_embedding_size: 128
 gnn_type: simple_convolution_gnn
 gnn_config:
@@ -11,8 +12,8 @@ gnn_config:
   dropout_rate: 0.1
   residual_activation: null
   layer_norm: true
-  reduce_type: max
-  final_reduce_type: max
+  reduce_type: mean
+  final_reduce_type: mean
 tactic_head_type: dense_tactic
 tactic_head_config:
   hidden_layers:
@@ -23,6 +24,7 @@ arguments_head_config:
   activation: linear
   recurrent_activation: relu
   recurrent_depth: 2
+global_cosign_similarity: true
 arguments_loss_coefficient: 1.0
 sum_loss_over_tactic: true
 dynamic_global_context: true

@@ -63,15 +63,42 @@ class LogitsFromEmbeddings(tf.keras.layers.Layer):
     def __init__(self,
                  embedding_matrix: tf.Variable,
                  valid_indices: tf.Tensor,
+                 cosine_similarity: bool,
                  name: str = 'logits_from_embeddings',
                  **kwargs
                  ):
+        self._cosine_similarity = cosine_similarity
+        if self._cosine_similarity:
+            # since cosine similarity is between -1.0 and 1.0
+            # we add a learned temperature parameter
+            # so logits can be in a wider or narrower range -1/temp to 1/temp
+            self._temp = tf.Variable(initial_value=1.0, trainable=True)
+        
         self._embedding_matrix = embedding_matrix
         self._valid_indices = valid_indices
         super().__init__(name=name, **kwargs)
 
+    def update_embedding_matrix(self, embedding_matrix: tf.Variable, valid_indices: tf.Tensor):
+        self._embedding_matrix = embedding_matrix
+        self._valid_indices = valid_indices
+
     def call(self, hidden_state, training=False):
-        return tf.matmul(a=hidden_state, b=tf.gather(self._embedding_matrix, self._valid_indices), transpose_b=True)
+        emb_matrix = self._embedding_matrix
+
+        if self._cosine_similarity:
+            # normalize embeddings before taking inner product
+            emb_matrix = emb_matrix / tf.norm(emb_matrix, axis=-1, keepdims=True)
+            # some hidden states will be constant zero.
+            # those are not used for the loss, but NaN leads to bugs
+            hidden_state_norm = tf.norm(hidden_state, axis=-1, keepdims=True)
+            hidden_state = tf.math.divide_no_nan(hidden_state, hidden_state_norm)
+            
+        logits = tf.matmul(a=hidden_state, b=tf.gather(emb_matrix, self._valid_indices), transpose_b=True)
+
+        if self._cosine_similarity:
+            logits = logits / self._temp
+
+        return logits
 
 
 class NodeSetDropout(tfgnn.keras.layers.MapFeatures):
@@ -230,6 +257,7 @@ class GraphEmbedding(tfgnn.keras.layers.MapFeatures):
                  node_label_num: int,
                  edge_label_num: int,
                  hidden_size: int,
+                 unit_normalize: bool,
                  name: str = 'graph_embedding',
                  **kwargs):
         """
@@ -243,11 +271,14 @@ class GraphEmbedding(tfgnn.keras.layers.MapFeatures):
         self._node_label_num = node_label_num
         self._edge_label_num = edge_label_num
         self._hidden_size = hidden_size
+        self._unit_normalize = unit_normalize
 
-        self._node_embedding = tf.keras.layers.Embedding(input_dim=node_label_num,
-                                                         output_dim=hidden_size,
-                                                         name=f'{name}_node_embedding')
-
+        self._node_embedding = self._node_emb_layer(
+            unit_normalized=self._unit_normalize,
+            node_label_num=self._node_label_num,
+            hidden_size=self._hidden_size,
+            name=f'{name}_node_embedding'
+        )
         self._edge_embedding = tf.keras.layers.Embedding(input_dim=edge_label_num,
                                                          output_dim=hidden_size,
                                                          name=f'{name}_edge_embedding')
@@ -259,20 +290,70 @@ class GraphEmbedding(tfgnn.keras.layers.MapFeatures):
                          name=name,
                          **kwargs)
 
+    @staticmethod
+    def _node_emb_layer(unit_normalized, node_label_num, hidden_size, name) -> tf.keras.layers.Embedding:
+        if unit_normalized:
+            emb_constraint = tf.keras.constraints.UnitNorm(axis=1)
+        else:
+            emb_constraint = None
+        return tf.keras.layers.Embedding(
+            input_dim=node_label_num,
+            output_dim=hidden_size,
+            embeddings_constraint=emb_constraint,
+            name=name,
+        )
+
     def get_config(self) -> dict:
         config = super().get_config()
         config.update({
             'node_label_num': self._node_label_num,
             'edge_label_num': self._edge_label_num,
-            'hidden_size': self._hidden_size
+            'hidden_size': self._hidden_size,
+            'unit_normalize': self._unit_normalize
         })
         return config
+
+    def lookup_node_embedding(self, indices):
+        """Lookup node embeddings directly"""
+        return self._node_embedding(indices)
+        
+    def get_node_embeddings(self):
+        """The entire node embedding matrix (for use in other layers)"""
+        return self._node_embedding.embeddings
+
+    def set_node_embeddings(self, embeddings):
+        return self._node_embedding.set_weights([embeddings])
+
+    def extend_embeddings(self, new_node_label_num: int):
+        """Extend the embedding layer in place"""
+        new_node_embedding = self._node_emb_layer(
+            node_label_num=new_node_label_num,
+            hidden_size=self._hidden_size,
+            unit_normalized=self._unit_normalize,
+            name=self._node_embedding.name
+        )
+        new_labels = self._node_label_num + tf.range(new_node_label_num - self._node_label_num)
+        new_embeddings = tf.concat([self._node_embedding.embeddings, new_node_embedding(new_labels)], axis=0)
+        
+        self._node_embedding = new_node_embedding
+        self._node_label_num = new_node_label_num
+        self.set_node_embeddings(new_embeddings)
+        
+    def update_node_embeddings(self, embeddings, indices):
+        emb_vars = self._node_embedding.embeddings
+        emb_vars.scatter_update(
+            tf.IndexedSlices(
+                embeddings,
+                indices,
+            )
+        )
 
     def _node_sets_fn(self,
                       node_set: tfgnn.NodeSet,
                       node_set_name: tfgnn.NodeSetName
                       ) -> Dict[tfgnn.FieldName, Any]:
-        return {'hidden_state': self._node_embedding(node_set['node_label'])}
+        hidden_state = self.lookup_node_embedding(node_set['node_label'])
+        return {'hidden_state': hidden_state}
 
     def _edge_sets_fn(self,
                       edge_set: tfgnn.EdgeSet,
@@ -606,7 +687,7 @@ class SimpleConvolutionGNN(tf.keras.layers.Layer):
         for convolution in self._convolutions:
             embedded_graph = convolution(embedded_graph, training=training)
             if self._layer_norm:
-                embedded_graph = self._layer_normalization(embedded_graph, training=training)  # noqa [ PyCallingNonCallable ]
+                embedded_graph = self._layer_normalization(embedded_graph, training=training)  # noqa [ PyCallingNonCallable ]        
 
         output_graph = self._hidden_state_pooling(embedded_graph, training=training)  # noqa [ PyCallingNonCallable ]
 
@@ -847,6 +928,7 @@ class DenseDefinitionHead(tf.keras.layers.Layer):
                  hidden_size: int,
                  hidden_layers: Iterable[dict] = (),
                  name_layer: Optional[dict] = None,
+                 unit_normalize: bool = False,
                  name: str = 'dense_definition_head',
                  **kwargs):
         """
@@ -875,6 +957,7 @@ class DenseDefinitionHead(tf.keras.layers.Layer):
 
         self._hidden_layers = [tf.keras.layers.Dense.from_config(hidden_layer_config) for hidden_layer_config in hidden_layers]
         self._final_layer = tf.keras.layers.Dense(units=hidden_size)
+        self._unit_normalize = unit_normalize
 
     def get_config(self) -> dict:
         config = super().get_config()
@@ -885,6 +968,7 @@ class DenseDefinitionHead(tf.keras.layers.Layer):
         config.update({
             'hidden_size': self._hidden_size,
             'hidden_layers': [hidden_layer.get_config() for hidden_layer in self._hidden_layers],
+            'unit_normalize': self._unit_normalize,
             'name_layer': name_layer,
         })
         return config
@@ -911,6 +995,8 @@ class DenseDefinitionHead(tf.keras.layers.Layer):
             hidden_state = hidden_layer(hidden_state, training=training)
 
         definition_embedding = self._final_layer(hidden_state, training=training)
+        if self._unit_normalize:
+            definition_embedding = definition_embedding / tf.norm(definition_embedding, axis=-1, keepdims=True)
 
         return tf.RaggedTensor.from_row_lengths(definition_embedding, num_definitions)
 
