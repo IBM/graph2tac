@@ -98,6 +98,7 @@ setup(
                       'g2t-printlog=graph2tac.printlog:main',
                       'g2t-unpack=graph2tac.loader.unpack:main',
                       'g2t-server=graph2tac.loader.predict_server:main',
+                      'g2t-py-server=graph2tac.loader.py_predict_server:main',
                       'g2t-train-hmodel=graph2tac.loader.hmodel:main',
                       'g2t-tfgnn-predict-graphs=graph2tac.tfgnn.plot_predict_graphs:main',
                   ]},

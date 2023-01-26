@@ -14,7 +14,6 @@ import psutil
 import logging
 import contextlib
 
-from py_data_server import AbstractDataServer, DataServer
 from pytact import graph_api_capnp
 from pytact.data_reader import (capnp_message_generator,
                                 TacticPredictionGraph, TacticPredictionsGraph,
@@ -22,6 +21,7 @@ from pytact.data_reader import (capnp_message_generator,
 from pytact.graph_api_capnp_cython import PredictionProtocol_Request_Reader
 from graph2tac.common import logger
 from graph2tac.loader.data_classes import *
+from graph2tac.loader.py_data_server import AbstractDataServer, DataServer
 
 def apply_temperature(confidences, temperature):
     """
