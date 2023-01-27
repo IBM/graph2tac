@@ -17,7 +17,6 @@ import contextlib
 from pytact.data_reader import (capnp_message_generator,
                                 TacticPredictionGraph, TacticPredictionsGraph,
                                 GlobalContextMessage, CheckAlignmentMessage, CheckAlignmentResponse)
-from pytact.graph_api_capnp_cython import PredictionProtocol_Request_Reader
 from graph2tac.common import logger
 from graph2tac.loader.data_classes import *
 from graph2tac.loader.py_data_server import AbstractDataServer, DataServer
