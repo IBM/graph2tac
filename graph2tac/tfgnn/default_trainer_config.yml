@@ -16,7 +16,7 @@ serialized_optimizer:
         staircase: false
     name: Adam
 l2_regularization_coefficient: 1.0e-05
-definition_loss_coefficient: 100.0
+definition_loss_coefficient: 500.0
 definition_loss_schedule: null
 max_to_keep: 1
 keep_checkpoint_every_n_hours: null
