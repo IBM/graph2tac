@@ -8,7 +8,7 @@ import tensorflow_gnn as tfgnn
 from pathlib import Path
 
 from graph2tac.tfgnn.dataset import Dataset, DataServerDataset, TFRecordDataset
-from graph2tac.tfgnn.tasks import PredictionTask, DefinitionTask, DefinitionMeanSquaredError
+from graph2tac.tfgnn.tasks import PredictionTask, DefinitionTask, DefinitionNormSquaredLoss
 from graph2tac.tfgnn.graph_schema import vectorized_definition_graph_spec, batch_graph_spec
 from graph2tac.tfgnn.train_utils import QCheckpointManager, ExtendedTensorBoard, DefinitionLossScheduler
 from graph2tac.common import logger
@@ -263,7 +263,7 @@ class Trainer:
 
             # get learned definition embeddings
             defined_labels = self._get_defined_labels(definition_graph)
-            definition_id_embeddings = self.prediction_task.graph_embedding._node_embedding(defined_labels)
+            definition_id_embeddings = self.prediction_task.graph_embedding.lookup_node_embedding(defined_labels)
 
             normalization = tf.sqrt(tf.cast(definition_graph.context['num_definitions'], dtype=tf.float32))
             embedding_difference = (definition_body_embeddings - definition_id_embeddings) / tf.expand_dims(normalization, axis=-1)
@@ -278,7 +278,7 @@ class Trainer:
     def _loss(self) -> Dict[str, tf.keras.losses.Loss]:
         loss = self.prediction_task.loss()
         if self.definition_task is not None:
-            loss.update({self.DEFINITION_EMBEDDING: DefinitionMeanSquaredError()})
+            loss.update({self.DEFINITION_EMBEDDING: DefinitionNormSquaredLoss()})
         return loss
 
     def _loss_weights(self) -> Dict[str, float]:

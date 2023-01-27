@@ -143,7 +143,7 @@ class ArgumentSparseCategoricalCrossentropy(tf.keras.losses.Loss):
         # keep track of which batch element the argument came from
         # shape: [batch, None(args)], [batch, None(args), globals]
         arguments_true, arguments_pred = self.arguments_filter(y_true, y_pred)
-        
+
         # compute the cross entropy loss by using gather to find the corresponding logit
         # (and flip the sign)
         # shape: [batch, None(args)]
@@ -153,7 +153,7 @@ class ArgumentSparseCategoricalCrossentropy(tf.keras.losses.Loss):
         else:
             # the context is non-empty and we have at least one argument, so the following doesn't fail
             arg_losses = -tf.gather(arguments_pred, arguments_true, batch_dims=2)
-        
+
         # return the losses as a list of losses (it will be reduced automatically by keras to a single number)
         if self.sum_loss_over_tactic:
             # sum over all arguments in a batch element
@@ -175,12 +175,13 @@ class ArgumentSparseCategoricalAccuracy(tf.keras.metrics.SparseCategoricalAccura
             super().update_state(arguments_true, arguments_pred, sample_weight)
 
 
-class DefinitionMeanSquaredError(tf.keras.losses.MeanSquaredError):
+class DefinitionNormSquaredLoss(tf.keras.losses.Loss):
     """
-    Mean-squared-error loss for the definition task, summing over the multiple definitions in a given definition graph.
+    Norm squared loss
     """
     def call(self, y_true, y_pred):
-        return tf.reduce_sum(super().call(y_true, y_pred), axis=-1)
+        # ignore y_true as it is zero
+        return tf.reduce_sum(y_pred * y_pred, axis=-1)
 
 
 class MixedMetricsCallback(tf.keras.callbacks.Callback):
@@ -304,17 +305,20 @@ class PredictionTask:
     def __init__(self,
                  graph_constants: GraphConstants,
                  hidden_size: int,
+                 unit_norm_embs: bool,
                  gnn_type: str,
                  gnn_config: dict
                  ):
         """
         @param graph_constants: a GraphConstants object for the graphs that will be consumed by the model
         @param hidden_size: the (globally shared) hidden size
+        @param unit_norm_embs: whether to restrict embeddings to the unit norm
         @param gnn_type: the type of GNN component to use
         @param gnn_config: the hyperparameters to be passed to GNN constructor
         """
         self._graph_constants = graph_constants
         self._hidden_size = hidden_size
+        self._unit_norm_embs = unit_norm_embs
         self._gnn_type = gnn_type
 
         # we have to clear the Keras session to make sure layer names are consistently chosen
@@ -323,10 +327,13 @@ class PredictionTask:
         #     tf.keras.backend.clear_session()
 
         # create and initialize node and edge embeddings
-        self.graph_embedding = GraphEmbedding(node_label_num=graph_constants.node_label_num,
-                                              edge_label_num=graph_constants.edge_label_num,
-                                              hidden_size=hidden_size)
-        self.graph_embedding._node_embedding(tf.range(graph_constants.node_label_num))
+        self.graph_embedding = GraphEmbedding(
+            node_label_num=graph_constants.node_label_num,
+            edge_label_num=graph_constants.edge_label_num,
+            hidden_size=hidden_size,
+            unit_normalize=unit_norm_embs
+        )
+        self.graph_embedding.lookup_node_embedding(tf.range(graph_constants.node_label_num))
 
         # create the GNN component
         gnn_constructor = get_gnn_constructor(gnn_type)
@@ -342,7 +349,8 @@ class PredictionTask:
         return {
             'hidden_size': self._hidden_size,
             'gnn_type': self._gnn_type,
-            'gnn_config': gnn_config
+            'unit_norm_embs': self._unit_norm_embs,
+            'gnn_config': gnn_config,
         }
 
     @staticmethod
@@ -422,10 +430,12 @@ class TacticPrediction(PredictionTask):
         self.tactic_head = tactic_head_constructor(tactic_embedding_size=tactic_embedding_size, **tactic_head_config)
 
         # a layer to compute tactic logits from tactic embeddings
-        self.tactic_logits_from_embeddings = LogitsFromEmbeddings(embedding_matrix=self.tactic_embedding.embeddings,
-                                                                  valid_indices=tf.range(
-                                                                      self._graph_constants.tactic_num),
-                                                                  name=self.TACTIC_LOGITS)
+        self.tactic_logits_from_embeddings = LogitsFromEmbeddings(
+            embedding_matrix=self.tactic_embedding.embeddings,
+            valid_indices=tf.range(self._graph_constants.tactic_num),
+            cosine_similarity=False,
+            name=self.TACTIC_LOGITS
+        )
 
         # update checkpoint with new layers
         self.checkpoint.tactic_embedding = self.tactic_embedding
@@ -448,7 +458,7 @@ class TacticPrediction(PredictionTask):
         bare_graph = strip_graph(scalar_proofstate_graph)
         embedded_graph = self.graph_embedding(bare_graph)  # noqa [ PyCallingNonCallable ]
         hidden_graph = self.gnn(embedded_graph)
-
+        
         tactic_embedding = self.tactic_head(hidden_graph)
         tactic_logits = self.tactic_logits_from_embeddings(tactic_embedding)  # noqa [ PyCallingNonCallable ]
         return tactic_logits, hidden_graph
@@ -582,7 +592,7 @@ class LocalArgumentPrediction(TacticPrediction):
     @staticmethod
     def _local_arguments_logits(scalar_proofstate_graph: tfgnn.GraphTensor,
                                 hidden_graph: tfgnn.GraphTensor,
-                                hidden_state_sequences: tf.RaggedTensor
+                                hidden_state_sequences: tf.Tensor
                                 ) -> tf.Tensor:
         """
         Computes logits for local arguments from the hidden states and the local context node ids.
@@ -606,7 +616,7 @@ class LocalArgumentPrediction(TacticPrediction):
 
         # the logits for each local context node to be each local argument
         # [ batch_size, max(num_arguments), max(num_context_nodes) ]
-        arguments_logits = tf.matmul(hidden_state_sequences.to_tensor(),
+        arguments_logits = tf.matmul(hidden_state_sequences,
                                      context_node_hidden_states.to_tensor(),
                                      transpose_b=True)
 
@@ -742,28 +752,38 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
 
     def __init__(self,
                  dynamic_global_context: bool = False,
+                 global_cosine_similarity: bool = False,
                  sum_loss_over_tactic: bool = False,
                  **kwargs):
         """
         @param dynamic_global_context: whether to restrict the global context to available definitions only
+        @param global_cosine_similarity: whether to use cosine similarity to calculate global arg logits
         @param sum_loss_over_tactic: whether to sum the argument losses over the tactic
         @param kwargs: arguments to be passed to the LocalArgumentPrediction constructor
         """
         super().__init__(**kwargs)
         self._dynamic_global_context = dynamic_global_context
         self._sum_loss_over_tactic = sum_loss_over_tactic
+        self._global_cosine_similarity = global_cosine_similarity
+        
+        self.global_arguments_head = tf.keras.layers.Dense(self._hidden_size)
+        self.local_arguments_head = tf.keras.layers.Dense(self._hidden_size)
 
         # create a layer to extract logits from the node label embeddings
         self.global_arguments_logits = LogitsFromEmbeddings(
-            embedding_matrix=self.graph_embedding._node_embedding.embeddings,
-            valid_indices=tf.constant(self._graph_constants.global_context, dtype=tf.int32)
+            embedding_matrix=self.graph_embedding.get_node_embeddings(),
+            valid_indices=tf.constant(self._graph_constants.global_context, dtype=tf.int32),
+            cosine_similarity=self._global_cosine_similarity
         )
 
         # we use trivial lambda layers to appropriately rename outputs
         self.local_arguments_logits_output = tf.keras.layers.Lambda(lambda x: x, name=self.LOCAL_ARGUMENTS_LOGITS)
         self.global_arguments_logits_output = tf.keras.layers.Lambda(lambda x: x, name=self.GLOBAL_ARGUMENTS_LOGITS)
 
-        # no need to update checkpoint with new layers, because there are no new trainable weights
+        # update checkpoint with new layers
+        self.checkpoint.local_arguments_head = self.local_arguments_head
+        self.checkpoint.global_arguments_head = self.global_arguments_head
+        self.checkpoint.global_arguments_logits = self.global_arguments_logits
 
     def get_config(self):
         config = super().get_config()
@@ -771,6 +791,7 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
         config.update({
             'prediction_task_type': GLOBAL_ARGUMENT_PREDICTION,
             'dynamic_global_context': self._dynamic_global_context,
+            'global_cosine_similarity': self._global_cosine_similarity,
             'sum_loss_over_tactic': self._sum_loss_over_tactic
         })
         return config
@@ -806,7 +827,7 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
                                             axis=-1, keepdims=True)
         local_arguments_logits -= arguments_max_logit
         global_arguments_logits -= arguments_max_logit
-
+        
         local_arguments_logits_norm = tf.reduce_sum(tf.exp(local_arguments_logits), axis=-1, keepdims=True)
         global_arguments_logits_norm = tf.reduce_sum(tf.exp(global_arguments_logits), axis=-1, keepdims=True)
         norm = -tf.math.log(local_arguments_logits_norm + global_arguments_logits_norm)
@@ -828,10 +849,15 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
 
         hidden_state_sequences = self._hidden_state_sequences(hidden_graph=hidden_graph,
                                                               tactic=scalar_proofstate_graph.context['tactic'])
-        local_arguments_logits = self._local_arguments_logits(scalar_proofstate_graph, hidden_graph,
-                                                              hidden_state_sequences)
-
-        global_arguments_logits = self.global_arguments_logits(hidden_state_sequences.to_tensor())  # noqa
+        local_hidden_state_sequences = self.local_arguments_head(hidden_state_sequences)
+        local_arguments_logits = self._local_arguments_logits(
+            scalar_proofstate_graph,
+            hidden_graph,
+            local_hidden_state_sequences.to_tensor()
+        )
+        
+        global_hidden_state_sequences = self.global_arguments_head(hidden_state_sequences)
+        global_arguments_logits = self.global_arguments_logits(global_hidden_state_sequences.to_tensor())  # noqa
         if self._dynamic_global_context:
             global_arguments_logits_mask = self._global_arguments_logits_mask(scalar_proofstate_graph=scalar_proofstate_graph, global_context_size=self._graph_constants.global_context.size)
             global_arguments_logits += tf.expand_dims(global_arguments_logits_mask, axis=1)
@@ -891,10 +917,14 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
         hidden_graph = repeat_scalar_graph(hidden_graph)  # noqa [ PyCallingNonCallable ]
 
         hidden_state_sequences = self._hidden_state_sequences(hidden_graph=hidden_graph, tactic=tactic)
-        local_arguments_logits = self._local_arguments_logits(scalar_proofstate_graph=scalar_proofstate_graph,
-                                                              hidden_graph=hidden_graph,
-                                                              hidden_state_sequences=hidden_state_sequences)
-        global_arguments_logits = self.global_arguments_logits(hidden_state_sequences.to_tensor())  # noqa
+        local_hidden_state_sequences = self.local_arguments_head(hidden_state_sequences)
+        local_arguments_logits = self._local_arguments_logits(
+            scalar_proofstate_graph,
+            hidden_graph,
+            local_hidden_state_sequences.to_tensor()
+        )
+        global_hidden_state_sequences = self.global_arguments_head(hidden_state_sequences)
+        global_arguments_logits = self.global_arguments_logits(global_hidden_state_sequences.to_tensor())  # noqa
 
         normalized_local_arguments_logits, normalized_global_arguments_logits = self._normalize_logits(
             local_arguments_logits=local_arguments_logits,
@@ -966,8 +996,12 @@ class DefinitionTask(tf.keras.layers.Layer):
         self._gnn = gnn
 
         definition_head_constructor = get_definition_head_constructor(definition_head_type)
-        self.definition_head = definition_head_constructor(hidden_size=graph_embedding._hidden_size,
-                                                           **definition_head_config)
+
+        self.definition_head = definition_head_constructor(
+            hidden_size=graph_embedding._hidden_size,
+            unit_normalize=graph_embedding._unit_normalize,
+            **definition_head_config
+        )
 
     def get_checkpoint(self) -> tf.train.Checkpoint:
         """
@@ -979,7 +1013,8 @@ class DefinitionTask(tf.keras.layers.Layer):
         config = super().get_config()
 
         definition_head_config = self.definition_head.get_config()
-        definition_head_config.pop('hidden_size')
+        definition_head_config.pop('hidden_size')  # use the setting from graph embedding
+        definition_head_config.pop('unit_normalize')  # use the setting from graph embedding
 
         config.update({
             'definition_head_type': self._definition_head_type,

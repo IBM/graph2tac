@@ -267,20 +267,6 @@ class TFGNNPredict(Predict):
             load_status.expect_partial().assert_nontrivial_match().assert_existing_objects_matched().run_restore_ops()
             logger.info(f'restored checkpoint #{checkpoint_number}!')
 
-    @staticmethod
-    def _extend_graph_embedding(graph_embedding: GraphEmbedding, new_node_label_num: int) -> GraphEmbedding:
-        new_graph_embedding = GraphEmbedding(node_label_num=new_node_label_num,
-                                             edge_label_num=graph_embedding._edge_label_num,
-                                             hidden_size=graph_embedding._hidden_size)
-
-        new_graph_embedding._edge_embedding = graph_embedding._edge_embedding
-
-        new_labels = graph_embedding._node_label_num + tf.range(new_node_label_num - graph_embedding._node_label_num)
-        new_embeddings = tf.concat([graph_embedding._node_embedding.embeddings, new_graph_embedding._node_embedding(new_labels)], axis=0)
-
-        new_graph_embedding._node_embedding.set_weights([new_embeddings])
-        return new_graph_embedding
-
     @predict_api_debugging
     def initialize(self, global_context: Optional[List[int]] = None) -> None:
         if self.prediction_task_type != GLOBAL_ARGUMENT_PREDICTION:
@@ -295,16 +281,14 @@ class TFGNNPredict(Predict):
             new_node_label_num = max(global_context)+1
             if new_node_label_num > self._graph_constants.node_label_num:
                 logger.info(f'extending global context from {self._graph_constants.node_label_num} to {new_node_label_num} elements')
-                new_graph_embedding = self._extend_graph_embedding(graph_embedding=self.prediction_task.graph_embedding,
-                                                                   new_node_label_num=new_node_label_num)
-                self.prediction_task.graph_embedding = new_graph_embedding
+                self.prediction_task.graph_embedding.extend_embeddings(new_node_label_num)
                 if self.definition_task is not None:
-                    self.definition_task._graph_embedding = new_graph_embedding
+                    self.definition_task._graph_embedding = self.prediction_task.graph_embedding
                 self._graph_constants.node_label_num = new_node_label_num
 
             # update the global arguments logits head (always necessary, because the global context may shrink!)
-            self.prediction_task.global_arguments_logits = LogitsFromEmbeddings(
-                embedding_matrix=self.prediction_task.graph_embedding._node_embedding.embeddings,
+            self.prediction_task.global_arguments_logits.update_embedding_matrix(
+                embedding_matrix=self.prediction_task.graph_embedding.get_node_embeddings(),
                 valid_indices=tf.constant(self._graph_constants.global_context, dtype=tf.int32)
             )
 
@@ -333,12 +317,9 @@ class TFGNNPredict(Predict):
             definition_embeddings = self.definition_task(scalar_definition_graph).flat_values
             defined_labels = Trainer._get_defined_labels(definition_graph).flat_values
 
-            emb_vars = self.prediction_task.graph_embedding._node_embedding.embeddings
-            emb_vars.scatter_update(
-                tf.IndexedSlices(
-                    definition_embeddings,
-                    defined_labels,
-                )
+            self.prediction_task.graph_embedding.update_node_embeddings(
+                embeddings=definition_embeddings,
+                indices=defined_labels
             )
         
         self.cached_definition_computation = _compute_and_replace_definition_embs
