@@ -291,14 +291,23 @@ class GraphEmbedding(tfgnn.keras.layers.MapFeatures):
                          **kwargs)
 
     @staticmethod
+    def unit_norm_initializer(shape, dtype):
+        x = tf.random.normal(shape=shape, dtype=dtype)
+        x = x / tf.norm(x, axis=-1, keepdims=True)
+        return x
+
+    @staticmethod
     def _node_emb_layer(unit_normalized, node_label_num, hidden_size, name) -> tf.keras.layers.Embedding:
         if unit_normalized:
             emb_constraint = tf.keras.constraints.UnitNorm(axis=1)
+            emb_initializer = GraphEmbedding.unit_norm_initializer
         else:
             emb_constraint = None
+            emb_initializer = 'uniform'  # default embedding intializer
         return tf.keras.layers.Embedding(
             input_dim=node_label_num,
             output_dim=hidden_size,
+            embeddings_initializer=emb_initializer,
             embeddings_constraint=emb_constraint,
             name=name,
         )

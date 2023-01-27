@@ -780,7 +780,10 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
         self.local_arguments_logits_output = tf.keras.layers.Lambda(lambda x: x, name=self.LOCAL_ARGUMENTS_LOGITS)
         self.global_arguments_logits_output = tf.keras.layers.Lambda(lambda x: x, name=self.GLOBAL_ARGUMENTS_LOGITS)
 
-        # no need to update checkpoint with new layers, because there are no new trainable weights
+        # update checkpoint with new layers
+        self.checkpoint.local_arguments_head = self.local_arguments_head
+        self.checkpoint.global_arguments_head = self.global_arguments_head
+        self.checkpoint.global_arguments_logits = self.global_arguments_logits
 
     def get_config(self):
         config = super().get_config()
