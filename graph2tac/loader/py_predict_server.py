@@ -14,7 +14,6 @@ import psutil
 import logging
 import contextlib
 
-from pytact import graph_api_capnp
 from pytact.data_reader import (capnp_message_generator,
                                 TacticPredictionGraph, TacticPredictionsGraph,
                                 GlobalContextMessage, CheckAlignmentMessage, CheckAlignmentResponse)
