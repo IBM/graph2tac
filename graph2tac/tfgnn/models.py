@@ -960,7 +960,6 @@ class DenseDefinitionHead(tf.keras.layers.Layer):
                     input_dim=Dataset.MAX_LABEL_TOKENS,
                     output_dim=hidden_size,
                 ),
-                tf.keras.layers.Lambda(lambda x: x.to_tensor()), # align ragged tensor
                 self._name_layer_core,
             ])
 
