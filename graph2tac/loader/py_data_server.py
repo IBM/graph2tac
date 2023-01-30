@@ -1,6 +1,6 @@
 from pathlib import Path
 import pytact.common
-import pytact.data_reader
+from pytact.data_reader import data_reader, Outcome, Node, Definition
 from dataclasses import dataclass
 from numpy.typing import NDArray
 import numpy as np
@@ -171,7 +171,40 @@ class AbstractDataServer:
             ], dtype = self._def_name_dtype)
         )
 
-    
+
+class SplitByHash:
+    def __init__(self, split = (8,1,1), random_seed = 0):
+        self.split = split
+        self.random_seed = random_seed
+    def __call__(self, node : Node | Definition):
+        if isinstance(node, data_reader.Node):
+            # to make it identical to vasily's loader
+            ident_64 = np.array(node.identity, dtype = np.uint64).item()
+            return get_split_label(ident_64, self.split, self.split_random_seed)
+        elif isinstance(node, data_reader.Node):
+            return 0
+        else:
+            raise Exception("Unexpected object to split on:", type(node))
+
+class SplitByPath:
+    def __init__(self, *prefixes_per_label):
+        self.prefixes_per_label = []
+        for label, prefixes in enumerate(prefixes_per_label):
+            if isinstance(prefixes, str):
+                prefixes = [prefixes]
+            else:
+                prefixes = list(prefixes)
+            self.prefixes_per_label.append((label+1, prefixes))
+    def __call__(self, node : Node | Definition):
+        if isinstance(node, Definition):
+            node = node.node
+        # TODO: node probably doesn't have a "path" attribute
+        path = str(node.path)
+        for label, prefixes in reversed(self.prefixes_per_label):
+            if any(path.startswith(prefix) for prefix in prefixes):
+                return label
+        return 0
+
 class DataServer(AbstractDataServer):
     def __init__(self,
                  data_dir: Path,
@@ -185,9 +218,12 @@ class DataServer(AbstractDataServer):
     ):
         super().__init__(max_subgraph_size, bfs_option, stop_at_definitions)
         self.data_dir = data_dir
-        self.split = split
-        self.split_random_seed = split_random_seed
         self.restrict_to_spine = restrict_to_spine
+
+        if isinstance(split, tuple) and isinstance(split[0], int):
+            self.split = SplitByHash(split, split_random_seed)
+        else:
+            self.split = split # ignore split_random_seed
 
         self._proof_steps : list[tuple[Outcome, Definition, int]] = []
         self._def_clusters : list[list[Definition]] = []
@@ -384,10 +420,7 @@ class DataServer(AbstractDataServer):
     def _select_data_points(self, label):
         return [
             i for i,(_,d,_) in enumerate(self._proof_steps)
-            if get_split_label(
-                    np.array(d.node.identity, dtype = np.uint64).item(),
-                    self.split, self.split_random_seed
-            ) == label
+            if self.split(d.node) == label
         ]
 
     def data_train(self, shuffled: bool = False,  as_text: bool = False):
