@@ -1,6 +1,6 @@
 from pathlib import Path
 import pytact.common
-import pytact.data_reader
+from pytact.data_reader import data_reader, Outcome, Node, Definition
 from dataclasses import dataclass
 from numpy.typing import NDArray
 import numpy as np
@@ -196,7 +196,7 @@ class DataServer(AbstractDataServer):
         self._repr_to_recdeps : dict[Definition, list[Definition]] = dict()
         self._def_to_file_ctx : dict[Definition, tuple[list[Definition], NDArray[np.uint32]]] = dict()
 
-        self._reader = pytact.data_reader.data_reader(Path(data_dir))
+        self._reader = data_reader(Path(data_dir))
         self._data = self._reader.__enter__()
 
         #fnames = list(self._data.keys())
