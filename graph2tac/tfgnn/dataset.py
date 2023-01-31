@@ -24,7 +24,7 @@ class Dataset:
     MAX_LABEL_TOKENS = 128
     MAX_PROOFSTATES = int(1e7)
     MAX_DEFINITIONS = int(1e7)
-    SHUFFLE_BUFFER_SIZE = int(1e4)
+    SHUFFLE_BUFFER_SIZE = int(1e7)
     STATISTICS_BATCH_SIZE = int(1e4)
 
     _proofstates: Callable[[], tf.data.Dataset]
