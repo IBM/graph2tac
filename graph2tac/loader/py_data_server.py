@@ -176,17 +176,14 @@ class SplitByHash:
     def __init__(self, split = (8,1,1), random_seed = 0):
         self.split = split
         self.random_seed = random_seed
-    def __call__(self, node : Node | Definition):
-        if isinstance(node, data_reader.Node):
-            # to make it identical to vasily's loader
-            ident_64 = np.array(node.identity, dtype = np.uint64).item()
-            return get_split_label(ident_64, self.split, self.split_random_seed)
-        elif isinstance(node, data_reader.Node):
-            return 0
-        else:
-            raise Exception("Unexpected object to split on:", type(node))
+    def datapoint(self, d : Definition):
+        # to make it identical to vasily's loader
+        ident_64 = np.array(d.node.identity, dtype = np.uint64).item()
+        return get_split_label(ident_64, self.split, self.split_random_seed)
+    def cluster(self, d : list[Definition]):
+        return 0
 
-class SplitByPath:
+class SplitByPrefixName:
     def __init__(self, *prefixes_per_label):
         self.prefixes_per_label = []
         for label, prefixes in enumerate(prefixes_per_label):
@@ -195,15 +192,14 @@ class SplitByPath:
             else:
                 prefixes = list(prefixes)
             self.prefixes_per_label.append((label+1, prefixes))
-    def __call__(self, node : Node | Definition):
-        if isinstance(node, Definition):
-            node = node.node
-        # TODO: node probably doesn't have a "path" attribute
-        path = str(node.path)
+    def datapoint(self, d : Definition):
+        name = d.name
         for label, prefixes in reversed(self.prefixes_per_label):
-            if any(path.startswith(prefix) for prefix in prefixes):
+            if any(name.startswith(prefix) for prefix in prefixes):
                 return label
         return 0
+    def cluster(self, d : list[Definition]):
+        return self.datapoint(d[0])
 
 class DataServer(AbstractDataServer):
     def __init__(self,
@@ -232,7 +228,7 @@ class DataServer(AbstractDataServer):
         self._repr_to_recdeps : dict[Definition, list[Definition]] = dict()
         self._def_to_file_ctx : dict[Definition, tuple[list[Definition], NDArray[np.uint32]]] = dict()
 
-        self._reader = pytact.data_reader.data_reader(Path(data_dir))
+        self._reader = data_reader(Path(data_dir))
         self._data = self._reader.__enter__()
 
         #fnames = list(self._data.keys())
@@ -420,7 +416,7 @@ class DataServer(AbstractDataServer):
     def _select_data_points(self, label):
         return [
             i for i,(_,d,_) in enumerate(self._proof_steps)
-            if self.split(d.node) == label
+            if self.split.datapoint(d) == label
         ]
 
     def data_train(self, shuffled: bool = False,  as_text: bool = False):
@@ -444,5 +440,9 @@ class DataServer(AbstractDataServer):
     def def_cluster_subgraph(self, i):
         return self.cluster_to_graph(self._def_clusters[i])
 
-    def def_cluster_subgraphs(self):
-        return IterableLen(map(self.def_cluster_subgraph, range(len(self._def_clusters))), len(self._def_clusters))
+    def def_cluster_subgraphs(self, label = 0):
+        ids = [
+            i for i,ds in enumerate(self._def_clusters)
+            if self.split.cluster(ds) == label
+        ]
+        return IterableLen(map(self.def_cluster_subgraph, ids, len(self._def_clusters))
