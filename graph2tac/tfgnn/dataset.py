@@ -7,7 +7,7 @@ import tensorflow_gnn as tfgnn
 from pathlib import Path
 
 from graph2tac.loader.data_classes import GraphConstants, LoaderAction, LoaderDefinition, LoaderProofstate
-from graph2tac.loader.py_data_server import DataServer
+from graph2tac.loader.py_data_server import DataServer, SplitByFilePrefix
 from graph2tac.tfgnn.graph_schema import proofstate_graph_spec, definition_graph_spec
 from graph2tac.common import logger
 import time
@@ -95,68 +95,30 @@ class Dataset:
         @return: a dataset of (GraphTensor, label) pairs
         """
 
-        # get proof-states
-        proofstate_dataset = self._proofstates()
+        data_parts = []
+        for label in (0,1): # train, valid
+            # get proof-states
+            proofstate_dataset = self._proofstates(label)
 
-        # filter out proof-states with term arguments
-        if self.exclude_not_faithful:
-            proofstate_dataset = proofstate_dataset.filter(lambda proofstate_graph: tf.reduce_all(proofstate_graph.context['faithful'] == 1))
+            # filter out proof-states with term arguments
+            if self.exclude_not_faithful:
+                proofstate_dataset = proofstate_dataset.filter(lambda proofstate_graph: tf.reduce_all(proofstate_graph.context['faithful'] == 1))
 
-        # filter out proof-states with `None` arguments
-        if self.exclude_none_arguments:
-            proofstate_dataset = proofstate_dataset.filter(self._no_none_arguments)
+            # filter out proof-states with `None` arguments
+            if self.exclude_none_arguments:
+                proofstate_dataset = proofstate_dataset.filter(self._no_none_arguments)
 
-        # apply the symmetrization and self-edge transformations
-        proofstate_dataset = proofstate_dataset.apply(self._preprocess)
-        proofstate_dataset = proofstate_dataset.cache()
+            # apply the symmetrization and self-edge transformations
+            proofstate_dataset = proofstate_dataset.apply(self._preprocess)
+            proofstate_dataset = proofstate_dataset.cache()
+            data_parts.append(proofstate_dataset)
 
-        # create dataset of split labels
-        split_logits = tf.math.log(tf.constant(split, dtype=tf.float32) / sum(split))
-        labels = tf.random.stateless_categorical(logits=tf.expand_dims(split_logits, axis=0),
-                                                 num_samples=self.MAX_PROOFSTATES,
-                                                 seed=[0, split_random_seed])[0]
-        label_dataset = tf.data.Dataset.from_tensor_slices(labels)
-
-        # create a dataset of pairs (GraphTensor, label)
-        pair_dataset = tf.data.Dataset.zip(datasets=(proofstate_dataset, label_dataset))
-
-        # get train dataset (shuffling if necessary)
-        train = pair_dataset.filter(lambda _, label: label == 0).map(lambda proofstate_graph, _: proofstate_graph)
-        train = train.cache()
+        train, valid = data_parts
 
         if shuffle:
             train = train.shuffle(buffer_size=self.SHUFFLE_BUFFER_SIZE)
 
-        # get validation dataset
-        valid = pair_dataset.filter(lambda _, label: label == 1).map(lambda proofstate_graph, _: proofstate_graph)
-        valid = valid.cache()
-
         return train, valid
-
-        # data_parts = []
-        # for label in (0,1): # train, valid
-        #     # get proof-states
-        #     proofstate_dataset = self._proofstates(label)
-
-        #     # filter out proof-states with term arguments
-        #     if self.exclude_not_faithful:
-        #         proofstate_dataset = proofstate_dataset.filter(lambda proofstate_graph: tf.reduce_all(proofstate_graph.context['faithful'] == 1))
-
-        #     # filter out proof-states with `None` arguments
-        #     if self.exclude_none_arguments:
-        #         proofstate_dataset = proofstate_dataset.filter(self._no_none_arguments)
-
-        #     # apply the symmetrization and self-edge transformations
-        #     proofstate_dataset = proofstate_dataset.apply(self._preprocess)
-        #     proofstate_dataset = proofstate_dataset.cache()
-        #     data_parts.append(proofstate_dataset)
-
-        # train, valid = data_parts
-
-        # if shuffle:
-        #     train = train.shuffle(buffer_size=self.SHUFFLE_BUFFER_SIZE)
-
-        # return train, valid
 
     def definitions(self, label, shuffle: bool = False) -> tf.data.Dataset:
         """
@@ -657,6 +619,7 @@ class DataServerDataset(Dataset):
         """
         self.data_server = DataServer(data_dir=data_dir,
                                       max_subgraph_size=max_subgraph_size,
+                                      split = SplitByFilePrefix("coq-tactician-stdlib.dev/theories/Init/Wf.bin")
                                       #split=(1,0,0),
                                       #split_random_seed=0
         )
@@ -823,10 +786,8 @@ class DataServerDataset(Dataset):
 
         @return: a tf.data.Dataset streaming GraphTensor objects
         """
-        # get the proofstates from the DataServer
-        proofstates = self.data_server.get_datapoints(label, shuffled=False, as_text=False)
         proofstates = tf.data.Dataset.from_generator(
-            lambda: map(self._loader_to_proofstate_data, proofstates),
+            lambda: map(self._loader_to_proofstate_data, self.data_server.get_datapoints(label, shuffled=False, as_text=False)),
             output_signature=self.proofstate_data_spec
         )
         return proofstates.map(self._make_proofstate_graph_tensor, num_parallel_calls=tf.data.AUTOTUNE)
@@ -845,12 +806,8 @@ class DataServerDataset(Dataset):
 
         @return: a tf.data.Dataset streaming GraphTensor objects
         """
-        definitions = self.data_server.def_cluster_subgraphs(label)
-        print("Definitions", label)
-        list(map(self._loader_to_definition_data, definitions))
-        time.sleep(2)
         dataset = tf.data.Dataset.from_generator(
-            lambda: map(self._loader_to_definition_data, definitions),
+            lambda: map(self._loader_to_definition_data, self.data_server.def_cluster_subgraphs(label)),
             output_signature=self.definition_data_spec
         )
         return dataset.map(self._make_definition_graph_tensor, num_parallel_calls=tf.data.AUTOTUNE)
