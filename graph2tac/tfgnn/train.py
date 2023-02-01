@@ -313,7 +313,7 @@ class Trainer:
                                                                         split_random_seed=split_random_seed,
                                                                         shuffle=True)
         if self.definition_task:
-            definitions = self.dataset.definitions(shuffle=False)
+            definitions = self.dataset.definitions(0, shuffle=False)
         else:
             definitions = None
 

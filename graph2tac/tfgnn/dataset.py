@@ -10,7 +10,7 @@ from graph2tac.loader.data_classes import GraphConstants, LoaderAction, LoaderDe
 from graph2tac.loader.py_data_server import DataServer
 from graph2tac.tfgnn.graph_schema import proofstate_graph_spec, definition_graph_spec
 from graph2tac.common import logger
-
+import time
 
 BIDIRECTIONAL = 'bidirectional'
 UNDIRECTED = 'undirected'
@@ -19,8 +19,8 @@ UNDIRECTED = 'undirected'
 class Dataset:
     """
     Base class for TF-GNN datasets, subclasses should define:
-        - _proofstates()
-        - _definitions()
+        - _proofstates(label)
+        - _definitions(label)
     """
     MAX_LABEL_TOKENS = 128
     MAX_PROOFSTATES = int(1e7)
@@ -28,8 +28,8 @@ class Dataset:
     SHUFFLE_BUFFER_SIZE = int(1e4)
     STATISTICS_BATCH_SIZE = int(1e4)
 
-    _proofstates: Callable[[], tf.data.Dataset]
-    _definitions: Callable[[], tf.data.Dataset]
+    _proofstates: Callable[[int], tf.data.Dataset]
+    _definitions: Callable[[int], tf.data.Dataset]
 
     def __init__(self,
                  graph_constants: GraphConstants,
@@ -94,6 +94,7 @@ class Dataset:
         @param shuffle: whether to shuffle the resulting datasets
         @return: a dataset of (GraphTensor, label) pairs
         """
+
         # get proof-states
         proofstate_dataset = self._proofstates()
 
@@ -132,14 +133,39 @@ class Dataset:
 
         return train, valid
 
-    def definitions(self, shuffle: bool = False) -> tf.data.Dataset:
+        # data_parts = []
+        # for label in (0,1): # train, valid
+        #     # get proof-states
+        #     proofstate_dataset = self._proofstates(label)
+
+        #     # filter out proof-states with term arguments
+        #     if self.exclude_not_faithful:
+        #         proofstate_dataset = proofstate_dataset.filter(lambda proofstate_graph: tf.reduce_all(proofstate_graph.context['faithful'] == 1))
+
+        #     # filter out proof-states with `None` arguments
+        #     if self.exclude_none_arguments:
+        #         proofstate_dataset = proofstate_dataset.filter(self._no_none_arguments)
+
+        #     # apply the symmetrization and self-edge transformations
+        #     proofstate_dataset = proofstate_dataset.apply(self._preprocess)
+        #     proofstate_dataset = proofstate_dataset.cache()
+        #     data_parts.append(proofstate_dataset)
+
+        # train, valid = data_parts
+
+        # if shuffle:
+        #     train = train.shuffle(buffer_size=self.SHUFFLE_BUFFER_SIZE)
+
+        # return train, valid
+
+    def definitions(self, label, shuffle: bool = False) -> tf.data.Dataset:
         """
         Returns the definition dataset.
 
         @param shuffle: whether to shuffle the resulting dataset
         @return: a dataset with all the definition clusters
         """
-        definitions = self._definitions().apply(self._preprocess)
+        definitions = self._definitions(label).apply(self._preprocess)
         definitions = definitions.cache()
         if shuffle:
             definitions = definitions.shuffle(buffer_size=self.SHUFFLE_BUFFER_SIZE)
@@ -213,8 +239,8 @@ class Dataset:
 
         # Make sure we dump the original data, not the pre-processed data!
         datasets = {
-            proofstates_tfrecord_filepath: self._proofstates(),
-            definitions_tfrecord_filepath: self._definitions(),
+            proofstates_tfrecord_filepath: self._proofstates(), # TODO: train / valid label
+            definitions_tfrecord_filepath: self._definitions(), # TODO: train / valid label
         }
         for tfrecord_filepath, dataset in datasets.items():
             logger.info(f'exporting {tfrecord_filepath}')
@@ -244,7 +270,7 @@ class Dataset:
 
             proofstate_datasets = {'train_proofstates': train_proofstates.batch(self.STATISTICS_BATCH_SIZE),
                                    'valid_proofstates': valid_proofstates.batch(self.STATISTICS_BATCH_SIZE)}
-            definition_dataset = self.definitions().batch(self.STATISTICS_BATCH_SIZE)
+            definition_dataset = self.definitions(0).batch(self.STATISTICS_BATCH_SIZE) # TODO: what are we using definitions for here?
 
             stats = {}
             for name, dataset in proofstate_datasets.items():
@@ -568,7 +594,7 @@ class TFRecordDataset(Dataset):
         return dataset.map(lambda graph_tensor: tfgnn.parse_single_example(graph_spec, graph_tensor),
                               num_parallel_calls=tf.data.AUTOTUNE)
 
-    def _proofstates(self) -> tf.data.Dataset:
+    def _proofstates(self) -> tf.data.Dataset: # TODO: train / valid label
         """
         Returns a dataset with all the proof-states.
 
@@ -576,7 +602,7 @@ class TFRecordDataset(Dataset):
         """
         return self._parse_tfrecord_dataset(self._proofstates_dataset, graph_spec=proofstate_graph_spec)
 
-    def _definitions(self) -> tf.data.Dataset:
+    def _definitions(self) -> tf.data.Dataset: # TODO: train / valid label
         """
         Returns a dataset with all the definitions.
 
@@ -631,8 +657,9 @@ class DataServerDataset(Dataset):
         """
         self.data_server = DataServer(data_dir=data_dir,
                                       max_subgraph_size=max_subgraph_size,
-                                      split=(1,0,0),
-                                      split_random_seed=0)
+                                      #split=(1,0,0),
+                                      #split_random_seed=0
+        )
 
         super().__init__(graph_constants=self.data_server.graph_constants(),
                          max_subgraph_size=max_subgraph_size,
@@ -790,15 +817,16 @@ class DataServerDataset(Dataset):
 
         return (state_tuple, action_tuple, id)
 
-    def _proofstates(self) -> tf.data.Dataset:
+    def _proofstates(self, label : int = 0) -> tf.data.Dataset:
         """
         Returns a dataset with all the proof-states.
 
         @return: a tf.data.Dataset streaming GraphTensor objects
         """
         # get the proofstates from the DataServer
+        proofstates = self.data_server.get_datapoints(label, shuffled=False, as_text=False)
         proofstates = tf.data.Dataset.from_generator(
-            lambda: map(self._loader_to_proofstate_data, self.data_server.data_train(shuffled=False, as_text=False)),
+            lambda: map(self._loader_to_proofstate_data, proofstates),
             output_signature=self.proofstate_data_spec
         )
         return proofstates.map(self._make_proofstate_graph_tensor, num_parallel_calls=tf.data.AUTOTUNE)
@@ -811,14 +839,18 @@ class DataServerDataset(Dataset):
 
         return (graph_tuple, defn.num_definitions, defn.definition_names)
 
-    def _definitions(self) -> tf.data.Dataset:
+    def _definitions(self, label) -> tf.data.Dataset:
         """
         Returns a dataset with all the definitions.
 
         @return: a tf.data.Dataset streaming GraphTensor objects
         """
+        definitions = self.data_server.def_cluster_subgraphs(label)
+        print("Definitions", label)
+        list(map(self._loader_to_definition_data, definitions))
+        time.sleep(2)
         dataset = tf.data.Dataset.from_generator(
-            lambda: map(self._loader_to_definition_data, self.data_server.def_cluster_subgraphs()),
+            lambda: map(self._loader_to_definition_data, definitions),
             output_signature=self.definition_data_spec
         )
         return dataset.map(self._make_definition_graph_tensor, num_parallel_calls=tf.data.AUTOTUNE)

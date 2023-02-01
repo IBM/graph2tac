@@ -174,17 +174,19 @@ class AbstractDataServer:
 
 class SplitByHash:
     def __init__(self, split = (8,1,1), random_seed = 0):
+        self.data_server = None # to be set by data_server
         self.split = split
         self.random_seed = random_seed
     def datapoint(self, d : Definition):
         # to make it identical to vasily's loader
         ident_64 = np.array(d.node.identity, dtype = np.uint64).item()
-        return get_split_label(ident_64, self.split, self.split_random_seed)
+        return get_split_label(ident_64, self.split, self.random_seed)
     def cluster(self, d : list[Definition]):
         return 0
 
-class SplitByPrefixName:
+class SplitByFilePrefix:
     def __init__(self, *prefixes_per_label):
+        self.data_server = None # to be set by data_server
         self.prefixes_per_label = []
         for label, prefixes in enumerate(prefixes_per_label):
             if isinstance(prefixes, str):
@@ -193,9 +195,9 @@ class SplitByPrefixName:
                 prefixes = list(prefixes)
             self.prefixes_per_label.append((label+1, prefixes))
     def datapoint(self, d : Definition):
-        name = d.name
+        fname = self.data_server.graphid_to_fname[d.node.graph]
         for label, prefixes in reversed(self.prefixes_per_label):
-            if any(name.startswith(prefix) for prefix in prefixes):
+            if any(fname.startswith(prefix) for prefix in prefixes):
                 return label
         return 0
     def cluster(self, d : list[Definition]):
@@ -220,6 +222,7 @@ class DataServer(AbstractDataServer):
             self.split = SplitByHash(split, split_random_seed)
         else:
             self.split = split # ignore split_random_seed
+        self.split.data_server = self
 
         self._proof_steps : list[tuple[Outcome, Definition, int]] = []
         self._def_clusters : list[list[Definition]] = []
@@ -230,6 +233,17 @@ class DataServer(AbstractDataServer):
 
         self._reader = data_reader(Path(data_dir))
         self._data = self._reader.__enter__()
+
+        # conversion from a graph id to a filename
+        graphid_to_fname = {
+            file_data.graph : str(fname)
+            for fname, file_data in self._data.items()
+        }
+        assert set(graphid_to_fname.keys()) == set(range(len(self._data)))
+        self.graphid_to_fname = [
+            graphid_to_fname[i]
+            for i in range(len(self._data))
+        ]
 
         #fnames = list(self._data.keys())
         fnames = [
@@ -413,36 +427,34 @@ class DataServer(AbstractDataServer):
         label_text = proof_step.tactic.text
         return state_text, label_text
 
-    def _select_data_points(self, label):
+    def _select_data_points(self, label : int):
         return [
             i for i,(_,d,_) in enumerate(self._proof_steps)
             if self.split.datapoint(d) == label
         ]
 
-    def data_train(self, shuffled: bool = False,  as_text: bool = False):
-        train_ids = self._select_data_points(0)
+    def get_datapoints(self, label : int, shuffled: bool = False, as_text: bool = False):
+        ids = self._select_data_points(label)
         if shuffled:
-            train_ids = list(train_ids)
-            random.shuffle(train_ids)
-
+            ids = list(ids)
+            random.shuffle(ids)
+        
         if as_text:
-            return IterableLen(map(self._datapoint_text, train_ids), len(train_ids))
+            return IterableLen(map(self._datapoint_text, ids), len(ids))
         else:
-            return IterableLen(map(self._datapoint_graph, train_ids), len(train_ids))
-
+            return IterableLen(map(self._datapoint_graph, ids), len(ids))
+    
+    def data_train(self, shuffled: bool = False,  as_text: bool = False):
+        return self.get_datapoints(0, shuffled = shuffled, as_text = as_text)
     def data_valid(self, as_text: bool = False):
-        valid_ids = self._select_data_points(1)
-        if as_text:
-            return IterableLen(map(self._datapoint_text, valid_ids), len(valid_ids))
-        else:
-            return IterableLen(map(self._datapoint_graph, valid_ids), len(valid_ids))
+        return self.get_datapoints(1, as_text = as_text)
 
-    def def_cluster_subgraph(self, i):
+    def def_cluster_subgraph(self, i : int):
         return self.cluster_to_graph(self._def_clusters[i])
 
-    def def_cluster_subgraphs(self, label = 0):
+    def def_cluster_subgraphs(self, label : int = 0):
         ids = [
             i for i,ds in enumerate(self._def_clusters)
             if self.split.cluster(ds) == label
         ]
-        return IterableLen(map(self.def_cluster_subgraph, ids, len(self._def_clusters))
+        return IterableLen(map(self.def_cluster_subgraph, ids), len(self._def_clusters))
