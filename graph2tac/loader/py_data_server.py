@@ -1,3 +1,4 @@
+from heapq import heappush, heappop
 from pathlib import Path
 import pytact.common
 from pytact.data_reader import data_reader, Outcome, Node, Definition
@@ -8,11 +9,10 @@ from collections import deque
 import itertools
 import random
 from graph2tac.hash import get_split_label
+from collections import defaultdict
 
 from graph2tac.loader.data_classes import *
 import pytact.graph_api_capnp as graph_api_capnp
-
-from graph2tac.loader.data_server import top_sort_dataset_modules
 
 class IterableLen:
     def __init__(self, iterable, length):
@@ -181,7 +181,6 @@ class DataServer(AbstractDataServer):
                  split_random_seed = 0,
                  restrict_to_spine: bool = False,
                  stop_at_definitions: bool = True,
-                 fname_order_key = None,
     ):
         super().__init__(max_subgraph_size, bfs_option, stop_at_definitions)
         self.data_dir = data_dir
@@ -199,14 +198,16 @@ class DataServer(AbstractDataServer):
         self._reader = data_reader(Path(data_dir))
         self._data = self._reader.__enter__()
 
+        fnames = self.topo_file_order()
         #fnames = list(self._data.keys())
-        fnames = [
-            fname.relative_to(data_dir)
-            for fname in top_sort_dataset_modules(data_dir)
-        ]
-        assert set(fnames) == set(self._data.keys())
-        if fname_order_key is not None:
-            fnames.sort(key = fname_order_key)
+        # fnames = [
+        #     fname.relative_to(data_dir)
+        #     for fname in top_sort_dataset_modules(data_dir)
+        # ]
+        # assert set(fnames) == set(self._data.keys())
+        # if fname_order_key is not None:
+        #     fnames.sort(key = fname_order_key)
+
         for name in fnames:
             file_data = self._data[name]
             self._load_file(file_data)
@@ -236,7 +237,41 @@ class DataServer(AbstractDataServer):
             label_in_spine = self._node_i_in_spine,
             max_subgraph_size = self.max_subgraph_size,
         )
-        
+
+    def topo_file_order(self):
+
+        # prepare secondary sorting key
+        fname_to_key = {
+            fname : (self.data_dir / fname).stat().st_size
+            for fname in self._data.keys()
+        }
+        fname_to_revdeps = defaultdict(list)
+        fname_to_deps = dict()
+
+        # prepare graph and the heap
+        heap = []
+        for fname, d in self._data.items():
+            fname_to_deps[fname] = set(d.dependencies)
+            if len(d.dependencies) == 0:
+                heappush(heap, (fname_to_key[fname], fname))
+            else:
+                for dep in d.dependencies:
+                    fname_to_revdeps[dep].append(fname)
+
+        # process the heap
+        file_order = []
+        while heap:
+            _, fname = heappop(heap)
+            file_order.append(fname)
+            for rdep in fname_to_revdeps[fname]:
+                deps = fname_to_deps[rdep]
+                deps.remove(fname)
+                if not deps:
+                    heappush(heap, (fname_to_key[rdep], rdep))
+
+        assert len(file_order) == len(self._data)
+        return file_order
+    
     def _load_file(self, file_data):
         # load proof steps
         for d in file_data.definitions(spine_only = self.restrict_to_spine):

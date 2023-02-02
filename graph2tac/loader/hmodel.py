@@ -8,6 +8,7 @@ import numpy as np
 from pathlib import Path
 
 from graph2tac.loader.data_classes import LoaderAction, LoaderProofstate, LoaderDefinition
+from graph2tac.loader.py_data_server import DataServer
 
 from graph2tac.predict import Predict, predict_api_debugging
 
@@ -56,11 +57,7 @@ def args_decode(args,
 
 
 class Train:
-    def __init__(self, data_dir: Path, max_subgraph_size, with_context, loader, shuffled, dry):
-        if loader == 'clib':
-            from graph2tac.loader.data_server import DataServer
-        elif loader == 'python':
-            from graph2tac.loader.py_data_server import DataServer
+    def __init__(self, data_dir: Path, max_subgraph_size, with_context, shuffled, dry):
 
         self._data_server = DataServer(data_dir=data_dir,
                                        split=(1,0,0),
@@ -218,11 +215,6 @@ def main():
                         action='store_true',
                         help='use state.context as a part of hashed state')
 
-    parser.add_argument('--loader',
-                        type=str,
-                        default='clib',
-                        help='loader to use: clib or python')
-
     parser.add_argument('--shuffled',
                         action='store_true',
                         help='shuffle the training dataset')
@@ -233,11 +225,9 @@ def main():
 
 
     args = parser.parse_args()
-    if not args.loader in ['clib', 'python']:
-        raise ValueError(f"provided loader argument {args.loader} is not in the supported list: clib, python")
 
     trainer = Train(Path(args.data_dir).expanduser().absolute(),
-                    args.max_subgraph_size, args.with_context, args.loader, args.shuffled, args.dry)
+                    args.max_subgraph_size, args.with_context, args.shuffled, args.dry)
 
     trainer.train()
 
