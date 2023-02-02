@@ -234,7 +234,7 @@ class Trainer:
         # add definitions if necessary
         if definitions is not None:
             definitions = definitions.map(self.dataset.tokenize_definition_graph)
-            definitions = definitions.repeat().shuffle(self.dataset.SHUFFLE_BUFFER_SIZE)
+            definitions = definitions.repeat()
             dataset = tf.data.Dataset.zip(datasets=(dataset, definitions))
             dataset = dataset.map(self._input_output_mixing)
 
@@ -311,7 +311,7 @@ class Trainer:
                                                                         split_random_seed=split_random_seed,
                                                                         shuffle=True)
         if self.definition_task:
-            definitions = self.dataset.definitions(shuffle=False)
+            definitions = self.dataset.definitions(shuffle=True)
         else:
             definitions = None
 
