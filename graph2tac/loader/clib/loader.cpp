@@ -1,4 +1,4 @@
-/* this code supports capnp v13 */
+/* this code supports capnp v14 */
 
 #define GCC_VERSION (__GNUC__ * 10000 + __GNUC_MINOR__ * 100 + __GNUC_PATCH_LEVEL__)
 
@@ -8,7 +8,7 @@
 #include <numpy/arrayobject.h>
 
 
-#include "graph_api_v13.capnp.h"
+#include "graph_api_v14.capnp.h"
 
 
 
@@ -1176,7 +1176,8 @@ static PyObject *c_get_buf_tactics(PyObject *self, PyObject *args) {
 					    "is not a definition!");
 	    }
 	    const auto def = node.getLabel().getDefinition();
-	    if (def.which() == Definition::TACTICAL_CONSTANT) {
+	    if (def.which() == Definition::TACTICAL_CONSTANT ||
+		def.which() == Definition::TACTICAL_SECTION_CONSTANT) {
 		auto def_proof = def.getTacticalConstant();
 		uint64_t proof_step_idx = 0;
 		for (const auto &step_obj: def_proof) {
@@ -1659,7 +1660,8 @@ static PyObject *c_get_proof_step_online_text(PyObject *self, PyObject *args) {
 	const auto outcome_idx = params[3];
 
 	const auto def = p_data_online->global_nodes.at(file_idx)[def_node_idx].getLabel().getDefinition();
-	if (!(def.which() == Definition::TACTICAL_CONSTANT)) {
+	if (!(def.which() == Definition::TACTICAL_CONSTANT ||
+	      def.which() == Definition::TACTICAL_SECTION_CONSTANT)) {
 	    throw std::invalid_argument("the definition at provided location must be tactical constant");
 	}
 	const auto capnp_step = def.getTacticalConstant()[step_idx];
@@ -1727,7 +1729,8 @@ static PyObject *c_get_proof_step_online(PyObject *self, PyObject *args) {
 	const auto step_idx = params[2];
 	const auto outcome_idx = params[3];
 	const auto def = p_data_online->global_nodes.at(file_idx)[def_node_idx].getLabel().getDefinition();
-	if (!(def.which() == Definition::TACTICAL_CONSTANT)) {
+	if (!(def.which() == Definition::TACTICAL_CONSTANT ||
+	      def.which() == Definition::TACTICAL_SECTION_CONSTANT)) {
 	    throw std::invalid_argument("the definition at provided location must be tactical constant");
 	}
 	const auto capnp_step = def.getTacticalConstant()[step_idx];

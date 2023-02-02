@@ -3,7 +3,7 @@ from typing import Optional, List, Tuple
 from pathlib import Path
 import numpy as np
 import tensorflow as tf
-from graph2tac.loader.data_server import GraphConstants, LoaderAction, LoaderProofstate, LoaderDefinition
+from graph2tac.loader.data_classes import GraphConstants, LoaderAction, LoaderProofstate, LoaderDefinition
 
 from graph2tac.tf2.graph_nn_batch import make_flat_batch_np, make_flat_batch_np_empty
 from graph2tac.tf2.graph_nn_def_batch import make_flat_def_batch_np

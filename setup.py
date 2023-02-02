@@ -14,7 +14,7 @@ import numpy
 # please indent the lists with one element per line
 # for convenience of version control tools
 
-CAPNP_V=13
+CAPNP_V=14
 
 
 CLIB_DIR = Path("./graph2tac/loader/clib")
@@ -98,6 +98,7 @@ setup(
                       'g2t-printlog=graph2tac.printlog:main',
                       'g2t-unpack=graph2tac.loader.unpack:main',
                       'g2t-server=graph2tac.loader.predict_server:main',
+                      'g2t-py-server=graph2tac.loader.py_predict_server:main',
                       'g2t-train-hmodel=graph2tac.loader.hmodel:main',
                       'g2t-tfgnn-predict-graphs=graph2tac.tfgnn.plot_predict_graphs:main',
                   ]},
@@ -115,6 +116,6 @@ setup(
         'dataclasses-json',
         'pyyaml',
         'graphviz',
-        'pytact @ git+https://git@github.com/coq-tactician/coq-tactician-reinforce#f6992c129ad99aa47fb80a6322f6ead5e86bda92'
+        'pytact @ git+https://git@github.com/coq-tactician/coq-tactician-reinforce@77f4ba43af8794d76745f9eacf8e91e7b88c3158',
     ]
 )

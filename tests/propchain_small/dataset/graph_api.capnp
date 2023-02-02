@@ -1,4 +1,4 @@
-@0x8a58f5e8c91ebd1d; # v13
+@0xfe647bf3a7fdcc2f; # v14
 
 ######################################################################################################
 #
@@ -133,7 +133,7 @@ struct Graph {
     #    alpha-equivalent.
     #
     # The identity of a node is used to perform partial graph-sharing. That is, two nodes with the same
-    # identity are merged when the graph is generated. There are two reasons why two nodes with the same
+    # identity are merged when the graph is generated. There are three reasons why two nodes with the same
     # semantic identity might have a different physical identity:
     # 1. Nodes are only merged when the first node exists in the same graph as the second node, or exists
     #    in a dependent graph. Hence, nodes originating from developments that do not depend on each other
@@ -142,6 +142,12 @@ struct Graph {
     # 2. Two definition nodes with the same name and body have the same identity. But if they occur in
     #    different global contexts, these nodes are physically different to ensure the integrity of their
     #    global contexts.
+    # 3. For definitions with an opaque proof, the sub-graph that represents this opaque proof is ignored
+    #    while calculating the identity. Morally we defend this decision with the concept that opaque proofs
+    #    are invisible in Coq (proof irrelevance) and two constants with different proofs might as well be
+    #    considered equal. Practically speaking, this is done so that one can compare the identity of a
+    #    definition in a dataset quickly to a identity of a live definition during Coq interaction without
+    #    having to produce the entire graph of opaque proofs (which tend to be large).
     #
     # Beware that the identity is currently a 64 bit field. For datasets that have graphs of size in the
     # order of billions of nodes there is a non-trivial chance of a collision. (We consider this acceptable
@@ -182,7 +188,11 @@ struct Tactic {
   text @1 :Text;
   # The full text of the tactic including the full arguments. This does not currently correspond to
   # (ident, arguments) because in this dataset arguments do not include full terms, but only references to
-  # definitions and local context elements.
+  # definitions and local context elements. Tactics are postprocessed to remove explicit naming of new
+  # hypotheses as much as possible, and instead asking Coq to invent a name.
+
+  textNonAnonymous @5 :Text;
+  # Same as `text` except that the tactic is not postprocessed to remove explicit naming of new hypotheses.
 
   baseText @2 :Text;
   # A textual representation of the base tactic without arguments. It tries to roughly correspond to `ident`.
@@ -375,6 +385,19 @@ struct Definition {
   # For inductives, constructors, projections, section variables and axioms the string is empty.
 }
 
+struct DataVersion {
+  # Version info of a dataset.
+
+  major @0 :Int64;
+  # Currently we only have a major version. Any change to the graph format, Cap'n Proto schema or
+  # communication protocol is considered a breaking change and will increment the major version number.
+  # Note that currently we don't distinquish backwards-compatible Cap'n Proto schema changes from
+  # non-backwards-compatible changes. The schema might change in a non-compatible way without notice.
+  # In the future, a minor version id might be introduced.
+}
+
+const currentVersion :DataVersion = ( major = 14 );
+
 
 ######################################################################################################
 #
@@ -386,6 +409,9 @@ struct Dataset {
   # Every file in the dataset contains a single message of type `Dataset`. Every file corresponds to
   # a Coq source file, and contains a representation of all definitions that have existed at any point
   # throughout the compilation of the source file.
+
+  dataVersion @5 :DataVersion;
+  # The version of the data stored in this dataset.
 
   dependencies @0 :List(File);
   # The graph contained in a file may reference nodes from the graph of other files. This field maps
@@ -494,10 +520,26 @@ struct PredictionProtocol {
       initialize :group {
         # Start a context for making tactical predictions for proof search. The context includes the tactics
         # that are currently available, the definitions that are available.
+
+        dataVersion @12 :DataVersion;
+        # The version number this message and subsequent messages is compatible with.
+
         tactics @0 :List(AbstractTactic);
+        # A list of tactics that Coq currently knows about.
+
         graph @1 :Graph;
+
         definitions @2 :List(NodeIndex);
+        # The list of definitions that are currently in the global context.
+        # TODO: With the introduction of `representative` this is redundant. Consider removing.
+
         logAnnotation @3 :Text;
+        # An annotation containing file and line information on where Coq is currently processing.
+
+        representative @10 :NodeIndex;
+        # Points to the last definition of the global context. All other definitions can be accessed by following
+        # the `Definition.previous` chain starting from this definition. If the global context is empty
+        # this is equal to `len(graph.nodes)`.
       }
       predict :group {
         # Request a list of tactic predictions given the graph of a proof state.
@@ -512,9 +554,15 @@ struct PredictionProtocol {
       checkAlignment :group {
         # Request for the server to align the given tactics and definition to it's internal knowledge
         # and report back any tactics and definitions that were not found
+
+        dataVersion @13 :DataVersion;
+        # The version number this message and subsequent messages is compatible with.
+
         tactics @7 :List(AbstractTactic);
         graph @8 :Graph;
         definitions @9 :List(NodeIndex);
+        # TODO: With the introduction of `representative` this is redundant. Consider removing.
+        representative @11 :NodeIndex;
       }
     }
   }
@@ -580,64 +628,65 @@ enum EdgeClassification {
   # Inductives
   indType @9;
   indConstruct @10;
-  projTerm @11;
-  constructTerm @12;
+  indProjection @11;
+  projTerm @12;
+  constructTerm @13;
 
   # Casts
-  castTerm @13;
-  castType @14;
+  castTerm @14;
+  castType @15;
 
   # Products
-  prodType @15;
-  prodTerm @16;
+  prodType @16;
+  prodTerm @17;
 
   # Lambdas
-  lambdaType @17;
-  lambdaTerm @18;
+  lambdaType @18;
+  lambdaTerm @19;
 
   # LetIns
-  letInDef @19;
-  letInType @20;
-  letInTerm @21;
+  letInDef @20;
+  letInType @21;
+  letInTerm @22;
 
   # Apps
-  appFun @22;
-  appArg @23;
+  appFun @23;
+  appArg @24;
 
   # Cases
-  caseTerm @24;
-  caseReturn @25;
-  caseBranchPointer @26;
-  caseInd @27;
+  caseTerm @25;
+  caseReturn @26;
+  caseBranchPointer @27;
+  caseInd @28;
 
   # CaseBranches
-  cBConstruct @28;
-  cBTerm @29;
+  cBConstruct @29;
+  cBTerm @30;
 
   # Fixes
-  fixMutual @30;
-  fixReturn @31;
+  fixMutual @31;
+  fixReturn @32;
 
   # FixFuns
-  fixFunType @32;
-  fixFunTerm @33;
+  fixFunType @33;
+  fixFunTerm @34;
 
   # CoFixes
-  coFixMutual @34;
-  coFixReturn @35;
+  coFixMutual @35;
+  coFixReturn @36;
 
   # CoFixFuns
-  coFixFunType @36;
-  coFixFunTerm @37;
+  coFixFunType @37;
+  coFixFunTerm @38;
 
   # Back pointers
-  relPointer @38;
+  relPointer @39;
 
   # Evars
-  evarSubstPointer @39;
-  evarSubstTerm @40;
-  evarSubstTarget @41;
-  evarSubject @42;
+  evarSubstPointer @40;
+  evarSubstTerm @41;
+  evarSubstTarget @42;
+  evarSubject @43;
 }
 
 # Struct is needed to work around
@@ -651,7 +700,7 @@ const conflatableEdges :List(ConflatableEdges) =
 # Not conflatable: projTerm, constructTerm, caseTerm, cBTerm
 ];
 const importantEdges :List(EdgeClassification) =
-[ contextElem, contextSubject, contextDefType, contextDefTerm, constType, constDef, constOpaqueDef, indType, indConstruct, constructTerm
+[ contextElem, contextSubject, contextDefType, contextDefTerm, constType, constDef, constOpaqueDef, indType, indConstruct, indProjection, constructTerm
 , prodType, prodTerm, lambdaType, lambdaTerm, letInDef, letInType, letInTerm, appFun, appArg, relPointer ];
 const lessImportantEdges :List(EdgeClassification) =
 [ caseTerm, caseReturn, caseBranchPointer, caseInd, cBConstruct, cBTerm, fixMutual, fixReturn, fixFunType, fixFunTerm ];
@@ -665,7 +714,7 @@ const groupedEdges :List(ConflatableEdges) =
 [ ( conflatable = [contextElem, contextSubject] )
 , ( conflatable = [contextDefType, contextDefTerm] )
 , ( conflatable = [constType, constUndef, constDef, constOpaqueDef, constPrimitive] )
-, ( conflatable = [indType, indConstruct] )
+, ( conflatable = [indType, indConstruct, indProjection] )
 , ( conflatable = [projTerm] )
 , ( conflatable = [constructTerm] )
 , ( conflatable = [castType, castTerm] )

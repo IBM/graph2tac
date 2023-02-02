@@ -8,7 +8,7 @@ import tensorflow_gnn as tfgnn
 from dataclasses import dataclass
 from pathlib import Path
 
-from graph2tac.loader.data_server import GraphConstants, LoaderAction, LoaderProofstate, LoaderDefinition
+from graph2tac.loader.data_classes import GraphConstants, LoaderAction, LoaderProofstate, LoaderDefinition
 from graph2tac.tfgnn.dataset import Dataset, DataServerDataset
 from graph2tac.tfgnn.tasks import PredictionTask, TacticPrediction, DefinitionTask, GLOBAL_ARGUMENT_PREDICTION
 from graph2tac.tfgnn.models import GraphEmbedding, LogitsFromEmbeddings

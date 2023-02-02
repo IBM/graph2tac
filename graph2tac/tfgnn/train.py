@@ -1,5 +1,7 @@
 from typing import Optional, Dict, Tuple
 
+import graph2tac.loader.py_data_server # import capnp before tensorflow
+
 import yaml
 import argparse
 import atexit

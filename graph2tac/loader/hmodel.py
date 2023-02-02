@@ -7,7 +7,7 @@ import pickle
 import numpy as np
 from pathlib import Path
 
-from graph2tac.loader.py_data_server import LoaderAction, LoaderProofstate, LoaderDefinition
+from graph2tac.loader.data_classes import LoaderAction, LoaderProofstate, LoaderDefinition
 
 from graph2tac.predict import Predict, predict_api_debugging
 

@@ -5,7 +5,7 @@ import tensorflow as tf
 import tensorflow_gnn as tfgnn
 from pathlib import Path
 
-from graph2tac.loader.data_server import GraphConstants
+from graph2tac.loader.data_classes import GraphConstants
 from graph2tac.tfgnn.graph_schema import proofstate_graph_spec, batch_graph_spec, strip_graph
 from graph2tac.tfgnn.models import (RepeatScalarGraph,
                                     GraphEmbedding,
