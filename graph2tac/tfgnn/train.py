@@ -292,14 +292,10 @@ class Trainer:
     def run(self,
             total_epochs: int,
             batch_size: int,
-            split: Tuple[int, int],
-            split_random_seed: int
             ) -> tf.keras.callbacks.History:
         """
         @param total_epochs: the total number of epochs to train for (will automatically resume from last trained epoch)
         @param batch_size: the global batch size to use
-        @param split: a pair of integers specifying the training/validation split, as passed to Dataset.proofstates()
-        @param split_random_seed: a seed for the training/validation split, as passed to Dataset.proofstates()
         @return: the training history
         """
         # compile the training model
@@ -309,9 +305,7 @@ class Trainer:
                                  metrics=self.prediction_task.metrics())
 
         # get training data
-        train_proofstates, valid_proofstates = self.dataset.proofstates(split=split,
-                                                                        split_random_seed=split_random_seed,
-                                                                        shuffle=True)
+        train_proofstates, valid_proofstates = self.dataset.proofstates(shuffle=True)
         if self.definition_task:
             definitions = self.dataset.definitions(0, shuffle=False)
         else:
@@ -344,8 +338,6 @@ class Trainer:
                                          run_config={
                                              'total_epochs': total_epochs,
                                              'batch-size': batch_size,
-                                             'split': split,
-                                             'split_random_seed': split_random_seed
                                          }
                                          )
 
@@ -442,9 +434,7 @@ def main():
 
         # training happens inside the same distribution scope to ensure losses and metrics are created there
         trainer.run(total_epochs=run_config['total_epochs'],
-                    batch_size=run_config['batch_size'],
-                    split=run_config['split'],
-                    split_random_seed=run_config['split_random_seed'])
+                    batch_size=run_config['batch_size'])
 
 
 if __name__ == "__main__":

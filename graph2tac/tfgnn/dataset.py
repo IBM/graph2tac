@@ -56,7 +56,7 @@ class Dataset:
         self.exclude_none_arguments = exclude_none_arguments
         self.exclude_not_faithful = exclude_not_faithful
         self._graph_constants = graph_constants
-        self._stats = {}
+        self._stats = None
         vocabulary = [
             chr(i) for i in range(ord('a'), ord('z')+1)
         ] + [
@@ -83,8 +83,6 @@ class Dataset:
         }
 
     def proofstates(self,
-                    split: Tuple[int,int] = (9,1),
-                    split_random_seed: int = 0,
                     shuffle: bool = True) -> Tuple[tf.data.Dataset, tf.data.Dataset]:
         """
         Returns a pair of proof-state datasets for train and validation.
@@ -160,7 +158,7 @@ class Dataset:
             graph_constants.edge_label_num += 1
         return graph_constants
 
-    def stats(self, split: Tuple[int, int] = (9,1), split_random_seed: int = 0) -> dict[str, dict[str, int]]:
+    def stats(self) -> dict[str, dict[str, int]]:
         """
         Compute statistics for the proof-state and definition datasets.
 
@@ -168,13 +166,11 @@ class Dataset:
         @param split_random_seed: the seed to use for the train/validation split
         @return: a dictionary with statistics for the proof-state and definition datasets
         """
-        split_settings = (tuple(split), split_random_seed)
-        if split_settings not in self._stats.keys():
+
+        if self._stats is None:
             logger.info('computing dataset statistics (this may take a while)...')
 
-            train_proofstates, valid_proofstates = self.proofstates(split=split,
-                                                                    split_random_seed=split_random_seed,
-                                                                    shuffle=False)
+            train_proofstates, valid_proofstates = self.proofstates(shuffle=False)
 
             proofstate_datasets = {'train_proofstates': train_proofstates.batch(self.STATISTICS_BATCH_SIZE),
                                    'valid_proofstates': valid_proofstates.batch(self.STATISTICS_BATCH_SIZE)}
@@ -201,8 +197,8 @@ class Dataset:
             stats['definitions'] = self._basic_stats(definition_dataset)
             stats['definitions'].update({'num_definitions': int(num_definitions)})
 
-            self._stats[split_settings] = stats
-        return self._stats[split_settings]
+            self._stats = stats
+        return self._stats
 
     @staticmethod
     def _no_none_arguments(proofstate_graph: tfgnn.GraphTensor) -> tf.Tensor:
@@ -481,7 +477,7 @@ class DataServerDataset(Dataset):
     proofstate_data_spec = (state_spec, action_spec, graph_id_spec)
     definition_data_spec = (loader_graph_spec, num_definitions_spec, definition_names_spec)
 
-    def __init__(self, data_dir: Path, max_subgraph_size: int = 1024, **kwargs):
+    def __init__(self, data_dir: Path, split = None, split_random_seed = 0, max_subgraph_size: int = 1024, **kwargs):
         """
         @param data_dir: the directory containing the data
         @param max_subgraph_size: the maximum size of the returned sub-graphs
@@ -489,9 +485,7 @@ class DataServerDataset(Dataset):
         """
         self.data_server = DataServer(data_dir=data_dir,
                                       max_subgraph_size=max_subgraph_size,
-                                      split = ("coq-tactician-stdlib.dev/theories/Init/Wf.bin",)
-                                      #split=(1,0,0),
-                                      #split_random_seed=0
+                                      split = tuple(split),
         )
 
         super().__init__(graph_constants=self.data_server.graph_constants(),
