@@ -1,0 +1,8 @@
+symmetrization: bidirectional
+add_self_edges: true
+max_subgraph_size: 1024
+exclude_none_arguments: false
+exclude_not_faithful: false
+split:
+- coq-high-school-geometry
+split_random_seed: 0
