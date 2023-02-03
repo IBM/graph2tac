@@ -9,7 +9,7 @@ from numpy.typing import NDArray
 import numpy as np
 from dataclasses import dataclass
 
-from graph2tac.loader.py_data_server import LoaderAction, LoaderProofstate
+from graph2tac.loader.data_server import LoaderAction, LoaderProofstate
 from graph2tac.tf2.model_params import ModelDatasetConstants
 
 # TODO(jrute): This code is unique to the model in model.py,
