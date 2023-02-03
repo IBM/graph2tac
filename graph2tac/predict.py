@@ -6,7 +6,7 @@ import numpy as np
 from pathlib import Path
 
 from graph2tac.common import logger
-from graph2tac.loader.data_server import GraphConstants, LoaderProofstate, LoaderDefinition
+from graph2tac.loader.data_classes import GraphConstants, LoaderProofstate, LoaderDefinition
 
 
 NUMPY_NDIM_LIMIT = 32

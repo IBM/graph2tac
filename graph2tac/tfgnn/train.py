@@ -9,7 +9,7 @@ import tensorflow as tf
 import tensorflow_gnn as tfgnn
 from pathlib import Path
 
-from graph2tac.tfgnn.dataset import Dataset, DataServerDataset, TFRecordDataset
+from graph2tac.tfgnn.dataset import Dataset, DataServerDataset
 from graph2tac.tfgnn.tasks import PredictionTask, DefinitionTask, DefinitionNormSquaredLoss
 from graph2tac.tfgnn.graph_schema import vectorized_definition_graph_spec, batch_graph_spec
 from graph2tac.tfgnn.train_utils import QCheckpointManager, ExtendedTensorBoard, DefinitionLossScheduler
@@ -365,8 +365,6 @@ def main():
     dataset_source = parser.add_mutually_exclusive_group(required=True)
     dataset_source.add_argument("--data-dir", metavar="DIRECTORY", type=Path,
                                 help="Location of the capnp dataset")
-    dataset_source.add_argument("--tfrecord-prefix", metavar="TFRECORD_PREFIX", type=Path,
-                                help="Prefix for the .tfrecord and .yml files in the TFRecord dataset")
     parser.add_argument("--dataset-config", metavar="DATASET_YAML", type=Path, required=True,
                         help=f"YAML file with the configuration for the dataset")
 
@@ -409,12 +407,9 @@ def main():
     if not args.dataset_config.is_file():
         parser.error(f'--dataset-config {args.dataset_config} must be a YAML file')
 
-    if args.data_dir is not None:
-        dataset = DataServerDataset.from_yaml_config(data_dir=args.data_dir,
-                                                     yaml_filepath=args.dataset_config)
-    else:
-        dataset = TFRecordDataset.from_yaml_config(tfrecord_prefix=args.tfrecord_prefix,
-                                                   yaml_filepath=args.dataset_config)
+    assert(args.data_dir) is not None
+    dataset = DataServerDataset.from_yaml_config(data_dir=args.data_dir,
+                                                 yaml_filepath=args.dataset_config)
 
     # choice of distribution strategy
     if args.gpu == 'all':
