@@ -7,7 +7,7 @@ import tensorflow_gnn as tfgnn
 from pathlib import Path
 
 from graph2tac.loader.data_classes import GraphConstants, LoaderAction, LoaderDefinition, LoaderProofstate
-from graph2tac.loader.py_data_server import DataServer
+from graph2tac.loader.data_server import DataServer
 from graph2tac.tfgnn.graph_schema import proofstate_graph_spec, definition_graph_spec
 from graph2tac.common import logger
 

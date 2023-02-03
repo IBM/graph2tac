@@ -19,7 +19,7 @@ from pytact.data_reader import (capnp_message_generator,
                                 GlobalContextMessage, CheckAlignmentMessage, CheckAlignmentResponse)
 from graph2tac.common import logger
 from graph2tac.loader.data_classes import *
-from graph2tac.loader.py_data_server import AbstractDataServer, DataServer
+from graph2tac.loader.data_server import AbstractDataServer, DataServer
 
 def apply_temperature(confidences, temperature):
     """
