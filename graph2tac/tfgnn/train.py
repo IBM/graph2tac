@@ -442,11 +442,13 @@ def main():
                                            log_dir=args.log)
 
         # training happens inside the same distribution scope to ensure losses and metrics are created there
-        trainer.run(total_epochs=run_config['total_epochs'],
+        history = trainer.run(total_epochs=run_config['total_epochs'],
                     batch_size=run_config['batch_size'],
                     split=run_config['split'],
                     split_random_seed=run_config['split_random_seed'])
 
+        # return history for tests
+        return history
 
 if __name__ == "__main__":
     main()
