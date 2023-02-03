@@ -199,15 +199,6 @@ class DataServer(AbstractDataServer):
         self._data = self._reader.__enter__()
 
         fnames = self.topo_file_order()
-        #fnames = list(self._data.keys())
-        # fnames = [
-        #     fname.relative_to(data_dir)
-        #     for fname in top_sort_dataset_modules(data_dir)
-        # ]
-        # assert set(fnames) == set(self._data.keys())
-        # if fname_order_key is not None:
-        #     fnames.sort(key = fname_order_key)
-
         for name in fnames:
             file_data = self._data[name]
             self._load_file(file_data)
