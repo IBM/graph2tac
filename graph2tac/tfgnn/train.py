@@ -9,11 +9,40 @@ import tensorflow as tf
 import tensorflow_gnn as tfgnn
 from pathlib import Path
 
+from graph2tac.loader.data_classes import LoaderDefinition
+from graph2tac.loader.data_server import DataServer
 from graph2tac.tfgnn.dataset import Dataset, DataServerDataset, TFRecordDataset
 from graph2tac.tfgnn.tasks import PredictionTask, DefinitionTask, DefinitionNormSquaredLoss
 from graph2tac.tfgnn.graph_schema import vectorized_definition_graph_spec, batch_graph_spec
 from graph2tac.tfgnn.train_utils import QCheckpointManager, ExtendedTensorBoard, DefinitionLossScheduler
 from graph2tac.common import logger
+
+
+class RecomputeEmbeddingsCallback(tf.keras.callbacks.Callback):
+    def __init__(self, data_server: DataServer, compute_new_definitions):
+        super().__init__()
+        self.data_server = data_server
+        self.compute_new_definitions_fn = compute_new_definitions
+        self.base_node_label_num = self.data_server.graph_constants().base_node_label_num
+
+    def on_epoch_begin(self, epoch, logs=None):
+        print("Recomputing embeddings...")
+        visited_nodes = set()
+        for cluster in self.data_server.def_cluster_subgraphs():
+            old_nodes = cluster.graph.nodes[cluster.num_definitions:]
+            new_nodes = cluster.graph.nodes[:cluster.num_definitions]
+            for n in old_nodes:
+                if n not in visited_nodes:
+                    assert n < self.base_node_label_num, (
+                        f"Definition clusters out of order.\n"
+                        f"Previously unseen definition label: #{n}\n"
+                        f"Found in graph of defining labels {new_nodes} a.k.a. {cluster.definition_names}"
+                    )
+                    visited_nodes.add(n)
+            for n in new_nodes:
+                visited_nodes.add(n)
+            #print("cluster_idx", cluster.graph.nodes[:cluster.num_definitions])
+            self.compute_new_definitions_fn([cluster])
 
 
 class Trainer:
@@ -25,11 +54,13 @@ class Trainer:
 
     def __init__(self,
                  dataset: Dataset,
+                 data_server: Optional[DataServer],
                  prediction_task: PredictionTask,
                  serialized_optimizer: Dict,
                  definition_task: Optional[DefinitionTask] = None,
                  definition_loss_coefficient: Optional[float] = None,
                  definition_loss_schedule: Optional[Dict] = None,
+                 recompute_embeddings_between_epochs: bool = False,
                  l2_regularization_coefficient: Optional[float] = None,
                  log_dir: Optional[Path] = None,
                  max_to_keep: Optional[int] = 1,
@@ -46,6 +77,7 @@ class Trainer:
         @param definition_task: the `graph2tac.tfgnn.tasks.DefinitionTask` to use for definitions (or `None` to skip)
         @param definition_loss_coefficient: the coefficient in front of the definition embeddings loss term
         @param definition_loss_schedule: the parameters for the `DefinitionLossScheduler` (or `None` to skip scheduling)
+        @param recompute_embeddings_between_epochs: whether to recompute all definitions with def task between epochs
         @param l2_regularization_coefficient: the coefficient to use for L2 regularization (or `None` to not use it)
         @param log_dir: the directory where TensorBoard logs and checkpoints should be saved (or `None` to skip logging)
         @param max_to_keep: the maximum number of checkpoints to keep (or `None` to keep all)
@@ -54,6 +86,7 @@ class Trainer:
         """
         # dataset
         self.dataset = dataset
+        self.data_server = data_server
         self.dataset_options = tf.data.Options()
         if isinstance(tf.distribute.get_strategy(), tf.distribute.MirroredStrategy):
             self.dataset_options.experimental_distribute.auto_shard_policy = tf.data.experimental.AutoShardPolicy.DATA
@@ -74,9 +107,11 @@ class Trainer:
                                                                dtype=tf.float32, trainable=False)
 
             self.definition_loss_schedule = definition_loss_schedule
+            self.recompute_embeddings_between_epochs = recompute_embeddings_between_epochs
         else:
             self.definition_loss_coefficient = None
             self.definition_loss_schedule = None
+            self.recompute_embeddings_between_epochs = None
 
         # regularization
         self.l2_regularization_coefficient = l2_regularization_coefficient
@@ -104,6 +139,8 @@ class Trainer:
         self.max_to_keep = max_to_keep
         self.keep_checkpoint_every_n_hours = keep_checkpoint_every_n_hours
         self.qsaving = qsaving
+
+        self.cached_definition_computation = None
 
         if log_dir is not None:
             # create directory for logs
@@ -171,6 +208,7 @@ class Trainer:
             'definition_task': self.definition_task.get_config() if self.definition_task is not None else None,
             'definition_loss_coefficient': float(self.definition_loss_coefficient.value().numpy()) if self.definition_loss_coefficient is not None else None,
             'definition_loss_schedule': self.definition_loss_schedule,
+            'recompute_embeddings_between_epochs': self.recompute_embeddings_between_epochs,
             'l2_regularization_coefficient': self.l2_regularization_coefficient,
             'max_to_keep': self.max_to_keep,
             'keep_checkpoint_every_n_hours': self.keep_checkpoint_every_n_hours,
@@ -181,6 +219,7 @@ class Trainer:
     @classmethod
     def from_yaml_config(cls,
                          dataset: Dataset,
+                         data_server: Optional[DataServer],
                          trainer_config: Path,
                          prediction_task_config: Path,
                          definition_task_config: Optional[Path] = None,
@@ -199,11 +238,14 @@ class Trainer:
         else:
             definition_task = None
 
-        return cls(dataset=dataset,
-                   prediction_task=prediction_task,
-                   definition_task=definition_task,
-                   log_dir=log_dir,
-                   **trainer_config)
+        return cls(
+            dataset=dataset,
+            data_server=data_server,
+            prediction_task=prediction_task,
+            definition_task=definition_task,
+            log_dir=log_dir,
+            **trainer_config
+        )
 
     def _callbacks(self):
         callbacks = self.prediction_task.callbacks()
@@ -288,6 +330,106 @@ class Trainer:
         if self.definition_task is not None:
             loss_weights.update({self.DEFINITION_EMBEDDING: self.definition_loss_coefficient})
         return loss_weights
+    
+    #TODO(jrute): Find better place for this
+    @tf.function(input_signature = DataServerDataset.definition_data_spec)
+    def _make_definition_graph_tensor_from_data(self, loader_graph, num_definitions, definition_names):
+        x = DataServerDataset._make_definition_graph_tensor(loader_graph, num_definitions, definition_names)
+        x = self.dataset._preprocess_single(x)
+        x = self.dataset.tokenize_definition_graph(x)
+        return x
+
+    #TODO(jrute): Find better place for this
+    def _fetch_definition_computation(self):
+        """
+        The definition computation needs to be rebuilt when the embeddings table is swapped out.
+        When the embeddings table is changed, this cached function is deleted and
+        we rebuild it here when we need it.
+        """
+        if self.cached_definition_computation is not None:
+            return self.cached_definition_computation
+
+        def stack_dicts_with(f, ds):
+            keys = ds[0].keys()
+            assert all(d.keys() == keys for d in ds)
+            return {
+                key : f([d[key] for d in ds])
+                for key in keys
+            }
+
+        def stack_maybe_ragged(xs):
+            if isinstance(xs[0], tf.RaggedTensor):
+                return tf.ragged.stack(xs)
+            else:
+                return tf.stack(xs)
+
+        def stack_contexts(cs):
+            return tfgnn.Context.from_fields(
+                sizes = tf.stack([c.sizes for c in cs]),
+                features = stack_dicts_with(stack_maybe_ragged, [c.features for c in cs]),
+            )
+
+        def stack_node_sets(nss):
+            sizes = tf.stack([ns.sizes for ns in nss])
+            features = stack_dicts_with(tf.ragged.stack, [ns.features for ns in nss])
+            return tfgnn.NodeSet.from_fields(
+                sizes = sizes,
+                features = features,
+            )
+
+        def stack_edge_sets(ess):
+            sizes = tf.stack([es.sizes for es in ess])
+            features = stack_dicts_with(tf.ragged.stack, [es.features for es in ess])
+            source_name = ess[0].adjacency.source_name
+            target_name = ess[0].adjacency.target_name
+            assert all(es.adjacency.source_name == source_name for es in ess)
+            assert all(es.adjacency.target_name == target_name for es in ess)
+            source = tf.ragged.stack([es.adjacency.source for es in ess])
+            target = tf.ragged.stack([es.adjacency.target for es in ess])
+            return tfgnn.EdgeSet.from_fields(
+                sizes = sizes,
+                features = features,
+                adjacency = tfgnn.Adjacency.from_indices(
+                    source = (source_name, source),
+                    target = (target_name, target),
+                ),
+            )
+
+        def stack_graph_tensors(gts):
+            context = stack_contexts([gt.context for gt in gts])
+            node_sets = stack_dicts_with(stack_node_sets, [gt.node_sets for gt in gts])
+            edge_sets = stack_dicts_with(stack_edge_sets, [gt.edge_sets for gt in gts])
+            return tfgnn.GraphTensor.from_pieces(context = context, node_sets = node_sets, edge_sets = edge_sets)
+        
+        @tf.function(input_signature = DataServerDataset.definition_data_spec)
+        def _compute_and_replace_definition_embs(loader_graph, num_definitions, definition_names):
+            definition_graph = stack_graph_tensors([
+                self._make_definition_graph_tensor_from_data(loader_graph, num_definitions, definition_names)
+            ])
+            scalar_definition_graph = definition_graph.merge_batch_to_components()
+            definition_embeddings = self.definition_task(scalar_definition_graph).flat_values
+            defined_labels = Trainer._get_defined_labels(definition_graph).flat_values
+            #tf.print("recomp_idx", defined_labels)
+            #tf.print("recomp_emb", tf.reduce_mean(definition_embeddings, axis=-1))
+
+            self.prediction_task.graph_embedding.update_node_embeddings(
+                embeddings=definition_embeddings,
+                indices=defined_labels,
+            )
+        
+        self.cached_definition_computation = _compute_and_replace_definition_embs
+        return _compute_and_replace_definition_embs
+
+    #TODO(jrute): Find better place for this
+    def compute_new_definitions(self, new_cluster_subgraphs: list[LoaderDefinition]) -> None:
+        if self.definition_task is None:
+            raise RuntimeError('cannot update definitions when a definition task is not present')
+
+        assert len(new_cluster_subgraphs) == 1
+        new_cluster_subgraph = DataServerDataset._loader_to_definition_data(new_cluster_subgraphs[0])
+
+        compute_and_replace_definition_embs = self._fetch_definition_computation()
+        compute_and_replace_definition_embs(*new_cluster_subgraph)
 
     def run(self,
             total_epochs: int,
@@ -348,6 +490,14 @@ class Trainer:
                                              'split_random_seed': split_random_seed
                                          }
                                          )
+        
+        if self.recompute_embeddings_between_epochs:
+            assert self.data_server is not None
+            recompute_emb_callback = RecomputeEmbeddingsCallback(
+                data_server=self.data_server,
+                compute_new_definitions=self.compute_new_definitions
+            )
+            callbacks.append(recompute_emb_callback)
 
         # run fit
         history = self.train_model.fit(train_proofstates,
@@ -412,9 +562,16 @@ def main():
     if args.data_dir is not None:
         dataset = DataServerDataset.from_yaml_config(data_dir=args.data_dir,
                                                      yaml_filepath=args.dataset_config)
+        data_server = DataServer(
+            data_dir=args.data_dir,
+            max_subgraph_size=1024,
+            split=(1,0,0),
+            split_random_seed=0
+        )
     else:
         dataset = TFRecordDataset.from_yaml_config(tfrecord_prefix=args.tfrecord_prefix,
                                                    yaml_filepath=args.dataset_config)
+        data_server = None
 
     # choice of distribution strategy
     if args.gpu == 'all':
@@ -439,11 +596,14 @@ def main():
         parser.error(f'--trainer-config {args.trainer_config} must be a YAML file')
 
     with strategy.scope():
-        trainer = Trainer.from_yaml_config(dataset=dataset,
-                                           trainer_config=args.trainer_config,
-                                           prediction_task_config=args.prediction_task_config,
-                                           definition_task_config=args.definition_task_config,
-                                           log_dir=args.log)
+        trainer = Trainer.from_yaml_config(
+            dataset=dataset,
+            data_server=data_server,
+            trainer_config=args.trainer_config,
+            prediction_task_config=args.prediction_task_config,
+            definition_task_config=args.definition_task_config,
+            log_dir=args.log
+        )
 
         # training happens inside the same distribution scope to ensure losses and metrics are created there
         trainer.run(total_epochs=run_config['total_epochs'],
