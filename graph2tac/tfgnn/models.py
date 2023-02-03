@@ -322,6 +322,18 @@ class GraphEmbedding(tfgnn.keras.layers.MapFeatures):
         })
         return config
 
+    def copy(self) -> "GraphEmbedding":
+        new_graph_embs_layer = GraphEmbedding(
+            node_label_num=self._node_label_num,
+            edge_label_num=self._edge_label_num,
+            hidden_size=self._hidden_size,
+            unit_normalize=self._unit_normalize,
+            name=self.name 
+        )
+        new_graph_embs_layer._node_embedding = self._node_embedding
+        new_graph_embs_layer._edge_embedding = self._edge_embedding
+        return new_graph_embs_layer
+
     def lookup_node_embedding(self, indices):
         """Lookup node embeddings directly"""
         return self._node_embedding(indices)
@@ -333,7 +345,7 @@ class GraphEmbedding(tfgnn.keras.layers.MapFeatures):
     def set_node_embeddings(self, embeddings):
         return self._node_embedding.set_weights([embeddings])
 
-    def extend_embeddings(self, new_node_label_num: int):
+    def _extend_embeddings(self, new_node_label_num: int):
         """Extend the embedding layer in place"""
         new_node_embedding = self._node_emb_layer(
             node_label_num=new_node_label_num,
@@ -347,6 +359,12 @@ class GraphEmbedding(tfgnn.keras.layers.MapFeatures):
         self._node_embedding = new_node_embedding
         self._node_label_num = new_node_label_num
         self.set_node_embeddings(new_embeddings)
+    
+    def extend_embeddings(self, new_node_label_num: int) -> "GraphEmbedding":
+        """Return a new layer with extended embeddings"""
+        new_layer = self.copy()
+        new_layer._extend_embeddings(new_node_label_num)
+        return new_layer
         
     def update_node_embeddings(self, embeddings, indices):
         emb_vars = self._node_embedding.embeddings
@@ -960,7 +978,6 @@ class DenseDefinitionHead(tf.keras.layers.Layer):
                     input_dim=Dataset.MAX_LABEL_TOKENS,
                     output_dim=hidden_size,
                 ),
-                tf.keras.layers.Lambda(lambda x: x.to_tensor()), # align ragged tensor
                 self._name_layer_core,
             ])
 

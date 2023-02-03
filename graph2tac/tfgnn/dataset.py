@@ -25,7 +25,7 @@ class Dataset:
     MAX_LABEL_TOKENS = 128
     MAX_PROOFSTATES = int(1e7)
     MAX_DEFINITIONS = int(1e7)
-    SHUFFLE_BUFFER_SIZE = int(1e4)
+    SHUFFLE_BUFFER_SIZE = int(1e7)
     STATISTICS_BATCH_SIZE = int(1e4)
 
     _proofstates: Callable[[int], tf.data.Dataset]
@@ -159,60 +159,6 @@ class Dataset:
         if self.add_self_edges:
             graph_constants.edge_label_num += 1
         return graph_constants
-
-    def proofstates_tfrecord_filepath(self, tfrecord_prefix: Path) -> Path:
-        """
-        Returns the filepath for the proof-states TFRecord file with prefix `tfrecord_prefix`.
-
-        @param tfrecord_prefix: the filepath prefix to the TFRecord files for the dataset
-        @return: a Path to the TFRecord file containing all proof-states
-        """
-        return tfrecord_prefix.with_stem(f'{tfrecord_prefix.stem}-proofstates-{self.max_subgraph_size}').with_suffix('.tfrecord')
-
-    def definitions_tfrecord_filepath(self, tfrecord_prefix: Path) -> Path:
-        """
-        Returns the filepath for the definitions TFRecord file with prefix `tfrecord_prefix`.
-
-        @param tfrecord_prefix: the filepath prefix to the TFRecord files for the dataset
-        @return: a Path to the TFRecord file containing all definitions
-        """
-        return tfrecord_prefix.with_stem(f'{tfrecord_prefix.stem}-definitions-{self.max_subgraph_size}').with_suffix('.tfrecord')
-
-    @staticmethod
-    def graph_constants_filepath(tfrecord_prefix: Path) -> Path:
-        """
-        Returns the filepath for the graph constants YAML file with prefix `tfrecord_prefix`.
-
-        @param tfrecord_prefix: the filepath prefix to the TFRecord files for the dataset
-        @return: a Path to the YAML file containing the (original) graph constants
-        """
-        return tfrecord_prefix.with_stem(f'{tfrecord_prefix.stem}-constants').with_suffix('.yml')
-
-    def dump(self, tfrecord_prefix: Path) -> None:
-        """
-        Create TFRecord files for this dataset.
-        WARNING: this function will overwrite files if they already exist!
-
-        @param tfrecord_prefix: the prefix for the TFRecord files we want to create
-        """
-        proofstates_tfrecord_filepath = self.proofstates_tfrecord_filepath(tfrecord_prefix)
-        definitions_tfrecord_filepath = self.definitions_tfrecord_filepath(tfrecord_prefix)
-        graph_constants_filepath = self.graph_constants_filepath(tfrecord_prefix)
-
-        # Make sure we dump the original data, not the pre-processed data!
-        datasets = {
-            proofstates_tfrecord_filepath: self._proofstates(), # TODO: train / valid label
-            definitions_tfrecord_filepath: self._definitions(), # TODO: train / valid label
-        }
-        for tfrecord_filepath, dataset in datasets.items():
-            logger.info(f'exporting {tfrecord_filepath}')
-            with tf.io.TFRecordWriter(str(tfrecord_filepath.absolute())) as writer:
-                for graph_tensor in iter(dataset):
-                    example = tfgnn.write_example(graph_tensor)
-                    writer.write(example.SerializeToString())
-
-        logger.info(f'exporting {graph_constants_filepath}')
-        graph_constants_filepath.write_text(yaml.dump(self._graph_constants.__dict__))
 
     def stats(self, split: Tuple[int, int] = (9,1), split_random_seed: int = 0) -> dict[str, dict[str, int]]:
         """
@@ -495,88 +441,12 @@ class Dataset:
         """
         return tf.reduce_sum(tf.cast(definition_graph.context['num_definitions'], dtype=tf.int32))
 
-
-class TFRecordDataset(Dataset):
-    """
-    Subclass for TF-GNN datasets which are read from TFRecord files
-    (no GraphTensor construction here, so this is presumably more efficient than using `DataServerDataset`).
-    """
-    def __init__(self, tfrecord_prefix: Path, **kwargs):
-        """
-        @param tfrecord_prefix: the prefix for the .tfrecord files containing the data
-        @param kwargs: additional keyword arguments are passed on to the parent class
-        """
-        # load the graph constants
-        graph_constants_filepath = self.graph_constants_filepath(tfrecord_prefix)
-        if not graph_constants_filepath.exists():
-            raise FileNotFoundError(f'{graph_constants_filepath} does not exist')
-
-        with graph_constants_filepath.open('r') as yml_file:
-            graph_constants = GraphConstants(**yaml.load(yml_file, Loader=yaml.UnsafeLoader))
-
-        # initialize attributes of the parent class
-        super().__init__(graph_constants=graph_constants, **kwargs)
-
-        # load the proofstates
-        proofstates_tfrecord_filepath = self.proofstates_tfrecord_filepath(tfrecord_prefix)
-        if not proofstates_tfrecord_filepath.exists():
-            raise FileNotFoundError(f'{proofstates_tfrecord_filepath} does not exist')
-
-        self._proofstates_dataset = tf.data.TFRecordDataset(filenames=[str(proofstates_tfrecord_filepath.absolute())])
-
-        # load the definitions
-        definitions_tfrecord_filepath = self.definitions_tfrecord_filepath(tfrecord_prefix)
-        if not definitions_tfrecord_filepath.exists():
-            raise FileNotFoundError(f'{definitions_tfrecord_filepath} does not exist')
-
-        self._definitions_dataset = tf.data.TFRecordDataset(filenames=[str(definitions_tfrecord_filepath.absolute())])
-
-    @classmethod
-    def from_yaml_config(cls, tfrecord_prefix: Path, yaml_filepath: Path) -> "TFRecordDataset":
-        """
-        Create a TFRecordDataset from a YAML configuration file
-
-        @param tfrecord_prefix: the prefix for the .tfrecord files containing the data
-        @param yaml_filepath: the filepath to the YAML file containing the
-        @return: a TFRecordDataset object
-        """
-        with yaml_filepath.open() as yaml_file:
-            dataset_config = yaml.load(yaml_file, Loader=yaml.SafeLoader)
-        return cls(tfrecord_prefix=tfrecord_prefix, **dataset_config)
-
-    @classmethod
-    def _parse_tfrecord_dataset(cls, dataset: tf.data.Dataset, graph_spec: tfgnn.GraphTensorSpec) -> tf.data.Dataset:
-        """
-        Parse a TFRecordDataset into GraphTensor matching a given graph spec.
-
-        @param dataset: the TFRecordDataset we want to parse
-        @param graph_spec: the graph spec for the graphs contained in the dataset
-        @return: a tf.data.Dataset containing all the graphs
-        """
-        return dataset.map(lambda graph_tensor: tfgnn.parse_single_example(graph_spec, graph_tensor),
-                              num_parallel_calls=tf.data.AUTOTUNE)
-
-    def _proofstates(self) -> tf.data.Dataset: # TODO: train / valid label
-        """
-        Returns a dataset with all the proof-states.
-
-        @return: a tf.data.Dataset streaming GraphTensor objects
-        """
-        return self._parse_tfrecord_dataset(self._proofstates_dataset, graph_spec=proofstate_graph_spec)
-
-    def _definitions(self) -> tf.data.Dataset: # TODO: train / valid label
-        """
-        Returns a dataset with all the definitions.
-
-        @return: a tf.data.Dataset streaming GraphTensor objects
-        """
-        return self._parse_tfrecord_dataset(self._definitions_dataset, graph_spec=definition_graph_spec)
-
-
 class DataServerDataset(Dataset):
     """
     Subclass for TF-GNN datasets which are obtained directly from the loader
     (this is presumable slower than using pre-processed `TFRecordDataset`).
+    UPDATE: `TFRecordDataset` no longer used
+    TODO: merge this class with Dataset
     """
 
     # tf.TensorSpec for the data coming from the loader
@@ -811,52 +681,3 @@ class DataServerDataset(Dataset):
             output_signature=self.definition_data_spec
         )
         return dataset.map(self._make_definition_graph_tensor, num_parallel_calls=tf.data.AUTOTUNE)
-
-
-def main():
-    parser = argparse.ArgumentParser(description="Create TFRecord datasets from the capnp data loader")
-    parser.add_argument("--data-dir", metavar="DIRECTORY", type=Path, required=True,
-                        help="Location of the capnp dataset")
-    parser.add_argument("--tfrecord-prefix", metavar="TFRECORD_PREFIX", type=Path, required=True,
-                        help="Prefix for the .tfrecord and .yml files to generate")
-    parser.add_argument("--dataset-config", metavar="DATASET_YAML", type=Path, required=True,
-                        help="YAML file with the configuration for the dataset")
-
-    # logging level
-    parser.add_argument("--log-level", type=int, metavar="LOG_LEVEL", default=20,
-                        help="Logging level (defaults to 20, a.k.a. logging.INFO)")
-    args = parser.parse_args()
-
-    # set logging level
-    logger.setLevel(args.log_level)
-
-    # check inputs
-    if not args.data_dir.is_dir():
-        parser.error(f'--data-dir {args.data_dir} must be an existing directory')
-    if not args.dataset_config.is_file():
-        parser.error(f'--dataset-config {args.dataset_config} must be an existing file')
-    if args.tfrecord_prefix.stem is None:
-        parser.error(f'--tfrecord-prefix {args.tfrecord_prefix} must have a filename prefix')
-
-    # create dataset
-    dataset = DataServerDataset.from_yaml_config(data_dir=args.data_dir, yaml_filepath=args.dataset_config)
-
-    # check we don't overwrite existing files
-    proofstates_tfrecord_filepath = dataset.proofstates_tfrecord_filepath(tfrecord_prefix=args.tfrecord_prefix)
-    if proofstates_tfrecord_filepath.exists():
-        parser.error(f'{proofstates_tfrecord_filepath} already exists')
-
-    definitions_tfrecord_filepath = dataset.definitions_tfrecord_filepath(tfrecord_prefix=args.tfrecord_prefix)
-    if definitions_tfrecord_filepath.exists():
-        parser.error(f'{definitions_tfrecord_filepath} already exists')
-
-    graph_constants_filepath = dataset.graph_constants_filepath(tfrecord_prefix=args.tfrecord_prefix)
-    if graph_constants_filepath.exists():
-        parser.error(f'{graph_constants_filepath} already exists')
-
-    # dump datasets to .tfrecord files
-    dataset.dump(tfrecord_prefix=args.tfrecord_prefix)
-
-
-if __name__ == "__main__":
-    main()
