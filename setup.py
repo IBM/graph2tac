@@ -1,15 +1,8 @@
 import sys
-import setuptools
 from setuptools import find_packages, setup
-
-# These next three lines fetch and import numpy, which is needed for installation
-import setuptools.dist
-setuptools.dist.Distribution().fetch_build_eggs(['Cython>=0.15.1', 'numpy>=1.10'])
 
 # please indent the lists with one element per line
 # for convenience of version control tools
-
-CAPNP_V=14
 
 setup(
     name='graph2tac',
@@ -19,7 +12,6 @@ setup(
     author=' Mirek Olsak, Vasily Pestun, Jason Rute, Fidel I. Schaposnik Massolo',
     python_requires='>=3.9',
     include_package_data=True,
-    package_data={'graph2tac.loader': [f'clib/graph_api_v{CAPNP_V}.capnp']},
     entry_points={'console_scripts':
                   [
                       'g2t-train=graph2tac.tf2.train:main',
