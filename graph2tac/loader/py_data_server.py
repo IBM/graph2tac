@@ -171,8 +171,13 @@ class AbstractDataServer:
             ], dtype = self._def_name_dtype)
         )
 
+class Splitter:
+    def datapoint(self, d : Definition):
+        raise Exception("Not implemented")
+    def cluster(self, d : list[Definition]):
+        raise Exception("Not implemented")
 
-class SplitByHash:
+class SplitByHash(Splitter):
     def __init__(self, split = (8,1,1), random_seed = 0):
         self.data_server = None # to be set by data_server
         self.split = split
@@ -184,7 +189,7 @@ class SplitByHash:
     def cluster(self, d : list[Definition]):
         return 0
 
-class SplitByFilePrefix:
+class SplitByFilePrefix(Splitter):
     def __init__(self, *prefixes_per_label):
         self.data_server = None # to be set by data_server
         self.prefixes_per_label = []
@@ -207,7 +212,7 @@ class DataServer(AbstractDataServer):
     def __init__(self,
                  data_dir: Path,
                  max_subgraph_size,
-                 split: tuple[int, int, int] = (8, 1, 1),
+                 split = (8, 1, 1),
                  bfs_option = True,
                  split_random_seed = 0,
                  restrict_to_spine: bool = False,
@@ -219,8 +224,12 @@ class DataServer(AbstractDataServer):
 
         if isinstance(split, tuple) and isinstance(split[0], int):
             self.split = SplitByHash(split, split_random_seed)
-        else:
+        elif isinstance(split, tuple) and isinstance(split[0], (str, list)) and isinstance(split[0][0], str):
+            self.split = SplitByFilePrefix(split)
+        elif isinstance(split, Splitter):
             self.split = split # ignore split_random_seed
+        else:
+            raise Exception("Cannot interpret split:", split)
         self.split.data_server = self
 
         self._proof_steps : list[tuple[Outcome, Definition, int]] = []
@@ -232,6 +241,17 @@ class DataServer(AbstractDataServer):
 
         self._reader = data_reader(Path(data_dir))
         self._data = self._reader.__enter__()
+
+        # conversion from a graph id to a filename
+        graphid_to_fname = {
+            file_data.graph : str(fname)
+            for fname, file_data in self._data.items()
+        }
+        assert set(graphid_to_fname.keys()) == set(range(len(self._data)))
+        self.graphid_to_fname = [
+            graphid_to_fname[i]
+            for i in range(len(self._data))
+        ]
 
         fnames = self.topo_file_order()
         for name in fnames:
