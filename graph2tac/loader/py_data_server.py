@@ -199,14 +199,8 @@ class SplitByFilePrefix(Splitter):
             else:
                 prefixes = list(prefixes)
             self.prefixes_per_label.append((label+1, prefixes))
-        # print("------------------------------------")
-        # print("SPLIT BY FNAME PREFIX")
-        # print("------------------------------------")
-        # for label, prefixes in self.prefixes_per_label:
-        #     print(label, "-->", prefixes)
     def datapoint(self, d : Definition):
         fname = self.data_server.graphid_to_fname[d.node.graph]
-        # print(fname)
         for label, prefixes in reversed(self.prefixes_per_label):
             if any(fname.startswith(prefix) for prefix in prefixes):
                 return label
@@ -480,9 +474,6 @@ class DataServer(AbstractDataServer):
             ids = list(ids)
             random.shuffle(ids)
 
-        # print("=============================")
-        # print("GET DATAPOINTS", label, "->", len(ids))
-        # print("=============================")
         if as_text:
             return IterableLen(map(self._datapoint_text, ids), len(ids))
         else:
