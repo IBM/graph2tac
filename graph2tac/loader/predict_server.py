@@ -215,6 +215,7 @@ class PredictServer(AbstractDataServer):
             logger.info(f"No update of the definition clusters requested")
 
         t0 = time.time()
+        def_clusters_for_update.reverse() # definitions are given in a reverse order
         if def_clusters_for_update:
             logger.info(f"Updating definition clusters...")
             if self.config.progress_bar:
