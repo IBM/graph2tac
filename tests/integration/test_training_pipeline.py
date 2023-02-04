@@ -1,3 +1,6 @@
+import os
+os.environ["CUDA_VISIBLE_DEVICES"] = "-1"  # force tests to run on CPU
+
 import json
 from pathlib import Path
 import pytest
@@ -46,7 +49,7 @@ def test_training(tmp_path: Path, dataset: str, params: str, overwrite: bool):
         "--definition-task-config", params_dir / "definition_task.yml",
         "--trainer-config", params_dir / "trainer_config.yml",
         "--run-config", params_dir / "run_config.yml",
-        "--log", tmp_path / "log"
+        "--log", tmp_path / "log",
     ]
     # use context manager to pass command line arguments to our main method
     with patch.object(sys, 'argv', [str(a) for a in training_args]):

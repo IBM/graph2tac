@@ -1,12 +1,5 @@
 #TODO(jrute): Remove file when we have real unit tests
 
-import json
-from pathlib import Path
-import pytest
-import sys
-from unittest.mock import patch
-import warnings
-
 import pytest
 
 def test_1_plus_1_equals_2():
