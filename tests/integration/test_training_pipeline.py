@@ -6,11 +6,15 @@ from pathlib import Path
 import pytest
 import sys
 from unittest.mock import patch
+import tensorflow as tf
 import warnings
 
 import graph2tac.tfgnn.train
 
-REL_ERROR_TOLERANCE = 1e-3
+# this helps with determinism
+tf.config.experimental.enable_op_determinism()
+
+REL_ERROR_TOLERANCE = 1e-5
 
 # automatically find parameters for tests to run
 TESTDIR = Path(__file__).resolve().parent.parent
