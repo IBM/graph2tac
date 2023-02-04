@@ -1,11 +1,9 @@
-from collections.abc import Iterable
+import argparse
 from contextlib import contextmanager
 import sys
-import signal
 import socket
 from pathlib import Path
 import numpy as np
-import pickle
 import tqdm
 import os
 import uuid
@@ -13,6 +11,7 @@ import time
 import psutil
 import logging
 import contextlib
+import yaml
 
 from pytact.data_reader import (capnp_message_generator,
                                 TacticPredictionGraph, TacticPredictionsGraph,
@@ -200,18 +199,23 @@ class PredictServer(AbstractDataServer):
         logger.info(f"Building network model completed in {self.log_cnts.build_network_time:.6f} seconds")
 
         # definition recalculation
-
+        # Note: using that definitions.clustered_definitions is in reverse order of dependencies
         if self.config.update_all_definitions:
             def_clusters_for_update = list(definitions.clustered_definitions)
+            def_clusters_for_update.reverse()
+            prev_defined_nodes = self._base_node_label_num
             logger.info(f"Prepared for update all {len(def_clusters_for_update)} definition clusters")
         elif self.config.update_new_definitions:
             def_clusters_for_update = [
                 cluster for cluster in definitions.clustered_definitions
                 if self._def_node_to_i[cluster[0].node] >= self._num_train_nodes
             ]
+            def_clusters_for_update.reverse()
+            prev_defined_nodes = self._num_train_nodes
             logger.info(f"Prepared for update {len(def_clusters_for_update)} definition clusters containing unaligned definitions")
         else:
             def_clusters_for_update = []
+            prev_defined_nodes = None
             logger.info(f"No update of the definition clusters requested")
 
         t0 = time.time()
@@ -220,8 +224,21 @@ class PredictServer(AbstractDataServer):
             if self.config.progress_bar:
                 def_clusters_for_update = tqdm.tqdm(def_clusters_for_update)
 
+            defined_nodes = set()
             for cluster in def_clusters_for_update:
                 cluster_state = self.cluster_to_graph(cluster)
+                new_defined_nodes = cluster_state.graph.nodes[:cluster_state.num_definitions]
+                used_nodes = cluster_state.graph.nodes[cluster_state.num_definitions:]
+                for n in used_nodes:
+                    assert n < prev_defined_nodes or n in defined_nodes, (
+                        f"Definition clusters out of order. "
+                        f"Attempting to compute definition embedding for node labels {new_defined_nodes} "
+                        f"({cluster_state.definition_names}) without first computing "
+                        f"the definition embedding for node label {n} used in that definition."
+                    )   
+                for n in new_defined_nodes:
+                    defined_nodes.add(n)
+
                 self.model.compute_new_definitions([cluster_state])
 
             logger.info(f"Definition clusters updated.")
@@ -302,7 +319,7 @@ class PredictServer(AbstractDataServer):
             for action, confidence in zip(actions, confidences)
         ])
 
-    def check_alignment(msg):
+    def check_alignment(self, msg):
         unaligned_tactics = [
             tactic.ident for tactic in msg.tactics
             if tactic.ident not in self._tactic_to_i
@@ -375,8 +392,6 @@ def prediction_loop(predict_server, capnp_socket, record_file):
             raise Exception("Capnp protocol error")
 
 def parse_args():
-    import argparse
-
     parser = argparse.ArgumentParser(
         description='graph2tac Predict python tensorflow server')
 
@@ -524,7 +539,7 @@ def load_model(config, log_levels):
         from graph2tac.loader.hmodel import HPredict
         model = HPredict(checkpoint_dir=Path(config.model).expanduser().absolute(), debug_dir=config.debug_predict)
     else:
-        Exception(f'the provided model architecture {config.arch} is not supported')
+        raise Exception(f'the provided model architecture {config.arch} is not supported')
 
     logger.info(f"initializing predict network from {Path(config.model).expanduser().absolute()}")
     return model
