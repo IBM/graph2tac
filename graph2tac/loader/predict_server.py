@@ -337,8 +337,8 @@ class PredictServer(AbstractDataServer):
         unaligned_tactics = sorted(unaligned_tactics)
         unaligned_definitions = sorted(unaligned_definitions)
         return CheckAlignmentResponse(
-            unalignedTactics = unaligned_tactics,
-            unalignedDefinitions = unaligned_definitions,
+            unknown_tactics = unaligned_tactics,
+            unknown_definitions = unaligned_definitions,
         )
 
 def prediction_loop(predict_server: PredictServer, capnp_socket: socket.socket, record_file: Optional[BinaryIO]):
