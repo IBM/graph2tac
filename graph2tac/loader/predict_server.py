@@ -1,9 +1,12 @@
 import argparse
 from contextlib import contextmanager
+from dataclasses import dataclass
 import sys
 import socket
 from pathlib import Path
+from typing import IO, Optional
 import numpy as np
+from numpy.typing import NDArray, ArrayLike
 import tqdm
 import os
 import uuid
@@ -15,12 +18,14 @@ import yaml
 
 from pytact.data_reader import (capnp_message_generator,
                                 TacticPredictionGraph, TacticPredictionsGraph,
-                                GlobalContextMessage, CheckAlignmentMessage, CheckAlignmentResponse)
+                                GlobalContextMessage, CheckAlignmentMessage, CheckAlignmentResponse,
+                                ProofState, OnlineDefinitionsReader)
 from graph2tac.common import logger
-from graph2tac.loader.data_classes import *
-from graph2tac.loader.data_server import AbstractDataServer, DataServer
+from graph2tac.loader.data_classes import LoaderProofstate, ProofstateContext, ProofstateMetadata
+from graph2tac.loader.data_server import AbstractDataServer
+from graph2tac.predict import Predict
 
-def apply_temperature(confidences, temperature):
+def apply_temperature(confidences: ArrayLike, temperature: float) -> NDArray[np.float64]:
     """
     Apply the temperature,
     assuming the truncated tail of the probability distribution
@@ -57,7 +62,7 @@ class LoggingCounters:
     """Max time (in seconds) spent on single predict since last 'initialize'"""
     argmax_t_predict: int = -1
     """Index of last maximum time single predict since last 'initialize'"""
-    t_coq: int = 0
+    t_coq: float = 0.0
     """Total time (in seconds) spent waiting on Coq since last 'initialize'"""
     n_coq: int = 0
     """Number of 'prediction' requests made by Coq"""
@@ -125,9 +130,9 @@ class LoggingCounters:
 
 class PredictServer(AbstractDataServer):
     def __init__(self,
-                 model,
-                 config,
-                 log_cnts,
+                 model: Predict,
+                 config: argparse.Namespace,
+                 log_cnts: LoggingCounters,
     ):
         max_subgraph_size = model.get_max_subgraph_size()
         bfs_option = True
@@ -162,7 +167,7 @@ class PredictServer(AbstractDataServer):
             if i >= self._base_node_label_num and self._node_i_in_spine[i]
         }
 
-    def _enter_coq_context(self, definitions, tactics):
+    def _enter_coq_context(self, definitions: OnlineDefinitionsReader, tactics):
         self.current_definitions = definitions
 
         # tactics
@@ -259,12 +264,12 @@ class PredictServer(AbstractDataServer):
         del self._node_i_in_spine[self._num_train_nodes:]
 
     @contextmanager
-    def coq_context(self, msg):
+    def coq_context(self, msg: GlobalContextMessage):
         self._enter_coq_context(msg.definitions, msg.tactics)
         yield
         self._exit_coq_context()
 
-    def _decode_action(self, action, confidence, proof_state):
+    def _decode_action(self, action: NDArray[np.int_], confidence: np.float_, proof_state: ProofState) -> TacticPredictionGraph:
         tactic = action[0,0]
         arguments = []
         for arg_type, arg_index in action[1:]:
@@ -279,7 +284,7 @@ class PredictServer(AbstractDataServer):
             float(confidence),
         )
 
-    def predict(self, proof_state):
+    def predict(self, proof_state: ProofState) -> TacticPredictionsGraph:
         if self.current_definitions is None:
             raise Exception("Cannot predict outside 'with predict_server.coq_context()'")
 
@@ -319,7 +324,7 @@ class PredictServer(AbstractDataServer):
             for action, confidence in zip(actions, confidences)
         ])
 
-    def check_alignment(self, msg):
+    def check_alignment(self, msg: CheckAlignmentMessage) -> CheckAlignmentResponse:
         unaligned_tactics = [
             tactic.ident for tactic in msg.tactics
             if tactic.ident not in self._tactic_to_i
@@ -336,7 +341,8 @@ class PredictServer(AbstractDataServer):
             unalignedDefinitions = unaligned_definitions,
         )
 
-def prediction_loop(predict_server, capnp_socket, record_file):
+def prediction_loop(predict_server: PredictServer, capnp_socket: socket.socket, record_file: Optional[IO]):
+    
     if predict_server.config.with_meter:
         capnp_socket = tqdm.tqdm(capnp_socket)
     message_generator = capnp_message_generator(capnp_socket, record_file)
@@ -391,7 +397,7 @@ def prediction_loop(predict_server, capnp_socket, record_file):
         else:
             raise Exception("Capnp protocol error")
 
-def parse_args():
+def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description='graph2tac Predict python tensorflow server')
 
@@ -490,7 +496,7 @@ def parse_args():
 
     return parser.parse_args()
 
-def load_model(config, log_levels):
+def load_model(config: argparse.Namespace, log_levels: dict) -> Predict:
 
     tf_env_log_levels={'debug':'0',
                    'verbose':'0',
