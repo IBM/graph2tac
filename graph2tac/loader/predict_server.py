@@ -345,14 +345,14 @@ def prediction_loop(predict_server: PredictServer, capnp_socket: socket.socket, 
     
     message_generator = capnp_message_generator(capnp_socket, record_file)
     if predict_server.config.with_meter:
-        message_generator_iterator = tqdm.tqdm(message_generator)
+        message_iterator = tqdm.tqdm(message_generator)
     else:
-        message_generator_iterator = message_generator
+        message_iterator = message_generator
     log_cnts = predict_server.log_cnts
     log_cnts.session_idx += 1
     log_cnts.thm_idx = -1
 
-    for msg in message_generator_iterator:
+    for msg in message_iterator:
         if isinstance(msg, CheckAlignmentMessage):
             logger.info("checkAlignment request")
             response = predict_server.check_alignment(msg)
