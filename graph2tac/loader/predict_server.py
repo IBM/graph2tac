@@ -4,7 +4,7 @@ from dataclasses import dataclass
 import sys
 import socket
 from pathlib import Path
-from typing import IO, Optional
+from typing import BinaryIO, Optional
 import numpy as np
 from numpy.typing import NDArray, ArrayLike
 import tqdm
@@ -205,10 +205,8 @@ class PredictServer(AbstractDataServer):
         logger.info(f"Building network model completed in {self.log_cnts.build_network_time:.6f} seconds")
 
         # definition recalculation
-        # Note: using that definitions.clustered_definitions is in reverse order of dependencies
         if self.config.update_all_definitions:
             def_clusters_for_update = list(definitions.clustered_definitions)
-            def_clusters_for_update.reverse()
             prev_defined_nodes = self._base_node_label_num
             logger.info(f"Prepared for update all {len(def_clusters_for_update)} definition clusters")
         elif self.config.update_new_definitions:
@@ -216,13 +214,14 @@ class PredictServer(AbstractDataServer):
                 cluster for cluster in definitions.clustered_definitions
                 if self._def_node_to_i[cluster[0].node] >= self._num_train_nodes
             ]
-            def_clusters_for_update.reverse()
             prev_defined_nodes = self._num_train_nodes
             logger.info(f"Prepared for update {len(def_clusters_for_update)} definition clusters containing unaligned definitions")
         else:
             def_clusters_for_update = []
             prev_defined_nodes = None
             logger.info(f"No update of the definition clusters requested")
+        # definitions.clustered_definitions is in reverse order of dependencies, so we reverse our list
+        def_clusters_for_update.reverse()
 
         t0 = time.time()
         if def_clusters_for_update:
@@ -342,7 +341,7 @@ class PredictServer(AbstractDataServer):
             unalignedDefinitions = unaligned_definitions,
         )
 
-def prediction_loop(predict_server: PredictServer, capnp_socket: socket.socket, record_file: Optional[IO]):
+def prediction_loop(predict_server: PredictServer, capnp_socket: socket.socket, record_file: Optional[BinaryIO]):
     
     message_generator = capnp_message_generator(capnp_socket, record_file)
     if predict_server.config.with_meter:
