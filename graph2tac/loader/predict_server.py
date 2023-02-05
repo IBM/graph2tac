@@ -330,12 +330,12 @@ class PredictServer(AbstractDataServer):
             if tactic.ident not in self._tactic_to_i
         ]
         unaligned_definitions = [
-            d for d in msg.definitions.definitions
+            (d.node.nodeid, d) for d in msg.definitions.definitions
             if d.name not in self._def_name_to_i
         ]
 
         unaligned_tactics = sorted(unaligned_tactics)
-        unaligned_definitions = sorted(unaligned_definitions)
+        unaligned_definitions = [d for _, d in sorted(unaligned_definitions)]
         return CheckAlignmentResponse(
             unknown_tactics = unaligned_tactics,
             unknown_definitions = unaligned_definitions,
