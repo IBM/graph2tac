@@ -1,11 +1,12 @@
-from collections.abc import Iterable
+import argparse
 from contextlib import contextmanager
+from dataclasses import dataclass
 import sys
-import signal
 import socket
 from pathlib import Path
+from typing import BinaryIO, Optional
 import numpy as np
-import pickle
+from numpy.typing import NDArray, ArrayLike
 import tqdm
 import os
 import uuid
@@ -13,22 +14,26 @@ import time
 import psutil
 import logging
 import contextlib
+import yaml
 
 from pytact.data_reader import (capnp_message_generator,
                                 TacticPredictionGraph, TacticPredictionsGraph,
-                                GlobalContextMessage, CheckAlignmentMessage, CheckAlignmentResponse)
+                                GlobalContextMessage, CheckAlignmentMessage, CheckAlignmentResponse,
+                                ProofState, OnlineDefinitionsReader)
 from graph2tac.common import logger
-from graph2tac.loader.data_classes import *
-from graph2tac.loader.data_server import AbstractDataServer, DataServer
+from graph2tac.loader.data_classes import LoaderProofstate, ProofstateContext, ProofstateMetadata
+from graph2tac.loader.data_server import AbstractDataServer
+from graph2tac.predict import Predict
 
-def apply_temperature(confidences, temperature):
+def apply_temperature(confidences: ArrayLike, temperature: float) -> NDArray[np.float64]:
     """
     Apply the temperature,
     assuming the truncated tail of the probability distribution
     is clustered in one unseen element
     """
-    res = np.array(confidences, np.float64)**(1/temperature)
-    res /= res.sum() + (1-sum(confidences))**(1/temperature)
+    confidences = np.array(confidences, np.float64)
+    res = confidences**(1/temperature)
+    res /= res.sum() + (1-confidences.sum())**(1/temperature)
     return res
 
 @dataclass
@@ -58,7 +63,7 @@ class LoggingCounters:
     """Max time (in seconds) spent on single predict since last 'initialize'"""
     argmax_t_predict: int = -1
     """Index of last maximum time single predict since last 'initialize'"""
-    t_coq: int = 0
+    t_coq: float = 0.0
     """Total time (in seconds) spent waiting on Coq since last 'initialize'"""
     n_coq: int = 0
     """Number of 'prediction' requests made by Coq"""
@@ -126,9 +131,9 @@ class LoggingCounters:
 
 class PredictServer(AbstractDataServer):
     def __init__(self,
-                 model,
-                 config,
-                 log_cnts,
+                 model: Predict,
+                 config: argparse.Namespace,
+                 log_cnts: LoggingCounters,
     ):
         max_subgraph_size = model.get_max_subgraph_size()
         bfs_option = True
@@ -163,7 +168,7 @@ class PredictServer(AbstractDataServer):
             if i >= self._base_node_label_num and self._node_i_in_spine[i]
         }
 
-    def _enter_coq_context(self, definitions, tactics):
+    def _enter_coq_context(self, definitions: OnlineDefinitionsReader, tactics):
         self.current_definitions = definitions
 
         # tactics
@@ -200,19 +205,23 @@ class PredictServer(AbstractDataServer):
         logger.info(f"Building network model completed in {self.log_cnts.build_network_time:.6f} seconds")
 
         # definition recalculation
-
         if self.config.update_all_definitions:
             def_clusters_for_update = list(definitions.clustered_definitions)
+            prev_defined_nodes = self._base_node_label_num
             logger.info(f"Prepared for update all {len(def_clusters_for_update)} definition clusters")
         elif self.config.update_new_definitions:
             def_clusters_for_update = [
                 cluster for cluster in definitions.clustered_definitions
                 if self._def_node_to_i[cluster[0].node] >= self._num_train_nodes
             ]
+            prev_defined_nodes = self._num_train_nodes
             logger.info(f"Prepared for update {len(def_clusters_for_update)} definition clusters containing unaligned definitions")
         else:
             def_clusters_for_update = []
+            prev_defined_nodes = None
             logger.info(f"No update of the definition clusters requested")
+        # definitions.clustered_definitions is in reverse order of dependencies, so we reverse our list
+        def_clusters_for_update.reverse()
 
         t0 = time.time()
         if def_clusters_for_update:
@@ -220,8 +229,27 @@ class PredictServer(AbstractDataServer):
             if self.config.progress_bar:
                 def_clusters_for_update = tqdm.tqdm(def_clusters_for_update)
 
+            defined_nodes = set()
             for cluster in def_clusters_for_update:
                 cluster_state = self.cluster_to_graph(cluster)
+                new_defined_nodes = cluster_state.graph.nodes[:cluster_state.num_definitions]
+                used_nodes = cluster_state.graph.nodes[cluster_state.num_definitions:]
+                for n in used_nodes:
+                    assert n < prev_defined_nodes or n in defined_nodes, (
+                        f"Definition clusters out of order. "
+                        f"Attempting to compute definition embedding for node labels {new_defined_nodes} "
+                        f"({cluster_state.definition_names}) without first computing "
+                        f"the definition embedding for node label {n} used in that definition."
+                    )   
+                for n in new_defined_nodes:
+                    assert n >= prev_defined_nodes and n not in defined_nodes, (
+                        f"Something is wrong with the definition clusters. "
+                        f"Attempting to compute definition embedding for node labels {new_defined_nodes} "
+                        f"({cluster_state.definition_names}) "
+                        f"for which node label {n} has already been computed."
+                    )
+                    defined_nodes.add(n)
+
                 self.model.compute_new_definitions([cluster_state])
 
             logger.info(f"Definition clusters updated.")
@@ -242,12 +270,12 @@ class PredictServer(AbstractDataServer):
         del self._node_i_in_spine[self._num_train_nodes:]
 
     @contextmanager
-    def coq_context(self, msg):
+    def coq_context(self, msg: GlobalContextMessage):
         self._enter_coq_context(msg.definitions, msg.tactics)
         yield
         self._exit_coq_context()
 
-    def _decode_action(self, action, confidence, proof_state):
+    def _decode_action(self, action: NDArray[np.int_], confidence: np.float_, proof_state: ProofState) -> TacticPredictionGraph:
         tactic = action[0,0]
         arguments = []
         for arg_type, arg_index in action[1:]:
@@ -262,7 +290,7 @@ class PredictServer(AbstractDataServer):
             float(confidence),
         )
 
-    def predict(self, proof_state):
+    def predict(self, proof_state: ProofState) -> TacticPredictionsGraph:
         if self.current_definitions is None:
             raise Exception("Cannot predict outside 'with predict_server.coq_context()'")
 
@@ -302,32 +330,33 @@ class PredictServer(AbstractDataServer):
             for action, confidence in zip(actions, confidences)
         ])
 
-    def check_alignment(msg):
+    def check_alignment(self, msg: CheckAlignmentMessage) -> CheckAlignmentResponse:
         unaligned_tactics = [
             tactic.ident for tactic in msg.tactics
             if tactic.ident not in self._tactic_to_i
         ]
         unaligned_definitions = [
-            d.node.nodeid for d in msg.definitions.definitions
+            d for d in msg.definitions.definitions
             if d.name not in self._def_name_to_i
         ]
 
-        unaligned_tactics = sorted(unaligned_tactics)
-        unaligned_definitions = sorted(unaligned_definitions)
         return CheckAlignmentResponse(
-            unalignedTactics = unaligned_tactics,
-            unalignedDefinitions = unaligned_definitions,
+            unknown_tactics = unaligned_tactics,
+            unknown_definitions = unaligned_definitions,
         )
 
-def prediction_loop(predict_server, capnp_socket, record_file):
-    if predict_server.config.with_meter:
-        capnp_socket = tqdm.tqdm(capnp_socket)
+def prediction_loop(predict_server: PredictServer, capnp_socket: socket.socket, record_file: Optional[BinaryIO]):
+    
     message_generator = capnp_message_generator(capnp_socket, record_file)
+    if predict_server.config.with_meter:
+        message_iterator = tqdm.tqdm(message_generator)
+    else:
+        message_iterator = message_generator
     log_cnts = predict_server.log_cnts
     log_cnts.session_idx += 1
     log_cnts.thm_idx = -1
 
-    for msg in message_generator:
+    for msg in message_iterator:
         if isinstance(msg, CheckAlignmentMessage):
             logger.info("checkAlignment request")
             response = predict_server.check_alignment(msg)
@@ -374,9 +403,7 @@ def prediction_loop(predict_server, capnp_socket, record_file):
         else:
             raise Exception("Capnp protocol error")
 
-def parse_args():
-    import argparse
-
+def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description='graph2tac Predict python tensorflow server')
 
@@ -475,7 +502,7 @@ def parse_args():
 
     return parser.parse_args()
 
-def load_model(config, log_levels):
+def load_model(config: argparse.Namespace, log_levels: dict) -> Predict:
 
     tf_env_log_levels={'debug':'0',
                    'verbose':'0',
@@ -524,7 +551,7 @@ def load_model(config, log_levels):
         from graph2tac.loader.hmodel import HPredict
         model = HPredict(checkpoint_dir=Path(config.model).expanduser().absolute(), debug_dir=config.debug_predict)
     else:
-        Exception(f'the provided model architecture {config.arch} is not supported')
+        raise Exception(f'the provided model architecture {config.arch} is not supported')
 
     logger.info(f"initializing predict network from {Path(config.model).expanduser().absolute()}")
     return model
