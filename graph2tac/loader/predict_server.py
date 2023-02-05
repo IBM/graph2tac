@@ -31,8 +31,9 @@ def apply_temperature(confidences: ArrayLike, temperature: float) -> NDArray[np.
     assuming the truncated tail of the probability distribution
     is clustered in one unseen element
     """
-    res = np.array(confidences, np.float64)**(1/temperature)
-    res /= res.sum() + (1-sum(confidences))**(1/temperature)
+    confidences = np.array(confidences, np.float64)
+    res = confidences**(1/temperature)
+    res /= res.sum() + (1-confidences.sum())**(1/temperature)
     return res
 
 @dataclass
