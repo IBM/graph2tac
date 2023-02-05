@@ -330,7 +330,7 @@ class PredictServer(AbstractDataServer):
             if tactic.ident not in self._tactic_to_i
         ]
         unaligned_definitions = [
-            d.node.nodeid for d in msg.definitions.definitions
+            d for d in msg.definitions.definitions
             if d.name not in self._def_name_to_i
         ]
 
