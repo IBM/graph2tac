@@ -221,12 +221,12 @@ class TFGNNPredict(Predict):
         self._dummy_tactic_id = tf.argmin(graph_constants.tactic_index_to_numargs)  # num_arguments == 0
 
         # the decoding mechanism currently does not support tactics with more than NUMPY_NDIM_LIMIT
-        self.fixed_tactic_mask = tf.constant(graph_constants.tactic_index_to_numargs < NUMPY_NDIM_LIMIT)
+        self.fixed_tactic_mask = tf.constant(np.array(graph_constants.tactic_index_to_numargs) < NUMPY_NDIM_LIMIT)
 
         # mask tactics explicitly excluded from predictions
         if exclude_tactics is not None:
             exclude_tactics = set(exclude_tactics)
-            self.fixed_tactic_mask &= tf.constant([(tactic_name.decode() not in exclude_tactics) for tactic_name in graph_constants.tactic_index_to_string])
+            self.fixed_tactic_mask &= tf.constant([(tactic_name not in exclude_tactics) for tactic_name in graph_constants.tactic_index_to_string])
 
         # create prediction task
         prediction_yaml_filepath = log_dir / 'config' / 'prediction.yaml'
@@ -275,7 +275,7 @@ class TFGNNPredict(Predict):
 
         if global_context is not None:
             # update the global context
-            self._graph_constants.global_context = np.array(global_context, dtype=np.uint32)
+            self._graph_constants.global_context = global_context
 
             # extend the embedding table if necessary
             new_node_label_num = max(global_context)+1
@@ -476,7 +476,7 @@ class TFGNNPredict(Predict):
                 predictions = self._expand_arguments_logits(total_expand_bound=total_expand_bound,
                                                             num_arguments=num_arguments,
                                                             local_context_size=local_context_size,
-                                                            global_context_size=self._graph_constants.global_context.size,
+                                                            global_context_size=len(self._graph_constants.global_context),
                                                             **inference_data)
                 predict_output.predictions.extend(filter(lambda inference: inference.value > -float('inf'), predictions))
         return predict_outputs

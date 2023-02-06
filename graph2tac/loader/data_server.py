@@ -49,7 +49,7 @@ class AbstractDataServer:
         self._def_node_to_i = dict()
         self._tactic_to_i = dict()
         self._tactic_i_to_numargs = []
-        self._tactic_i_to_bytes = []
+        self._tactic_i_to_string = []
         self._tactic_i_to_hash = []
         self._def_name_dtype = str
 
@@ -102,7 +102,7 @@ class AbstractDataServer:
         index = len(self._tactic_to_i)
         self._tactic_to_i[tactic_usage.tactic.ident] = index
         self._tactic_i_to_numargs.append(len(tactic_usage.outcomes[0].tactic_arguments))
-        self._tactic_i_to_bytes.append(bytes(tactic_usage.tactic.base_text, 'utf-8'))
+        self._tactic_i_to_string.append(tactic_usage.tactic.base_text)
         self._tactic_i_to_hash.append(tactic_usage.tactic.ident)
 
     # Obtaining data
@@ -220,10 +220,10 @@ class DataServer(AbstractDataServer):
             base_node_label_num = self._base_node_label_num,
             node_label_num = total_node_label_num,
             cluster_subgraphs_num = len(self._def_clusters),
-            tactic_index_to_numargs = np.array(self._tactic_i_to_numargs, dtype = np.uint64),
-            tactic_index_to_string = list(self._tactic_i_to_bytes),
-            tactic_index_to_hash = np.array(self._tactic_i_to_hash, dtype = np.uint64),
-            global_context = np.arange(self._base_node_label_num, total_node_label_num, dtype = np.uint32),
+            tactic_index_to_numargs = self._tactic_i_to_numargs,
+            tactic_index_to_string = self._tactic_i_to_string,
+            tactic_index_to_hash = self._tactic_i_to_hash,
+            global_context = list(range(self._base_node_label_num, total_node_label_num)),
             label_to_names = self._node_i_to_name,
             label_in_spine = self._node_i_in_spine,
             max_subgraph_size = self.max_subgraph_size,

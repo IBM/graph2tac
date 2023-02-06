@@ -154,8 +154,6 @@ class PredictServer(AbstractDataServer):
             h : i
             for i,h in enumerate(self._tactic_i_to_hash)
         }
-        #self._tactic_i_to_bytes = [b'UNKNOWN']*len(self._tactic_i_to_hash)
-        #self._tactic_i_to_bytes = list(model.get_tactic_index_to_string())
 
         self._node_i_to_name = model.get_label_to_name()
         self._node_i_in_spine = model.get_label_in_spine()

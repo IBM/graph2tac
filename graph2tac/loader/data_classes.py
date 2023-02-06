@@ -1,7 +1,6 @@
 from numpy.typing import NDArray
 import numpy as np
 from dataclasses import dataclass
-from typing import List
 
 def custom_dataclass_repr(obj) -> str:
     """String repr for a dataclass, but removing the array data."""
@@ -122,10 +121,10 @@ class GraphConstants:
     base_node_label_num: int
     node_label_num: int
     cluster_subgraphs_num: int
-    tactic_index_to_numargs: np.ndarray  # dtype = np.uint32
-    tactic_index_to_string: List[bytes]    # tactic names
-    tactic_index_to_hash: np.ndarray
-    global_context: np.ndarray
-    label_to_names: List[str]
-    label_in_spine: List[bool]
+    tactic_index_to_numargs: list[int]
+    tactic_index_to_string: list[str]    # tactic names
+    tactic_index_to_hash: list[int]
+    global_context: list[int]
+    label_to_names: list[str]
+    label_in_spine: list[bool]
     max_subgraph_size: int
