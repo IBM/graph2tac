@@ -3,9 +3,7 @@ add_self_edges: true
 max_subgraph_size: 1024
 exclude_none_arguments: false
 exclude_not_faithful: false
-split_method: hash
+split_method: file_prefix
 split:
-  proportions:
-  - 9
-  - 1
-  random_seed: 0
+- - coq-tactician-stdlib.dev/theories/Init/Wf
+  - coq-tactician-stdlib.dev/theories/Init/Prelude

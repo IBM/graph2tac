@@ -7,20 +7,18 @@ import tensorflow_gnn as tfgnn
 from pathlib import Path
 
 from graph2tac.loader.data_classes import GraphConstants, LoaderAction, LoaderDefinition, LoaderProofstate
-from graph2tac.loader.data_server import DataServer
+from graph2tac.loader.data_server import DataServer, get_splitter, TRAIN, VALID
 from graph2tac.tfgnn.graph_schema import proofstate_graph_spec, definition_graph_spec
 from graph2tac.common import logger
-
 
 BIDIRECTIONAL = 'bidirectional'
 UNDIRECTED = 'undirected'
 
-
 class Dataset:
     """
     Base class for TF-GNN datasets, subclasses should define:
-        - _proofstates()
-        - _definitions()
+        - _proofstates(label)
+        - _definitions(label)
     """
     MAX_LABEL_TOKENS = 128
     MAX_PROOFSTATES = int(1e7)
@@ -28,8 +26,8 @@ class Dataset:
     SHUFFLE_BUFFER_SIZE = int(1e7)
     STATISTICS_BATCH_SIZE = int(1e4)
 
-    _proofstates: Callable[[], tf.data.Dataset]
-    _definitions: Callable[[], tf.data.Dataset]
+    _proofstates: Callable[[int], tf.data.Dataset]
+    _definitions: Callable[[int], tf.data.Dataset]
 
     def __init__(self,
                  graph_constants: GraphConstants,
@@ -56,7 +54,7 @@ class Dataset:
         self.exclude_none_arguments = exclude_none_arguments
         self.exclude_not_faithful = exclude_not_faithful
         self._graph_constants = graph_constants
-        self._stats = {}
+        self._stats = None
         vocabulary = [
             chr(i) for i in range(ord('a'), ord('z')+1)
         ] + [
@@ -83,63 +81,47 @@ class Dataset:
         }
 
     def proofstates(self,
-                    split: Tuple[int,int] = (9,1),
-                    split_random_seed: int = 0,
                     shuffle: bool = True) -> Tuple[tf.data.Dataset, tf.data.Dataset]:
         """
         Returns a pair of proof-state datasets for train and validation.
 
-        @param split: a pair of (not necessarily normalized) probabilities for the train and validation splits
-        @param split_random_seed: the seed to use for the train/validation split
         @param shuffle: whether to shuffle the resulting datasets
         @return: a dataset of (GraphTensor, label) pairs
         """
-        # get proof-states
-        proofstate_dataset = self._proofstates()
 
-        # filter out proof-states with term arguments
-        if self.exclude_not_faithful:
-            proofstate_dataset = proofstate_dataset.filter(lambda proofstate_graph: tf.reduce_all(proofstate_graph.context['faithful'] == 1))
+        data_parts = []
+        for label in (TRAIN, VALID):
+            # get proof-states
+            proofstate_dataset = self._proofstates(label)
 
-        # filter out proof-states with `None` arguments
-        if self.exclude_none_arguments:
-            proofstate_dataset = proofstate_dataset.filter(self._no_none_arguments)
+            # filter out proof-states with term arguments
+            if self.exclude_not_faithful:
+                proofstate_dataset = proofstate_dataset.filter(lambda proofstate_graph: tf.reduce_all(proofstate_graph.context['faithful'] == 1))
 
-        # apply the symmetrization and self-edge transformations
-        proofstate_dataset = proofstate_dataset.apply(self._preprocess)
-        proofstate_dataset = proofstate_dataset.cache()
+            # filter out proof-states with `None` arguments
+            if self.exclude_none_arguments:
+                proofstate_dataset = proofstate_dataset.filter(self._no_none_arguments)
 
-        # create dataset of split labels
-        split_logits = tf.math.log(tf.constant(split, dtype=tf.float32) / sum(split))
-        labels = tf.random.stateless_categorical(logits=tf.expand_dims(split_logits, axis=0),
-                                                 num_samples=self.MAX_PROOFSTATES,
-                                                 seed=[0, split_random_seed])[0]
-        label_dataset = tf.data.Dataset.from_tensor_slices(labels)
+            # apply the symmetrization and self-edge transformations
+            proofstate_dataset = proofstate_dataset.apply(self._preprocess)
+            proofstate_dataset = proofstate_dataset.cache()
+            data_parts.append(proofstate_dataset)
 
-        # create a dataset of pairs (GraphTensor, label)
-        pair_dataset = tf.data.Dataset.zip(datasets=(proofstate_dataset, label_dataset))
-
-        # get train dataset (shuffling if necessary)
-        train = pair_dataset.filter(lambda _, label: label == 0).map(lambda proofstate_graph, _: proofstate_graph)
-        train = train.cache()
+        train, valid = data_parts
 
         if shuffle:
             train = train.shuffle(buffer_size=self.SHUFFLE_BUFFER_SIZE)
 
-        # get validation dataset
-        valid = pair_dataset.filter(lambda _, label: label == 1).map(lambda proofstate_graph, _: proofstate_graph)
-        valid = valid.cache()
-
         return train, valid
 
-    def definitions(self, shuffle: bool = False) -> tf.data.Dataset:
+    def definitions(self, label, shuffle: bool = False) -> tf.data.Dataset:
         """
         Returns the definition dataset.
 
         @param shuffle: whether to shuffle the resulting dataset
         @return: a dataset with all the definition clusters
         """
-        definitions = self._definitions().apply(self._preprocess)
+        definitions = self._definitions(label).apply(self._preprocess)
         definitions = definitions.cache()
         if shuffle:
             definitions = definitions.shuffle(buffer_size=self.SHUFFLE_BUFFER_SIZE)
@@ -172,25 +154,21 @@ class Dataset:
             graph_constants.edge_label_num += 1
         return graph_constants
 
-    def stats(self, split: Tuple[int, int] = (9,1), split_random_seed: int = 0) -> dict[str, dict[str, int]]:
+    def stats(self) -> dict[str, dict[str, int]]:
         """
         Compute statistics for the proof-state and definition datasets.
 
-        @param split: a pair of (not necessarily normalized) probabilities for the train and validation splits
-        @param split_random_seed: the seed to use for the train/validation split
         @return: a dictionary with statistics for the proof-state and definition datasets
         """
-        split_settings = (tuple(split), split_random_seed)
-        if split_settings not in self._stats.keys():
+
+        if self._stats is None:
             logger.info('computing dataset statistics (this may take a while)...')
 
-            train_proofstates, valid_proofstates = self.proofstates(split=split,
-                                                                    split_random_seed=split_random_seed,
-                                                                    shuffle=False)
+            train_proofstates, valid_proofstates = self.proofstates(shuffle=False)
 
             proofstate_datasets = {'train_proofstates': train_proofstates.batch(self.STATISTICS_BATCH_SIZE),
                                    'valid_proofstates': valid_proofstates.batch(self.STATISTICS_BATCH_SIZE)}
-            definition_dataset = self.definitions().batch(self.STATISTICS_BATCH_SIZE)
+            definition_dataset = self.definitions(TRAIN).batch(self.STATISTICS_BATCH_SIZE) # TODO: what are we using definitions for here?
 
             stats = {}
             for name, dataset in proofstate_datasets.items():
@@ -213,8 +191,8 @@ class Dataset:
             stats['definitions'] = self._basic_stats(definition_dataset)
             stats['definitions'].update({'num_definitions': int(num_definitions)})
 
-            self._stats[split_settings] = stats
-        return self._stats[split_settings]
+            self._stats = stats
+        return self._stats
 
     @staticmethod
     def _no_none_arguments(proofstate_graph: tfgnn.GraphTensor) -> tf.Tensor:
@@ -493,16 +471,18 @@ class DataServerDataset(Dataset):
     proofstate_data_spec = (state_spec, action_spec, graph_id_spec)
     definition_data_spec = (loader_graph_spec, num_definitions_spec, definition_names_spec)
 
-    def __init__(self, data_dir: Path, max_subgraph_size: int = 1024, **kwargs):
+    def __init__(self, data_dir: Path, split_method : str, split, max_subgraph_size: int = 1024, **kwargs):
         """
         @param data_dir: the directory containing the data
+        @param split_method: `hash` or `file_prefix` -- the splitting procedure
+        @param split: arguments for the appropriate splitting procedure
         @param max_subgraph_size: the maximum size of the returned sub-graphs
         @param kwargs: additional keyword arguments are passed on to the parent class
         """
         self.data_server = DataServer(data_dir=data_dir,
                                       max_subgraph_size=max_subgraph_size,
-                                      split=(1,0,0),
-                                      split_random_seed=0)
+                                      split = get_splitter(split_method, split),
+        )
 
         super().__init__(graph_constants=self.data_server.graph_constants(),
                          max_subgraph_size=max_subgraph_size,
@@ -660,15 +640,14 @@ class DataServerDataset(Dataset):
 
         return (state_tuple, action_tuple, id)
 
-    def _proofstates(self) -> tf.data.Dataset:
+    def _proofstates(self, label : int = TRAIN) -> tf.data.Dataset:
         """
         Returns a dataset with all the proof-states.
 
         @return: a tf.data.Dataset streaming GraphTensor objects
         """
-        # get the proofstates from the DataServer
         proofstates = tf.data.Dataset.from_generator(
-            lambda: map(self._loader_to_proofstate_data, self.data_server.data_train(shuffled=False, as_text=False)),
+            lambda: map(self._loader_to_proofstate_data, self.data_server.get_datapoints(label, shuffled=False, as_text=False)),
             output_signature=self.proofstate_data_spec
         )
         return proofstates.map(self._make_proofstate_graph_tensor, num_parallel_calls=tf.data.AUTOTUNE)
@@ -681,14 +660,14 @@ class DataServerDataset(Dataset):
 
         return (graph_tuple, defn.num_definitions, defn.definition_names)
 
-    def _definitions(self) -> tf.data.Dataset:
+    def _definitions(self, label) -> tf.data.Dataset:
         """
         Returns a dataset with all the definitions.
 
         @return: a tf.data.Dataset streaming GraphTensor objects
         """
         dataset = tf.data.Dataset.from_generator(
-            lambda: map(self._loader_to_definition_data, self.data_server.def_cluster_subgraphs()),
+            lambda: map(self._loader_to_definition_data, self.data_server.def_cluster_subgraphs(label)),
             output_signature=self.definition_data_spec
         )
         return dataset.map(self._make_definition_graph_tensor, num_parallel_calls=tf.data.AUTOTUNE)

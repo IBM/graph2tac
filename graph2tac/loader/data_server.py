@@ -10,6 +10,7 @@ import itertools
 import random
 from graph2tac.hash import get_split_label
 from collections import defaultdict
+from typing import Iterable, Any, Callable, Optional, Tuple, Union
 
 from graph2tac.loader.data_classes import *
 import pytact.graph_api_capnp as graph_api_capnp
@@ -49,7 +50,7 @@ class AbstractDataServer:
         self._def_node_to_i = dict()
         self._tactic_to_i = dict()
         self._tactic_i_to_numargs = []
-        self._tactic_i_to_bytes = []
+        self._tactic_i_to_string = []
         self._tactic_i_to_hash = []
         self._def_name_dtype = str
 
@@ -102,7 +103,7 @@ class AbstractDataServer:
         index = len(self._tactic_to_i)
         self._tactic_to_i[tactic_usage.tactic.ident] = index
         self._tactic_i_to_numargs.append(len(tactic_usage.outcomes[0].tactic_arguments))
-        self._tactic_i_to_bytes.append(bytes(tactic_usage.tactic.base_text, 'utf-8'))
+        self._tactic_i_to_string.append(tactic_usage.tactic.base_text)
         self._tactic_i_to_hash.append(tactic_usage.tactic.ident)
 
     # Obtaining data
@@ -171,21 +172,94 @@ class AbstractDataServer:
             ], dtype = self._def_name_dtype)
         )
 
-    
+TRAIN = 0
+VALID = 1
+HOLDOUT = 2 # maybe unnecessary
+
+class Splitter:
+    def lemma(self, d : Definition) -> int:
+        raise Exception("Not implemented")
+    def definition_cluster(self, d : list[Definition]) -> int:
+        raise Exception("Not implemented")
+    def assign_data_server(self, data_server):
+        pass
+
+class SplitByHash(Splitter):
+    def __init__(self, proportions : list[int], random_seed : int):
+        self.proportions = proportions
+        self.random_seed = random_seed
+    def lemma(self, d : Definition) -> int:
+        # to make it identical to vasily's loader
+        ident_64 = np.array(d.node.identity, dtype = np.uint64).item()
+        return get_split_label(ident_64, self.proportions, self.random_seed)
+    def definition_cluster(self, d : list[Definition]) -> int:
+        return TRAIN
+
+class SplitByFilePrefix(Splitter):
+    def __init__(self, prefixes_per_label : list[list[str]]):
+        self.prefixes_per_label = [
+            (label+1, prefixes)
+            for label, prefixes in enumerate(prefixes_per_label)
+        ]
+    def lemma(self, d : Definition):
+        return self.graphid_to_label[d.node.graph]
+    def definition_cluster(self, d : list[Definition]):
+        return self.graphid_to_label[d[0].node.graph]
+    def assign_data_server(self, data_server):
+
+        # conversion from graph indices to filenames
+        graphid_to_fname = {
+            file_data.graph : str(fname)
+            for fname, file_data in data_server._data.items()
+        }
+        assert set(graphid_to_fname.keys()) == set(range(len(data_server._data)))
+        graphid_to_fname = [
+            graphid_to_fname[i]
+            for i in range(len(data_server._data))
+        ]
+
+        # conversion from graph indices to labels + check that all prefixes are used
+        unused_prefixes = set().union(*[prefixes for label,prefixes in self.prefixes_per_label])
+        graphid_to_label = []
+        for fname in graphid_to_fname:
+            label = TRAIN
+            for l,prefixes in self.prefixes_per_label:
+                for prefix in prefixes:
+                    if fname.startswith(prefix):
+                        label = max(l, label)
+                        unused_prefixes.discard(prefix)
+            graphid_to_label.append(label)
+
+        if unused_prefixes:
+            raise Exception(f"Some split prefixes not found:, {sorted(unused_prefixes)}")
+
+        # check that the labels have correct dependencies
+        for fname,d in data_server._data.items():
+            label = graphid_to_label[d.graph]
+            for dep_fname in data_server._data[fname].dependencies:
+                dep_label = graphid_to_label[data_server._data[dep_fname].graph]
+                if dep_label > label:
+                    raise Exception(f"Dependency-inconsistent prefix split: {fname} (label {label}) depends on {dep_fname} (label {dep_label})")
+
+        # save labels for efficient split
+        self.graphid_to_label = graphid_to_label
+
+def get_splitter(split_method, split):
+    if split_method == "hash": return SplitByHash(**split)
+    elif split_method == "file_prefix": return SplitByFilePrefix(split)
+    else: raise Exception(f"Unexpected split method: '{split_method}'")
+
 class DataServer(AbstractDataServer):
     def __init__(self,
                  data_dir: Path,
                  max_subgraph_size,
-                 split: tuple[int, int, int] = (8, 1, 1),
+                 split : Splitter = SplitByHash([9,1],0),
                  bfs_option = True,
-                 split_random_seed = 0,
                  restrict_to_spine: bool = False,
                  stop_at_definitions: bool = True,
     ):
         super().__init__(max_subgraph_size, bfs_option, stop_at_definitions)
         self.data_dir = data_dir
-        self.split = split
-        self.split_random_seed = split_random_seed
         self.restrict_to_spine = restrict_to_spine
 
         self._proof_steps : list[tuple[Outcome, Definition, int]] = []
@@ -212,6 +286,9 @@ class DataServer(AbstractDataServer):
                 max_def_name_len = max(len(d.name), max_def_name_len)
         self._def_name_dtype = "S"+str(max_def_name_len)
 
+        self.split = split
+        self.split.assign_data_server(self)
+
     def graph_constants(self):
         total_node_label_num = len(self._node_i_to_name)
         return GraphConstants(
@@ -220,10 +297,10 @@ class DataServer(AbstractDataServer):
             base_node_label_num = self._base_node_label_num,
             node_label_num = total_node_label_num,
             cluster_subgraphs_num = len(self._def_clusters),
-            tactic_index_to_numargs = np.array(self._tactic_i_to_numargs, dtype = np.uint64),
-            tactic_index_to_string = list(self._tactic_i_to_bytes),
-            tactic_index_to_hash = np.array(self._tactic_i_to_hash, dtype = np.uint64),
-            global_context = np.arange(self._base_node_label_num, total_node_label_num, dtype = np.uint32),
+            tactic_index_to_numargs = self._tactic_i_to_numargs,
+            tactic_index_to_string = self._tactic_i_to_string,
+            tactic_index_to_hash = self._tactic_i_to_hash,
+            global_context = list(range(self._base_node_label_num, total_node_label_num)),
             label_to_names = self._node_i_to_name,
             label_in_spine = self._node_i_in_spine,
             max_subgraph_size = self.max_subgraph_size,
@@ -407,35 +484,34 @@ class DataServer(AbstractDataServer):
         label_text = proof_step.tactic.text
         return state_text, label_text
 
-    def _select_data_points(self, label):
+    def _select_data_points(self, label : int):
         return [
             i for i,(_,d,_) in enumerate(self._proof_steps)
-            if get_split_label(
-                    np.array(d.node.identity, dtype = np.uint64).item(),
-                    self.split, self.split_random_seed
-            ) == label
+            if self.split.lemma(d) == label
         ]
 
-    def data_train(self, shuffled: bool = False,  as_text: bool = False):
-        train_ids = self._select_data_points(0)
+    def get_datapoints(self, label : int, shuffled: bool = False, as_text: bool = False) -> Iterable[tuple[LoaderProofstate, LoaderAction, int] | tuple[str, str]]:
+        ids = self._select_data_points(label)
         if shuffled:
-            train_ids = list(train_ids)
-            random.shuffle(train_ids)
+            ids = list(ids)
+            random.shuffle(ids)
 
         if as_text:
-            return IterableLen(map(self._datapoint_text, train_ids), len(train_ids))
+            return IterableLen(map(self._datapoint_text, ids), len(ids))
         else:
-            return IterableLen(map(self._datapoint_graph, train_ids), len(train_ids))
+            return IterableLen(map(self._datapoint_graph, ids), len(ids))
+    
+    def data_train(self, shuffled: bool = False,  as_text: bool = False) -> Iterable[Union[tuple[LoaderProofstate, LoaderAction, int], tuple[str, str]]]:
+        return self.get_datapoints(TRAIN, shuffled = shuffled, as_text = as_text)
+    def data_valid(self, as_text: bool = False) -> Iterable[Union[tuple[LoaderProofstate, LoaderAction, int], tuple[str, str]]]:
+        return self.get_datapoints(VALID, as_text = as_text)
 
-    def data_valid(self, as_text: bool = False):
-        valid_ids = self._select_data_points(1)
-        if as_text:
-            return IterableLen(map(self._datapoint_text, valid_ids), len(valid_ids))
-        else:
-            return IterableLen(map(self._datapoint_graph, valid_ids), len(valid_ids))
-
-    def def_cluster_subgraph(self, i):
+    def def_cluster_subgraph(self, i : int) -> LoaderDefinition:
         return self.cluster_to_graph(self._def_clusters[i])
 
-    def def_cluster_subgraphs(self):
-        return IterableLen(map(self.def_cluster_subgraph, range(len(self._def_clusters))), len(self._def_clusters))
+    def def_cluster_subgraphs(self, label : int = TRAIN) -> Iterable[LoaderDefinition]:
+        ids = [
+            i for i,ds in enumerate(self._def_clusters)
+            if self.split.definition_cluster(ds) == label
+        ]
+        return IterableLen(map(self.def_cluster_subgraph, ids), len(self._def_clusters))
