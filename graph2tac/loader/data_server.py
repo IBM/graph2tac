@@ -193,7 +193,7 @@ class SplitByHash(Splitter):
         ident_64 = np.array(d.node.identity, dtype = np.uint64).item()
         return get_split_label(ident_64, self.proportions, self.random_seed)
     def definition_cluster(self, d : list[Definition]) -> int:
-        return 0
+        return TRAIN
 
 class SplitByFilePrefix(Splitter):
     def __init__(self, prefixes_per_label : list[list[str]]):
@@ -222,7 +222,7 @@ class SplitByFilePrefix(Splitter):
         unused_prefixes = set().union(*[prefixes for label,prefixes in self.prefixes_per_label])
         graphid_to_label = []
         for fname in graphid_to_fname:
-            label = 0
+            label = TRAIN
             for l,prefixes in self.prefixes_per_label:
                 for prefix in prefixes:
                     if fname.startswith(prefix):
@@ -255,7 +255,6 @@ class DataServer(AbstractDataServer):
                  max_subgraph_size,
                  split : Splitter = SplitByHash([9,1],0),
                  bfs_option = True,
-                 split_random_seed = 0,
                  restrict_to_spine: bool = False,
                  stop_at_definitions: bool = True,
     ):
@@ -503,14 +502,14 @@ class DataServer(AbstractDataServer):
             return IterableLen(map(self._datapoint_graph, ids), len(ids))
     
     def data_train(self, shuffled: bool = False,  as_text: bool = False) -> Iterable[Union[tuple[LoaderProofstate, LoaderAction, int], tuple[str, str]]]:
-        return self.get_datapoints(0, shuffled = shuffled, as_text = as_text)
+        return self.get_datapoints(TRAIN, shuffled = shuffled, as_text = as_text)
     def data_valid(self, as_text: bool = False) -> Iterable[Union[tuple[LoaderProofstate, LoaderAction, int], tuple[str, str]]]:
-        return self.get_datapoints(1, as_text = as_text)
+        return self.get_datapoints(VALID, as_text = as_text)
 
     def def_cluster_subgraph(self, i : int) -> LoaderDefinition:
         return self.cluster_to_graph(self._def_clusters[i])
 
-    def def_cluster_subgraphs(self, label : int = 0) -> Iterable[LoaderDefinition]:
+    def def_cluster_subgraphs(self, label : int = TRAIN) -> Iterable[LoaderDefinition]:
         ids = [
             i for i,ds in enumerate(self._def_clusters)
             if self.split.definition_cluster(ds) == label
