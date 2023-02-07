@@ -85,8 +85,6 @@ class Dataset:
         """
         Returns a pair of proof-state datasets for train and validation.
 
-        @param split: a pair of (not necessarily normalized) probabilities for the train and validation splits
-        @param split_random_seed: the seed to use for the train/validation split
         @param shuffle: whether to shuffle the resulting datasets
         @return: a dataset of (GraphTensor, label) pairs
         """
@@ -160,8 +158,6 @@ class Dataset:
         """
         Compute statistics for the proof-state and definition datasets.
 
-        @param split: a pair of (not necessarily normalized) probabilities for the train and validation splits
-        @param split_random_seed: the seed to use for the train/validation split
         @return: a dictionary with statistics for the proof-state and definition datasets
         """
 
@@ -478,6 +474,8 @@ class DataServerDataset(Dataset):
     def __init__(self, data_dir: Path, split_method : str, split, max_subgraph_size: int = 1024, **kwargs):
         """
         @param data_dir: the directory containing the data
+        @param split_method: `hash` or `file_prefix` -- the splitting procedure
+        @param split: arguments for the appropriate splitting procedure
         @param max_subgraph_size: the maximum size of the returned sub-graphs
         @param kwargs: additional keyword arguments are passed on to the parent class
         """

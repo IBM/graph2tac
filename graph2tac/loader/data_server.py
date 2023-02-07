@@ -202,26 +202,47 @@ class SplitByFilePrefix(Splitter):
             for label, prefixes in enumerate(prefixes_per_label)
         ]
     def lemma(self, d : Definition):
-        fname = self.graphid_to_fname[d.node.graph]
-        for label, prefixes in reversed(self.prefixes_per_label):
-            if any(fname.startswith(prefix) for prefix in prefixes):
-                return label
-        return 0
+        return self.graphid_to_label[d.node.graph]
     def definition_cluster(self, d : list[Definition]):
-        return self.lemma(d[0])
+        return self.graphid_to_label[d[0].node.graph]
     def assign_data_server(self, data_server):
-        # TODO: check that the prefixes occur, and there are no backward dependencies
-        # TODO: use graph_id to label translation
 
+        # conversion from graph indices to filenames
         graphid_to_fname = {
             file_data.graph : str(fname)
             for fname, file_data in data_server._data.items()
         }
         assert set(graphid_to_fname.keys()) == set(range(len(data_server._data)))
-        self.graphid_to_fname = [
+        graphid_to_fname = [
             graphid_to_fname[i]
             for i in range(len(data_server._data))
         ]
+
+        # conversion from graph indices to labels + check that all prefixes are used
+        unused_prefixes = set().union(*[prefixes for label,prefixes in self.prefixes_per_label])
+        graphid_to_label = []
+        for fname in graphid_to_fname:
+            label = 0
+            for l,prefixes in self.prefixes_per_label:
+                for prefix in prefixes:
+                    if fname.startswith(prefix):
+                        label = max(l, label)
+                        unused_prefixes.discard(prefix)
+            graphid_to_label.append(label)
+
+        if unused_prefixes:
+            raise Exception(f"Some split prefixes not found:, {sorted(unused_prefixes)}")
+
+        # check that the labels have correct dependencies
+        for fname,d in data_server._data.items():
+            label = graphid_to_label[d.graph]
+            for dep_fname in data_server._data[fname].dependencies:
+                dep_label = graphid_to_label[data_server._data[dep_fname].graph]
+                if dep_label > label:
+                    raise Exception(f"Dependency-inconsistent prefix split: {fname} (label {label}) depends on {dep_fname} (label {dep_label})")
+
+        # save labels for efficient split
+        self.graphid_to_label = graphid_to_label
 
 def get_splitter(split_method, split):
     if split_method == "hash": return SplitByHash(**split)
