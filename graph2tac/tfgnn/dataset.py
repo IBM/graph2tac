@@ -7,14 +7,12 @@ import tensorflow_gnn as tfgnn
 from pathlib import Path
 
 from graph2tac.loader.data_classes import GraphConstants, LoaderAction, LoaderDefinition, LoaderProofstate
-from graph2tac.loader.data_server import DataServer
+from graph2tac.loader.data_server import DataServer, get_splitter, TRAIN, VALID
 from graph2tac.tfgnn.graph_schema import proofstate_graph_spec, definition_graph_spec
 from graph2tac.common import logger
-import time
 
 BIDIRECTIONAL = 'bidirectional'
 UNDIRECTED = 'undirected'
-
 
 class Dataset:
     """
@@ -94,7 +92,7 @@ class Dataset:
         """
 
         data_parts = []
-        for label in (0,1): # train, valid
+        for label in (TRAIN, VALID):
             # get proof-states
             proofstate_dataset = self._proofstates(label)
 
@@ -477,7 +475,7 @@ class DataServerDataset(Dataset):
     proofstate_data_spec = (state_spec, action_spec, graph_id_spec)
     definition_data_spec = (loader_graph_spec, num_definitions_spec, definition_names_spec)
 
-    def __init__(self, data_dir: Path, split = None, split_random_seed = 0, max_subgraph_size: int = 1024, **kwargs):
+    def __init__(self, data_dir: Path, split_method : str, split, max_subgraph_size: int = 1024, **kwargs):
         """
         @param data_dir: the directory containing the data
         @param max_subgraph_size: the maximum size of the returned sub-graphs
@@ -485,7 +483,7 @@ class DataServerDataset(Dataset):
         """
         self.data_server = DataServer(data_dir=data_dir,
                                       max_subgraph_size=max_subgraph_size,
-                                      split = tuple(split),
+                                      split = get_splitter(split_method, split),
         )
 
         super().__init__(graph_constants=self.data_server.graph_constants(),

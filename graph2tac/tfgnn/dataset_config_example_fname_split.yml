@@ -3,6 +3,7 @@ add_self_edges: true
 max_subgraph_size: 1024
 exclude_none_arguments: false
 exclude_not_faithful: false
+split_method: file_prefix
 split:
-- coq-high-school-geometry
-split_random_seed: 0
+- - coq-high-school-geometry
+  - coq-tactician-stdlib.dev/theories/Init/Wf

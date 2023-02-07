@@ -3,7 +3,9 @@ add_self_edges: true
 max_subgraph_size: 1024
 exclude_none_arguments: false
 exclude_not_faithful: false
+split_method: hash
 split:
-- 9
-- 1
-split_random_seed: 0
+  proportions:
+  - 9
+  - 1
+  random_seed: 0
