@@ -168,7 +168,7 @@ class Dataset:
 
             proofstate_datasets = {'train_proofstates': train_proofstates.batch(self.STATISTICS_BATCH_SIZE),
                                    'valid_proofstates': valid_proofstates.batch(self.STATISTICS_BATCH_SIZE)}
-            definition_dataset = self.definitions(0).batch(self.STATISTICS_BATCH_SIZE) # TODO: what are we using definitions for here?
+            definition_dataset = self.definitions(TRAIN).batch(self.STATISTICS_BATCH_SIZE) # TODO: what are we using definitions for here?
 
             stats = {}
             for name, dataset in proofstate_datasets.items():
@@ -640,7 +640,7 @@ class DataServerDataset(Dataset):
 
         return (state_tuple, action_tuple, id)
 
-    def _proofstates(self, label : int = 0) -> tf.data.Dataset:
+    def _proofstates(self, label : int = TRAIN) -> tf.data.Dataset:
         """
         Returns a dataset with all the proof-states.
 

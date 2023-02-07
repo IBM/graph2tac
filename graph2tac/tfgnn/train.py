@@ -10,7 +10,7 @@ import tensorflow as tf
 import tensorflow_gnn as tfgnn
 from pathlib import Path
 
-from graph2tac.tfgnn.dataset import Dataset, DataServerDataset
+from graph2tac.tfgnn.dataset import Dataset, DataServerDataset, TRAIN, VALID
 from graph2tac.tfgnn.tasks import PredictionTask, DefinitionTask, DefinitionNormSquaredLoss
 from graph2tac.tfgnn.graph_schema import vectorized_definition_graph_spec, batch_graph_spec
 from graph2tac.tfgnn.train_utils import QCheckpointManager, ExtendedTensorBoard, DefinitionLossScheduler
@@ -308,7 +308,7 @@ class Trainer:
         # get training data
         train_proofstates, valid_proofstates = self.dataset.proofstates(shuffle=True)
         if self.definition_task:
-            definitions = self.dataset.definitions(0, shuffle=False)
+            definitions = self.dataset.definitions(TRAIN, shuffle=False)
         else:
             definitions = None
 
