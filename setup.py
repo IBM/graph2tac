@@ -35,5 +35,6 @@ setup(
         'pyyaml',
         'graphviz',
         'pytact @ git+https://git@github.com/coq-tactician/coq-tactician-reinforce@77f4ba43af8794d76745f9eacf8e91e7b88c3158',
+        'pytest',
     ]
 )

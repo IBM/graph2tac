@@ -1,6 +1,0 @@
-# Parameters used for the test
-model_params:
-  node_dim: 8
-  total_hops: 4
-num_epochs: 4
-tf_eager: true

@@ -512,7 +512,7 @@ class TacticPrediction(PredictionTask):
         tactic_logits, _ = self._tactic_logits_and_hidden_graph(scalar_proofstate_graph)
 
         # [tactic_num, ]
-        no_argument_tactics_mask = graph_constants.tactic_index_to_numargs == 0
+        no_argument_tactics_mask = tf.constant(graph_constants.tactic_index_to_numargs, dtype = tf.int64) == 0
 
         # [batch_size, tactic_num]
         proofstate_tactic_mask = tf.repeat(tf.expand_dims(no_argument_tactics_mask, axis=0), proofstate_graph.total_num_components, axis=0)
@@ -685,7 +685,7 @@ class LocalArgumentPrediction(TacticPrediction):
         tactic_logits, hidden_graph = self._tactic_logits_and_hidden_graph(scalar_proofstate_graph)
 
         # [tactic_num, ]
-        no_argument_tactics_mask = graph_constants.tactic_index_to_numargs == 0
+        no_argument_tactics_mask = tf.constant(graph_constants.tactic_index_to_numargs, dtype = tf.int64) == 0
         all_tactics_mask = tf.ones(graph_constants.tactic_num, dtype=tf.bool)
 
         # [batch_size, ]
@@ -859,7 +859,7 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
         global_hidden_state_sequences = self.global_arguments_head(hidden_state_sequences)
         global_arguments_logits = self.global_arguments_logits(global_hidden_state_sequences.to_tensor())  # noqa
         if self._dynamic_global_context:
-            global_arguments_logits_mask = self._global_arguments_logits_mask(scalar_proofstate_graph=scalar_proofstate_graph, global_context_size=self._graph_constants.global_context.size)
+            global_arguments_logits_mask = self._global_arguments_logits_mask(scalar_proofstate_graph=scalar_proofstate_graph, global_context_size=len(self._graph_constants.global_context))
             global_arguments_logits += tf.expand_dims(global_arguments_logits_mask, axis=1)
 
         normalized_local_arguments_logits, normalized_global_arguments_logits = self._normalize_logits(local_arguments_logits=local_arguments_logits, global_arguments_logits=global_arguments_logits)
@@ -892,13 +892,13 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
         tactic_logits, hidden_graph = self._tactic_logits_and_hidden_graph(scalar_proofstate_graph)
 
         # [tactic_num, ]
-        no_argument_tactics_mask = graph_constants.tactic_index_to_numargs == 0
+        no_argument_tactics_mask = tf.constant(graph_constants.tactic_index_to_numargs, dtype = tf.int64) == 0
         all_tactics_mask = tf.ones(graph_constants.tactic_num, dtype=tf.bool)
 
         # [batch_size, ]
         no_local_context_proofstates = scalar_proofstate_graph.context['local_context_ids'].row_lengths() == 0
         no_global_context_proofstates = tf.fill(dims=(proofstate_graph.total_num_components,),
-                                                value=graph_constants.global_context.size == 0)
+                                                value=len(graph_constants.global_context) == 0)
         no_context_proofstates = no_local_context_proofstates & no_global_context_proofstates
 
         # [batch_size, tactic_num]

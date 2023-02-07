@@ -1,9 +1,0 @@
-# Parameters used for the test
-# A conv ec model
-model_params:
-  message_passing_layer: conv_ec
-  node_dim: 8
-  total_hops: 4
-  self_edges: false
-num_epochs: 4
-tf_eager: true

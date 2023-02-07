@@ -1,7 +1,0 @@
-(coq.theory
- (name UnitTestChainMulti)
- (package unit-test-chain-multi-v9)
- (flags (-nois))
-)
-
-(include_subdirs qualified)

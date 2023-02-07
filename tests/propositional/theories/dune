@@ -1,7 +1,0 @@
-(coq.theory
- (name UnitTestPropositional)
- (package unit-test-propositional-v9)
- (flags (-nois))
-)
-
-(include_subdirs qualified)

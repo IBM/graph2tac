@@ -1,7 +1,0 @@
-(coq.theory
- (name UnitTestChainDep)
- (package unit-test-chain-dep)
-  (flags (-nois))
-)
-
-(include_subdirs qualified)
