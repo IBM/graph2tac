@@ -184,6 +184,12 @@ class Splitter:
     def assign_data_server(self, data_server):
         pass
 
+class SplitDisabled(Splitter):
+    def lemma(self, d : Definition) -> int:
+        return TRAIN
+    def definition_cluster(self, d : list[Definition]) -> int:
+        return TRAIN
+
 class SplitByHash(Splitter):
     def __init__(self, proportions : list[int], random_seed : int):
         self.proportions = proportions
