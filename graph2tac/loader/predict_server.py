@@ -423,6 +423,7 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument('--arch', type=str,
                         default='tfgnn',
+                        choices=['tfgnn', 'hmodel'],
                         help='the model architecture tfgnn or hmodel (current default is tfgnn)')
 
     parser.add_argument('--log_level', type=str,
