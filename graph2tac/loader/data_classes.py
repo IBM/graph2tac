@@ -126,5 +126,6 @@ class GraphConstants:
     tactic_index_to_hash: list[int]
     global_context: list[int]
     label_to_names: list[str]
+    label_to_ident: list[int]
     label_in_spine: list[bool]
     max_subgraph_size: int

@@ -117,6 +117,13 @@ class Predict:
         return self._graph_constants.label_to_names
 
     @predict_api_debugging
+    def get_label_to_ident(self) -> List[str]:
+        """
+        [ Public API ] Returns the label_to_names seen during training
+        """
+        return self._graph_constants.label_to_ident
+
+    @predict_api_debugging
     def get_label_in_spine(self) -> List[bool]:
         """
         [ Public API ] Returns the label_in_spine seen during training

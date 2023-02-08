@@ -44,6 +44,7 @@ class AbstractDataServer:
         self._initialize_edge_labels()
         self._node_i_to_name = list(graph_api_capnp.Graph.Node.Label.schema.union_fields)
         self._base_node_label_num = len(self._node_i_to_name)
+        self._node_i_to_ident = [0]*self._base_node_label_num
         self._node_i_in_spine = [True]*self._base_node_label_num
         self._definition_label = graph_api_capnp.Graph.Node.Label.definition.value
         self._edges_to_ignore = (graph_api_capnp.EdgeClassification.constOpaqueDef,)
@@ -86,6 +87,7 @@ class AbstractDataServer:
         new_i = len(self._node_i_to_name)
         self._def_node_to_i[node] = new_i
         self._node_i_to_name.append(d.name)
+        self._node_i_to_ident.append(d.node.identity)
         self._node_i_in_spine.append(False)
         return new_i
         
@@ -302,6 +304,7 @@ class DataServer(AbstractDataServer):
             tactic_index_to_hash = self._tactic_i_to_hash,
             global_context = list(range(self._base_node_label_num, total_node_label_num)),
             label_to_names = self._node_i_to_name,
+            label_to_ident = self._node_i_to_ident,
             label_in_spine = self._node_i_in_spine,
             max_subgraph_size = self.max_subgraph_size,
         )
