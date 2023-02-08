@@ -422,8 +422,8 @@ def parse_args() -> argparse.Namespace:
                         help='checkpoint directory of the model')
 
     parser.add_argument('--arch', type=str,
-                        default='tf2',
-                        help='the model architecture tfgnn or tf2 or hmodel (current default is tf2)')
+                        default='tfgnn',
+                        help='the model architecture tfgnn or hmodel (current default is tfgnn)')
 
     parser.add_argument('--log_level', type=str,
                         default='info',
@@ -478,7 +478,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--tf_eager',
                         default=False,
                         action='store_true',
-                        help="with tf_eager=True activated network tf2 may initialize faster but run slower, use carefully if you need")
+                        help="with tf_eager=True activated network may initialize faster but run slower, use carefully if you need")
 
     parser.add_argument('--temperature',
                         type=float,
@@ -519,14 +519,7 @@ def load_model(config: argparse.Namespace, log_levels: dict) -> Predict:
     # Turn off (or on) TF logging BEFORE importing tensorflow
     os.environ['TF_CPP_MIN_LOG_LEVEL'] = tf_env_log_levels[config.tf_log_level]
     if config.arch == 'tf2':
-        logger.info("importing tensorflow...")
-        import tensorflow as tf
-        tf.get_logger().setLevel(int(log_levels[config.tf_log_level]))
-        tf.config.run_functions_eagerly(config.tf_eager)
-
-        logger.info("importing TF2Predict class..")
-        from graph2tac.tf2.predict import TF2Predict
-        model = TF2Predict(checkpoint_dir=Path(config.model).expanduser().absolute(), debug_dir=config.debug_predict)
+        raise Exception("tf2 architecture is no longer supported")
     elif config.arch == 'tfgnn':
         logger.info("importing tensorflow...")
         import tensorflow as tf
