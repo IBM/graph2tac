@@ -164,7 +164,7 @@ class PredictServer(AbstractDataServer):
         self._def_ident_to_i = {
             name : i
             for i,name in enumerate(self._node_i_to_ident)
-            if i >= self._base_node_label_num and self._node_i_in_spine[i]
+            if i >= self._base_node_label_num
         }
 
     def _enter_coq_context(self, definitions: OnlineDefinitionsReader, tactics):
