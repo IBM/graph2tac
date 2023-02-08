@@ -57,6 +57,7 @@ class Predict:
         - `get_tactic_index_to_numargs`: access the value of `tactic_index_to_numargs` seen during training
         - `get_tactic_index_to_hash`: access the value of `tactic_index_to_hash` seen during training
         - `get_label_to_name`: access the value of `label_to_name` seen during training
+        - `get_label_to_ident`: access the value of `label_to_ident` seen during training
         - `get_label_in_spine`: access the value of `label_in_spine` seen during training
         - `get_max_subgraph_size`: access the value of `max_subgraph_size` seen during training
     """
