@@ -8,7 +8,7 @@ import numpy as np
 from pathlib import Path
 
 from graph2tac.loader.data_classes import LoaderAction, LoaderProofstate, LoaderDefinition
-from graph2tac.loader.data_server import DataServer
+from graph2tac.loader.data_server import DataServer, SplitDisabled
 
 from graph2tac.predict import Predict, predict_api_debugging
 
@@ -60,7 +60,7 @@ class Train:
     def __init__(self, data_dir: Path, max_subgraph_size, with_context, shuffled, dry):
 
         self._data_server = DataServer(data_dir=data_dir,
-                                       split=(1,0,0),
+                                       split=SplitDisabled(),
                                        bfs_option=True,
                                        restrict_to_spine=False,
                                        max_subgraph_size=max_subgraph_size)
