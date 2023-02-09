@@ -156,14 +156,15 @@ class PredictServer(AbstractDataServer):
         }
 
         self._node_i_to_name = model.get_label_to_name()
+        self._node_i_to_ident = model.get_label_to_ident()
         self._node_i_in_spine = model.get_label_in_spine()
         self._num_train_nodes = len(self._node_i_to_name)
 
         del self._def_node_to_i # not usable without a coq_context
-        self._def_name_to_i = {
+        self._def_ident_to_i = {
             name : i
-            for i,name in enumerate(self._node_i_to_name)
-            if i >= self._base_node_label_num and self._node_i_in_spine[i]
+            for i,name in enumerate(self._node_i_to_ident)
+            if i >= self._base_node_label_num
         }
 
     def _enter_coq_context(self, definitions: OnlineDefinitionsReader, tactics):
@@ -183,7 +184,7 @@ class PredictServer(AbstractDataServer):
         global_context = []
         self._def_node_to_i = dict()
         for d in definitions.definitions:
-            i = self._def_name_to_i.get(d.name, None)
+            i = self._def_ident_to_i.get(d.node.identity, None)
             if i is None:
                 i = self._register_definition(d)
             else:
@@ -265,6 +266,7 @@ class PredictServer(AbstractDataServer):
         del self._globarg_i_to_node
         del self._def_node_to_i
         del self._node_i_to_name[self._num_train_nodes:]
+        del self._node_i_to_ident[self._num_train_nodes:]
         del self._node_i_in_spine[self._num_train_nodes:]
 
     @contextmanager
@@ -335,7 +337,7 @@ class PredictServer(AbstractDataServer):
         ]
         unaligned_definitions = [
             d for d in msg.definitions.definitions
-            if d.name not in self._def_name_to_i
+            if d.node.idenity not in self._def_ident_to_i
         ]
 
         return CheckAlignmentResponse(
