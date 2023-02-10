@@ -387,7 +387,7 @@ class TFGNNPredict(Predict):
     @staticmethod
     def _logits_decoder(logits: tf.Tensor, total_expand_bound: int) -> Tuple[np.ndarray, np.ndarray]:
         """
-        Implements the same decoding mechanism as in `Predict` from `graph2tac.tf2.predict`.
+        Decoding mechanism
         """
         num_arguments = tf.shape(logits)[0]
         if num_arguments == 0:

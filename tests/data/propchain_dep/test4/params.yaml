@@ -1,7 +1,0 @@
-# Parameters used for the test
-# A simple default model
-model_params:
-  node_dim: 8
-  total_hops: 4
-num_epochs: 4
-tf_eager: false  # this compiles the model.  There are some bugs which only can be caught with this.

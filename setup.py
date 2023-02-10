@@ -1,4 +1,3 @@
-import sys
 from setuptools import find_packages, setup
 
 # please indent the lists with one element per line
@@ -14,7 +13,6 @@ setup(
     include_package_data=True,
     entry_points={'console_scripts':
                   [
-                      'g2t-train=graph2tac.tf2.train:main',
                       'g2t-train-tfgnn=graph2tac.tfgnn.train:main',
                       'g2t-server=graph2tac.loader.predict_server:main',
                       'g2t-train-hmodel=graph2tac.loader.hmodel:main',
@@ -27,11 +25,8 @@ setup(
         'tensorflow_gnn>=0.2.0,<0.3',  # TODO(jrute): Try to upgrade to >=0.3
         'tqdm',
         'numpy',
-        'fire',
         'pycapnp',
         'psutil',
-        'tensor2tensor',
-        'dataclasses-json',
         'pyyaml',
         'graphviz',
         'pytact @ git+https://git@github.com/coq-tactician/coq-tactician-reinforce@77f4ba43af8794d76745f9eacf8e91e7b88c3158',
