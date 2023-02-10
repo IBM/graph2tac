@@ -519,9 +519,7 @@ def load_model(config: argparse.Namespace, log_levels: dict) -> Predict:
     logging.getLogger("py.warnings").setLevel(int(log_levels[config.tf_log_level]))
     # Turn off (or on) TF logging BEFORE importing tensorflow
     os.environ['TF_CPP_MIN_LOG_LEVEL'] = tf_env_log_levels[config.tf_log_level]
-    if config.arch == 'tf2':
-        raise Exception("tf2 architecture is no longer supported")
-    elif config.arch == 'tfgnn':
+    if config.arch == 'tfgnn':
         logger.info("importing tensorflow...")
         import tensorflow as tf
         tf.get_logger().setLevel(int(log_levels[config.tf_log_level]))
