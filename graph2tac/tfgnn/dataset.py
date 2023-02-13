@@ -14,37 +14,75 @@ from graph2tac.common import logger
 BIDIRECTIONAL = 'bidirectional'
 UNDIRECTED = 'undirected'
 
-class Dataset:
+class DataServerDataset:
     """
-    Base class for TF-GNN datasets, subclasses should define:
-        - _proofstates(label)
-        - _definitions(label)
+    Class for TF-GNN datasets which are obtained directly from the loader
     """
     MAX_LABEL_TOKENS = 128
     MAX_PROOFSTATES = int(1e7)
     MAX_DEFINITIONS = int(1e7)
     SHUFFLE_BUFFER_SIZE = int(1e7)
 
-    _proofstates: Callable[[int], tf.data.Dataset]
-    _definitions: Callable[[int], tf.data.Dataset]
+    # tf.TensorSpec for the data coming from the loader
+    node_labels_spec = tf.TensorSpec(shape=(None,), dtype=tf.int64, name='node_labels')
+    edges_spec = tf.TensorSpec(shape=(None,2), dtype=tf.int32, name='edges')
+    edge_labels_spec = tf.TensorSpec(shape=(None,), dtype=tf.int64, name='edge_labels')
+    edges_offset_spec = tf.TensorSpec(shape=(None,), dtype=tf.int32, name='edges_offset')
+    loader_graph_spec = (node_labels_spec, edges_spec, edge_labels_spec, edges_offset_spec)
+
+    root_spec = tf.TensorSpec(shape=(), dtype=tf.int64, name='root')
+
+    local_context_ids_spec = tf.TensorSpec(shape=(None,), dtype=tf.int64, name='local_context_ids')
+    global_context_ids_spec = tf.TensorSpec(shape=(None,), dtype=tf.int64, name='global_context_ids')
+    context_spec = (local_context_ids_spec, global_context_ids_spec)
+
+    name_spec = tf.TensorSpec(shape=(), dtype=tf.string, name='name')
+    step_spec = tf.TensorSpec(shape=(), dtype=tf.int64, name='step')
+    faithful_spec = tf.TensorSpec(shape=(), dtype=tf.int64, name='faithful')
+    proofstate_info_spec = (name_spec, step_spec, faithful_spec)
+
+    state_spec = (loader_graph_spec, root_spec, context_spec, proofstate_info_spec)
+
+    tactic_id_spec = tf.TensorSpec(shape=(), dtype=tf.int64, name='tactic_id')
+    arguments_array_spec = tf.TensorSpec(shape=(None, 2), dtype=tf.int64, name='arguments_array')
+    action_spec = (tactic_id_spec, arguments_array_spec)
+
+    graph_id_spec = tf.TensorSpec(shape=(), dtype=tf.int64, name='graph_id')
+
+    num_definitions_spec = tf.TensorSpec(shape=(), dtype=tf.int64, name='num_definitions')
+    definition_names_spec = tf.TensorSpec(shape=(None,), dtype=tf.string, name='definition_names')
+
+    proofstate_data_spec = (state_spec, action_spec, graph_id_spec)
+    definition_data_spec = (loader_graph_spec, num_definitions_spec, definition_names_spec)
 
     def __init__(self,
-                 graph_constants: GraphConstants,
+                 data_dir: Path,
+                 split_method : str,
+                 split,
+                 max_subgraph_size: int = 1024,
                  symmetrization: Optional[str] = None,
                  add_self_edges: bool = False,
-                 max_subgraph_size: int = 1024,
                  exclude_none_arguments: bool = False,
                  exclude_not_faithful: bool = False
-                 ):
+    ):
         """
-        This initialization method should be called *after* setting the _graph_constants attribute
-
+        @param data_dir: the directory containing the data
+        @param split_method: `hash` or `file_prefix` -- the splitting procedure
+        @param split: arguments for the appropriate splitting procedure
+        @param max_subgraph_size: the maximum size of the returned sub-graphs
+        @param kwargs: additional keyword arguments are passed on to the parent class
         @param symmetrization: use BIDIRECTIONAL, UNDIRECTED or None
         @param add_self_edges: whether to add a self-loop to each node
-        @param max_subgraph_size: the maximum size of the returned sub-graphs
         @param exclude_none_arguments: whether to exclude proofstates with `None` arguments
         @param exclude_not_faithful: whether to exclude proofstates which are not faithful
         """
+        self.data_server = DataServer(data_dir=data_dir,
+                                      max_subgraph_size=max_subgraph_size,
+                                      split = get_splitter(split_method, split),
+        )
+
+        graph_constants = self.data_server.graph_constants()
+
         if symmetrization is not None and symmetrization != BIDIRECTIONAL and symmetrization != UNDIRECTED:
             raise ValueError(f'{symmetrization} is not a valid graph symmetrization scheme (use {BIDIRECTIONAL}, {UNDIRECTED} or None)')
         self.symmetrization = symmetrization
@@ -68,15 +106,6 @@ class Dataset:
                                                                   vocabulary = vocabulary,
                                                                   ragged=True)
         #self._label_tokenizer.adapt(graph_constants.label_to_names)
-
-    def get_config(self) -> dict:
-        return {
-            'symmetrization': self.symmetrization,
-            'add_self_edges': self.add_self_edges,
-            'max_subgraph_size': self.max_subgraph_size,
-            'exclude_none_arguments': self.exclude_none_arguments,
-            'exclude_not_faithful': self.exclude_not_faithful
-        }
 
     def proofstates(self,
                     shuffle: bool = True) -> Tuple[tf.data.Dataset, tf.data.Dataset]:
@@ -145,12 +174,12 @@ class Dataset:
 
         :return: a GraphConstants object with a possibly updated number of edge labels
         """
-        graph_constants = GraphConstants(**self._graph_constants.__dict__)
+        nn_graph_constants = GraphConstants(**self._graph_constants.__dict__)
         if self.symmetrization == BIDIRECTIONAL:
-            graph_constants.edge_label_num *= 2
+            nn_graph_constants.edge_label_num *= 2
         if self.add_self_edges:
-            graph_constants.edge_label_num += 1
-        return graph_constants
+            nn_graph_constants.edge_label_num += 1
+        return nn_graph_constants
 
     @staticmethod
     def _no_none_arguments(proofstate_graph: tfgnn.GraphTensor) -> tf.Tensor:
@@ -268,65 +297,17 @@ class Dataset:
 
         return dataset
 
-class DataServerDataset(Dataset):
-    """
-    Subclass for TF-GNN datasets which are obtained directly from the loader
-    (this is presumable slower than using pre-processed `TFRecordDataset`).
-    UPDATE: `TFRecordDataset` no longer used
-    TODO: merge this class with Dataset
-    """
-
-    # tf.TensorSpec for the data coming from the loader
-    node_labels_spec = tf.TensorSpec(shape=(None,), dtype=tf.int64, name='node_labels')
-    edges_spec = tf.TensorSpec(shape=(None,2), dtype=tf.int32, name='edges')
-    edge_labels_spec = tf.TensorSpec(shape=(None,), dtype=tf.int64, name='edge_labels')
-    edges_offset_spec = tf.TensorSpec(shape=(None,), dtype=tf.int32, name='edges_offset')
-    loader_graph_spec = (node_labels_spec, edges_spec, edge_labels_spec, edges_offset_spec)
-
-    root_spec = tf.TensorSpec(shape=(), dtype=tf.int64, name='root')
-
-    local_context_ids_spec = tf.TensorSpec(shape=(None,), dtype=tf.int64, name='local_context_ids')
-    global_context_ids_spec = tf.TensorSpec(shape=(None,), dtype=tf.int64, name='global_context_ids')
-    context_spec = (local_context_ids_spec, global_context_ids_spec)
-
-    name_spec = tf.TensorSpec(shape=(), dtype=tf.string, name='name')
-    step_spec = tf.TensorSpec(shape=(), dtype=tf.int64, name='step')
-    faithful_spec = tf.TensorSpec(shape=(), dtype=tf.int64, name='faithful')
-    proofstate_info_spec = (name_spec, step_spec, faithful_spec)
-
-    state_spec = (loader_graph_spec, root_spec, context_spec, proofstate_info_spec)
-
-    tactic_id_spec = tf.TensorSpec(shape=(), dtype=tf.int64, name='tactic_id')
-    arguments_array_spec = tf.TensorSpec(shape=(None, 2), dtype=tf.int64, name='arguments_array')
-    action_spec = (tactic_id_spec, arguments_array_spec)
-
-    graph_id_spec = tf.TensorSpec(shape=(), dtype=tf.int64, name='graph_id')
-
-    num_definitions_spec = tf.TensorSpec(shape=(), dtype=tf.int64, name='num_definitions')
-    definition_names_spec = tf.TensorSpec(shape=(None,), dtype=tf.string, name='definition_names')
-
-    proofstate_data_spec = (state_spec, action_spec, graph_id_spec)
-    definition_data_spec = (loader_graph_spec, num_definitions_spec, definition_names_spec)
-
-    def __init__(self, data_dir: Path, split_method : str, split, max_subgraph_size: int = 1024, **kwargs):
-        """
-        @param data_dir: the directory containing the data
-        @param split_method: `hash` or `file_prefix` -- the splitting procedure
-        @param split: arguments for the appropriate splitting procedure
-        @param max_subgraph_size: the maximum size of the returned sub-graphs
-        @param kwargs: additional keyword arguments are passed on to the parent class
-        """
-        self.data_server = DataServer(data_dir=data_dir,
-                                      max_subgraph_size=max_subgraph_size,
-                                      split = get_splitter(split_method, split),
-        )
-
-        super().__init__(graph_constants=self.data_server.graph_constants(),
-                         max_subgraph_size=max_subgraph_size,
-                         **kwargs)
+    def get_config(self) -> dict:
+        return {
+            'symmetrization': self.symmetrization,
+            'add_self_edges': self.add_self_edges,
+            'max_subgraph_size': self.max_subgraph_size,
+            'exclude_none_arguments': self.exclude_none_arguments,
+            'exclude_not_faithful': self.exclude_not_faithful
+        }
 
     @classmethod
-    def from_yaml_config(cls, data_dir: Path, yaml_filepath: Path) -> "DataServerDataset":
+    def from_yaml_config(cls, data_dir: Path, yaml_filepath: Path) -> DataServerDataset:
         """
         Create a DataLoaderDataset from a YAML configuration file
 
