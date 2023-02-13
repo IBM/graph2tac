@@ -24,7 +24,6 @@ class Dataset:
     MAX_PROOFSTATES = int(1e7)
     MAX_DEFINITIONS = int(1e7)
     SHUFFLE_BUFFER_SIZE = int(1e7)
-    STATISTICS_BATCH_SIZE = int(1e4)
 
     _proofstates: Callable[[int], tf.data.Dataset]
     _definitions: Callable[[int], tf.data.Dataset]
@@ -54,7 +53,6 @@ class Dataset:
         self.exclude_none_arguments = exclude_none_arguments
         self.exclude_not_faithful = exclude_not_faithful
         self._graph_constants = graph_constants
-        self._stats = None
         vocabulary = [
             chr(i) for i in range(ord('a'), ord('z')+1)
         ] + [
@@ -141,7 +139,7 @@ class Dataset:
         context['definition_name_vectors'] = tf.expand_dims(vectorized_definition_names.with_row_splits_dtype(tf.int32), axis=0)
         return definition_graph.replace_features(context=context)
 
-    def graph_constants(self) -> GraphConstants:
+    def nn_graph_constants(self) -> GraphConstants:
         """
         Update the original GraphConstants object according to the graph transformations used.
 
@@ -153,46 +151,6 @@ class Dataset:
         if self.add_self_edges:
             graph_constants.edge_label_num += 1
         return graph_constants
-
-    def stats(self) -> dict[str, dict[str, int]]:
-        """
-        Compute statistics for the proof-state and definition datasets.
-
-        @return: a dictionary with statistics for the proof-state and definition datasets
-        """
-
-        if self._stats is None:
-            logger.info('computing dataset statistics (this may take a while)...')
-
-            train_proofstates, valid_proofstates = self.proofstates(shuffle=False)
-
-            proofstate_datasets = {'train_proofstates': train_proofstates.batch(self.STATISTICS_BATCH_SIZE),
-                                   'valid_proofstates': valid_proofstates.batch(self.STATISTICS_BATCH_SIZE)}
-            definition_dataset = self.definitions(TRAIN).batch(self.STATISTICS_BATCH_SIZE) # TODO: what are we using definitions for here?
-
-            stats = {}
-            for name, dataset in proofstate_datasets.items():
-                num_arguments = dataset.reduce(0, lambda result, proofstate_graph: result + self._count_proofstate_arguments(proofstate_graph))
-                num_local_arguments = dataset.reduce(0, lambda result, proofstate_graph: result + self._count_proofstate_local_arguments(proofstate_graph))
-                num_global_arguments = dataset.reduce(0, lambda result, proofstate_graph: result + self._count_proofstate_global_arguments(proofstate_graph))
-                num_local_proofstates = dataset.reduce(0, lambda result, proofstate_graph: result + self._count_proofstate_local(proofstate_graph))
-                num_global_proofstates = dataset.reduce(0, lambda result, proofstate_graph: result + self._count_proofstate_global(proofstate_graph))
-
-                stats[name] = self._basic_stats(dataset)
-                stats[name].update({
-                    'num_arguments': int(num_arguments),
-                    'num_local_arguments': int(num_local_arguments),
-                    'num_global_arguments': int(num_global_arguments),
-                    'num_local_proofstates': int(num_local_proofstates),
-                    'num_global_proofstates': int(num_global_proofstates)
-                })
-
-            num_definitions = definition_dataset.reduce(0, lambda result, definition_graph: result + self._count_definitions(definition_graph))
-            stats['definitions'] = self._basic_stats(definition_dataset)
-            stats['definitions'].update({'num_definitions': int(num_definitions)})
-
-            self._stats = stats
-        return self._stats
 
     @staticmethod
     def _no_none_arguments(proofstate_graph: tfgnn.GraphTensor) -> tf.Tensor:
@@ -309,127 +267,6 @@ class Dataset:
                                   num_parallel_calls=tf.data.AUTOTUNE)
 
         return dataset
-
-    @staticmethod
-    def _count_graphs(graph_tensor: tfgnn.GraphTensor) -> tf.Tensor:
-        """
-        Counts the number of graphs in a batched GraphTensor.
-        """
-        return graph_tensor.total_num_components
-
-    @staticmethod
-    def _count_nodes(graph_tensor: tfgnn.GraphTensor) -> tf.Tensor:
-        """
-        Count the number of nodes in a batched GraphTensor.
-        """
-        return tf.reduce_sum(graph_tensor.node_sets['node'].sizes)
-
-    @staticmethod
-    def _min_nodes(graph_tensor: tfgnn.GraphTensor) -> tf.Tensor:
-        """
-        Count the minimum number of nodes in a batched GraphTensor.
-        """
-        return tf.reduce_min(graph_tensor.node_sets['node'].sizes)
-
-    @staticmethod
-    def _max_nodes(graph_tensor: tfgnn.GraphTensor) -> tf.Tensor:
-        """
-        Count the maximum number of nodes in a batched GraphTensor.
-        """
-        return tf.reduce_max(graph_tensor.node_sets['node'].sizes)
-
-    @staticmethod
-    def _count_edges(graph_tensor: tfgnn.GraphTensor) -> tf.Tensor:
-        """
-        Count the number of edges in a batched GraphTensor.
-        """
-        return tf.reduce_sum(graph_tensor.edge_sets['edge'].sizes)
-
-    @staticmethod
-    def _min_edges(graph_tensor: tfgnn.GraphTensor) -> tf.Tensor:
-        """
-        Count the minimum number of edges in a batched GraphTensor.
-        """
-        return tf.reduce_min(graph_tensor.edge_sets['edge'].sizes)
-
-    @staticmethod
-    def _max_edges(graph_tensor: tfgnn.GraphTensor) -> tf.Tensor:
-        """
-        Count the maximum number of edges in a batched GraphTensor.
-        """
-        return tf.reduce_max(graph_tensor.edge_sets['edge'].sizes)
-
-    @classmethod
-    def _basic_stats(cls, dataset: tf.data.Dataset) -> Dict[str, Any]:
-        """
-        Gather basic statistics about a graph dataset (applicable to proof-state and definition graphs).
-
-        @param dataset: the tf.data.Dataset we want statistics for
-        @return: a dict with basic statistics about the graphs
-        """
-        num_graphs = dataset.reduce(0, lambda result, graph_tensor: result + cls._count_graphs(graph_tensor))
-        num_nodes = dataset.reduce(0, lambda result, graph_tensor: result + cls._count_nodes(graph_tensor))
-        min_num_nodes = dataset.reduce(int(1e9), lambda result, graph_tensor: tf.math.minimum(result, cls._min_nodes(graph_tensor)))
-        max_num_nodes = dataset.reduce(0, lambda result, graph_tensor: tf.math.maximum(result, cls._max_nodes(graph_tensor)))
-        num_edges = dataset.reduce(0, lambda result, graph_tensor: result + cls._count_edges(graph_tensor))
-        min_num_edges = dataset.reduce(int(1e9), lambda result, graph_tensor: tf.math.minimum(result, cls._min_edges(graph_tensor)))
-        max_num_edges = dataset.reduce(0, lambda result, graph_tensor: tf.math.maximum(result, cls._max_edges(graph_tensor)))
-        return {
-            'num_graphs': int(num_graphs),
-            'num_nodes': int(num_nodes),
-            'min_num_nodes': int(min_num_nodes),
-            'max_num_nodes': int(max_num_nodes),
-            'num_edges': int(num_edges),
-            'min_num_edges': int(min_num_edges),
-            'max_num_edges': int(max_num_edges),
-            'mean_num_nodes': float(num_nodes / num_graphs),
-            'mean_num_edges': float(num_edges / num_graphs)
-        }
-
-    @staticmethod
-    def _count_proofstate_arguments(proofstate_graph: tfgnn.GraphTensor) -> tf.Tensor:
-        """
-        Counts the number of arguments in a batched GraphTensor of proof-states.
-        """
-        return tf.shape(proofstate_graph.context['local_arguments'].flat_values)[0]
-
-    @staticmethod
-    def _count_proofstate_local_arguments(proofstate_graph: tfgnn.GraphTensor) -> tf.Tensor:
-        """
-        Counts the number of local arguments which are not `None` in a batched GraphTensor of proof-states.
-        """
-        return tf.reduce_sum(tf.where(proofstate_graph.context['local_arguments'].flat_values!=-1, 1, 0))
-
-    @staticmethod
-    def _count_proofstate_global_arguments(proofstate_graph: tfgnn.GraphTensor) -> tf.Tensor:
-        """
-        Counts the number of arguments (local or global) which are not `None` in a batched GraphTensor of proof-states.
-        """
-        argument_ids = tf.stack([proofstate_graph.context['local_arguments'].flat_values,
-                                 proofstate_graph.context['global_arguments'].flat_values], axis=-1)
-        return tf.reduce_sum(tf.where(tf.reduce_max(argument_ids, axis=-1)!=-1, 1, 0))
-
-    @staticmethod
-    def _count_proofstate_local(proofstate_graph: tfgnn.GraphTensor) -> tf.Tensor:
-        """
-        Counts the number of proof-states without any `None` local arguments in a batched GraphTensor of proof-states.
-        """
-        return tf.reduce_sum(tf.cast(tf.reduce_min(proofstate_graph.context['local_arguments'], axis=-1) > -1, dtype=tf.int32))
-
-    @staticmethod
-    def _count_proofstate_global(proofstate_graph: tfgnn.GraphTensor) -> tf.Tensor:
-        """
-        Counts the number of proof-states without any `None` arguments (local or global) in a batched GraphTensor of proof-states.
-        """
-        global_plus_local = proofstate_graph.context['global_arguments'] + proofstate_graph.context['local_arguments']
-        return tf.reduce_sum(tf.cast(tf.reduce_min(global_plus_local, axis = -1).flat_values > -2, dtype=tf.int32))
-
-    @staticmethod
-    def _count_definitions(definition_graph: tfgnn.GraphTensor) -> tf.Tensor:
-        """
-        Counts the number of node labels defined in a batched GraphTensor of definitions.
-        """
-        return tf.reduce_sum(tf.cast(definition_graph.context['num_definitions'], dtype=tf.int32))
 
 class DataServerDataset(Dataset):
     """

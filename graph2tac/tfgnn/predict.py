@@ -230,7 +230,7 @@ class TFGNNPredict(Predict):
 
         # create prediction task
         prediction_yaml_filepath = log_dir / 'config' / 'prediction.yaml'
-        self.prediction_task = PredictionTask.from_yaml_config(graph_constants=dataset.graph_constants(),
+        self.prediction_task = PredictionTask.from_yaml_config(nn_graph_constants=dataset.nn_graph_constants(),
                                                                yaml_filepath=prediction_yaml_filepath)
         self.prediction_task_type = self.prediction_task.get_config()['prediction_task_type']
 

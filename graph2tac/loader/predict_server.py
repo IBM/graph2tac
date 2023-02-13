@@ -135,11 +135,10 @@ class PredictServer(AbstractDataServer):
                  config: argparse.Namespace,
                  log_cnts: LoggingCounters,
     ):
-        max_subgraph_size = model.get_max_subgraph_size()
         bfs_option = True
         stop_at_definitions = True
         super().__init__(
-            max_subgraph_size = max_subgraph_size,
+            max_subgraph_size = model.graph_constants.max_subgraph_size,
             bfs_option = bfs_option,
             stop_at_definitions = stop_at_definitions,
         )
@@ -148,16 +147,16 @@ class PredictServer(AbstractDataServer):
         self.log_cnts = log_cnts
         self.current_definitions = None # only with a coq context
 
-        self._tactic_i_to_numargs = list(model.get_tactic_index_to_numargs())
-        self._tactic_i_to_hash = list(model.get_tactic_index_to_hash())
+        self._tactic_i_to_numargs = list(model.graph_constants.tactic_index_to_numargs)
+        self._tactic_i_to_hash = list(model.graph_constants.tactic_index_to_hash)
         self._tactic_to_i = {
             h : i
             for i,h in enumerate(self._tactic_i_to_hash)
         }
 
-        self._node_i_to_name = model.get_label_to_name()
-        self._node_i_to_ident = model.get_label_to_ident()
-        self._node_i_in_spine = model.get_label_in_spine()
+        self._node_i_to_name = model.graph_constants.label_to_names
+        self._node_i_to_ident = model.graph_constants.label_to_ident
+        self._node_i_in_spine = model.graph_constants.label_in_spine
         self._num_train_nodes = len(self._node_i_to_name)
 
         del self._def_node_to_i # not usable without a coq_context
