@@ -63,7 +63,8 @@ class DataServerDataset:
                  symmetrization: Optional[str] = None,
                  add_self_edges: bool = False,
                  exclude_none_arguments: bool = False,
-                 exclude_not_faithful: bool = False
+                 exclude_not_faithful: bool = False,
+                 graph_constants = None,
     ):
         """
         @param data_dir: the directory containing the data
@@ -76,12 +77,15 @@ class DataServerDataset:
         @param exclude_none_arguments: whether to exclude proofstates with `None` arguments
         @param exclude_not_faithful: whether to exclude proofstates which are not faithful
         """
-        self.data_server = DataServer(data_dir=data_dir,
-                                      max_subgraph_size=max_subgraph_size,
-                                      split = get_splitter(split_method, split),
-        )
 
-        graph_constants = self.data_server.graph_constants()
+        if data_dir is not None:
+            self.data_server = DataServer(data_dir=data_dir,
+                                          max_subgraph_size=max_subgraph_size,
+                                          split = get_splitter(split_method, split),
+            )
+
+        if graph_constants is None:
+            graph_constants = self.data_server.graph_constants()
 
         if symmetrization is not None and symmetrization != BIDIRECTIONAL and symmetrization != UNDIRECTED:
             raise ValueError(f'{symmetrization} is not a valid graph symmetrization scheme (use {BIDIRECTIONAL}, {UNDIRECTED} or None)')
@@ -280,22 +284,7 @@ class DataServerDataset:
         @param dataset: the dataset of GraphTensor objects we want to process
         @return: a tf.data.Dataset object with symmetrization and self-edges added according to the dataset config
         """
-        # applying symmetrization
-        edge_label_num = self._graph_constants.edge_label_num
-        if self.symmetrization == UNDIRECTED:
-            dataset = dataset.map(lambda graph_tensor: self._symmetrize(graph_tensor, edge_label_num, True),
-                                  num_parallel_calls=tf.data.AUTOTUNE)
-        elif self.symmetrization == BIDIRECTIONAL:
-            dataset = dataset.map(lambda graph_tensor: self._symmetrize(graph_tensor, edge_label_num, False),
-                                  num_parallel_calls=tf.data.AUTOTUNE)
-            edge_label_num *= 2
-
-        # introducing self edges
-        if self.add_self_edges:
-            dataset = dataset.map(lambda graph_tensor: self._add_self_edges(graph_tensor, edge_label_num),
-                                  num_parallel_calls=tf.data.AUTOTUNE)
-
-        return dataset
+        return dataset.map(self._preprocess_single)
 
     def get_config(self) -> dict:
         return {
@@ -307,7 +296,7 @@ class DataServerDataset:
         }
 
     @classmethod
-    def from_yaml_config(cls, data_dir: Path, yaml_filepath: Path) -> DataServerDataset:
+    def from_yaml_config(cls, data_dir: Path, yaml_filepath: Path) -> "DataServerDataset":
         """
         Create a DataLoaderDataset from a YAML configuration file
 

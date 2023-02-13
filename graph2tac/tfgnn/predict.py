@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from graph2tac.loader.data_classes import GraphConstants, LoaderAction, LoaderProofstate, LoaderDefinition
-from graph2tac.tfgnn.dataset import Dataset, DataServerDataset
+from graph2tac.tfgnn.dataset import DataServerDataset
 from graph2tac.tfgnn.tasks import PredictionTask, TacticPrediction, DefinitionTask, GLOBAL_ARGUMENT_PREDICTION
 from graph2tac.tfgnn.models import GraphEmbedding, LogitsFromEmbeddings
 from graph2tac.tfgnn.train import Trainer
@@ -211,10 +211,10 @@ class TFGNNPredict(Predict):
 
         dataset_yaml_filepath = log_dir / 'config' / 'dataset.yaml'
         with dataset_yaml_filepath.open('r') as yml_file:
-            dataset = Dataset(graph_constants=graph_constants, **yaml.load(yml_file, Loader=yaml.SafeLoader))
+            dataset = DataServerDataset(None, None, None, graph_constants=graph_constants, **yaml.load(yml_file, Loader=yaml.SafeLoader))
         self._dataset = dataset
 
-        # call to parent constructor to defines self._graph_constants
+        # call to parent constructor to defines self.graph_constants
         super().__init__(graph_constants=graph_constants, debug_dir=debug_dir)
 
         # to build dummy proofstates we will need to use a tactic taking no arguments
@@ -275,23 +275,23 @@ class TFGNNPredict(Predict):
 
         if global_context is not None:
             # update the global context
-            self._graph_constants.global_context = global_context
+            self.graph_constants.global_context = global_context
 
             # extend the embedding table if necessary
             new_node_label_num = max(global_context)+1
-            if new_node_label_num > self._graph_constants.node_label_num:
-                logger.info(f'extending global context from {self._graph_constants.node_label_num} to {new_node_label_num} elements')
+            if new_node_label_num > self.graph_constants.node_label_num:
+                logger.info(f'extending global context from {self.graph_constants.node_label_num} to {new_node_label_num} elements')
                 new_graph_emb_layer = self.prediction_task.graph_embedding.extend_embeddings(new_node_label_num)
                 self.prediction_task.graph_embedding = new_graph_emb_layer
                 
                 if self.definition_task is not None:
                     self.definition_task._graph_embedding = new_graph_emb_layer
-                self._graph_constants.node_label_num = new_node_label_num
+                self.graph_constants.node_label_num = new_node_label_num
 
             # update the global arguments logits head (always necessary, because the global context may shrink!)
             self.prediction_task.global_arguments_logits.update_embedding_matrix(
                 embedding_matrix=self.prediction_task.graph_embedding.get_node_embeddings(),
-                valid_indices=tf.constant(self._graph_constants.global_context, dtype=tf.int32)
+                valid_indices=tf.constant(self.graph_constants.global_context, dtype=tf.int32)
             )
 
             # clear the inference model cache to force re-creation of the inference models using the new layers
@@ -443,7 +443,7 @@ class TFGNNPredict(Predict):
     def _inference_model(self, tactic_expand_bound: int) -> tf.keras.Model:
         if tactic_expand_bound not in self._inference_model_cache.keys():
             inference_model = self.prediction_task.create_inference_model(tactic_expand_bound=tactic_expand_bound,
-                                                                          graph_constants=self._graph_constants)
+                                                                          graph_constants=self.graph_constants)
             self._inference_model_cache[tactic_expand_bound] = inference_model
         return self._inference_model_cache[tactic_expand_bound]
 
@@ -472,17 +472,17 @@ class TFGNNPredict(Predict):
                                                                              zip(*proofstate_batch_output),
                                                                              local_context_sizes):
                 inference_data = {output_name: output_value for output_name, output_value in zip(inference_output.keys(), proofstate_output)}
-                num_arguments = self._graph_constants.tactic_index_to_numargs[inference_data[TacticPrediction.TACTIC]]
+                num_arguments = self.graph_constants.tactic_index_to_numargs[inference_data[TacticPrediction.TACTIC]]
                 predictions = self._expand_arguments_logits(total_expand_bound=total_expand_bound,
                                                             num_arguments=num_arguments,
                                                             local_context_size=local_context_size,
-                                                            global_context_size=len(self._graph_constants.global_context),
+                                                            global_context_size=len(self.graph_constants.global_context),
                                                             **inference_data)
                 predict_output.predictions.extend(filter(lambda inference: inference.value > -float('inf'), predictions))
         return predict_outputs
 
     def _tactic_mask_from_allowed_model_tactics(self, allowed_model_tactics: Optional[Iterable[int]]) -> tf.Tensor:
-        tactic_num = self._graph_constants.tactic_num
+        tactic_num = self.graph_constants.tactic_num
         if allowed_model_tactics is not None:
             tactic_mask = tf.reduce_any(tf.cast(tf.one_hot(allowed_model_tactics, tactic_num), tf.bool), axis=0)
         else:

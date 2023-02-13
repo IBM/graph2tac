@@ -10,7 +10,7 @@ import tensorflow as tf
 import tensorflow_gnn as tfgnn
 from pathlib import Path
 
-from graph2tac.tfgnn.dataset import Dataset, DataServerDataset, TRAIN, VALID
+from graph2tac.tfgnn.dataset import DataServerDataset, TRAIN, VALID
 from graph2tac.tfgnn.tasks import PredictionTask, DefinitionTask, DefinitionNormSquaredLoss
 from graph2tac.tfgnn.graph_schema import vectorized_definition_graph_spec, batch_graph_spec
 from graph2tac.tfgnn.train_utils import QCheckpointManager, ExtendedTensorBoard, DefinitionLossScheduler
@@ -25,7 +25,7 @@ class Trainer:
     DEFINITION_EMBEDDING = 'definition_embedding'
 
     def __init__(self,
-                 dataset: Dataset,
+                 dataset: DataServerDataset,
                  prediction_task: PredictionTask,
                  serialized_optimizer: Dict,
                  definition_task: Optional[DefinitionTask] = None,
@@ -41,7 +41,7 @@ class Trainer:
         definition task, if using). This is automatically the case when calling the `from_yaml_config` method, but
         it is otherwise the end-user's responsibility.
 
-        @param dataset: a `graph2tac.tfgnn.dataset.Dataset` object providing proof-states and definitions
+        @param dataset: a `graph2tac.tfgnn.dataset.DataServerDataset` object providing proof-states and definitions
         @param prediction_task: the `graph2tac.tfgnn.tasks.PredictionTask` to use for proofstates
         @param serialized_optimizer: the optimizer to use, as serialized by tf.keras.optimizers.serialize
         @param definition_task: the `graph2tac.tfgnn.tasks.DefinitionTask` to use for definitions (or `None` to skip)
@@ -181,7 +181,7 @@ class Trainer:
 
     @classmethod
     def from_yaml_config(cls,
-                         dataset: Dataset,
+                         dataset: DataServerDataset,
                          trainer_config: Path,
                          prediction_task_config: Path,
                          definition_task_config: Optional[Path] = None,
@@ -190,7 +190,7 @@ class Trainer:
         with trainer_config.open() as yaml_file:
             trainer_config = yaml.load(yaml_file, Loader=yaml.SafeLoader)
 
-        prediction_task = PredictionTask.from_yaml_config(graph_constants=dataset.graph_constants(),
+        prediction_task = PredictionTask.from_yaml_config(nn_graph_constants=dataset.nn_graph_constants(),
                                                           yaml_filepath=prediction_task_config)
 
         if definition_task_config is not None:
