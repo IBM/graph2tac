@@ -303,20 +303,20 @@ class PredictionTask:
     PROOFSTATE_GRAPH = 'proofstate_graph'
 
     def __init__(self,
-                 nn_graph_constants: GraphConstants,
+                 graph_constants: GraphConstants,
                  hidden_size: int,
                  unit_norm_embs: bool,
                  gnn_type: str,
                  gnn_config: dict
                  ):
         """
-        @param nn_graph_constants: a GraphConstants object for the graphs that will be consumed by the model
+        @param graph_constants: a GraphConstants object for the graphs that will be consumed by the model
         @param hidden_size: the (globally shared) hidden size
         @param unit_norm_embs: whether to restrict embeddings to the unit norm
         @param gnn_type: the type of GNN component to use
         @param gnn_config: the hyperparameters to be passed to GNN constructor
         """
-        self._nn_graph_constants = nn_graph_constants
+        self._graph_constants = graph_constants
         self._hidden_size = hidden_size
         self._unit_norm_embs = unit_norm_embs
         self._gnn_type = gnn_type
@@ -328,12 +328,12 @@ class PredictionTask:
 
         # create and initialize node and edge embeddings
         self.graph_embedding = GraphEmbedding(
-            node_label_num=nn_graph_constants.node_label_num,
-            edge_label_num=nn_graph_constants.edge_label_num,
+            node_label_num=graph_constants.node_label_num,
+            edge_label_num=graph_constants.edge_label_num,
             hidden_size=hidden_size,
             unit_normalize=unit_norm_embs
         )
-        self.graph_embedding.lookup_node_embedding(tf.range(nn_graph_constants.node_label_num))
+        self.graph_embedding.lookup_node_embedding(tf.range(graph_constants.node_label_num))
 
         # create the GNN component
         gnn_constructor = get_gnn_constructor(gnn_type)
@@ -354,13 +354,13 @@ class PredictionTask:
         }
 
     @staticmethod
-    def from_yaml_config(nn_graph_constants: GraphConstants,
+    def from_yaml_config(graph_constants: GraphConstants,
                          yaml_filepath: Path
                          ) -> Union["TacticPrediction", "LocalArgumentPrediction", "GlobalArgumentPrediction"]:
         """
         Create an instance of this class from a YAML configuration file.
 
-        @param nn_graph_constants: a GraphConstants object for the graphs that will be consumed by the model
+        @param graph_constants: a GraphConstants object for the graphs that will be consumed by the model
         @param yaml_filepath: the filepath to a YAML file containing all other arguments to the constructor
         @return: a PredictionTask object
         """
@@ -369,7 +369,7 @@ class PredictionTask:
 
         prediction_task_type = task_config.pop('prediction_task_type')
         prediction_task_constructor = get_prediction_task_constructor(prediction_task_type)
-        return prediction_task_constructor(nn_graph_constants=nn_graph_constants, **task_config)
+        return prediction_task_constructor(graph_constants=graph_constants, **task_config)
 
     def loss_weights(self) -> Dict[str, float]:
         """
@@ -421,9 +421,9 @@ class TacticPrediction(PredictionTask):
         self._tactic_head_type = tactic_head_type
 
         # create and initialize tactic embeddings
-        self.tactic_embedding = tf.keras.layers.Embedding(input_dim=self._nn_graph_constants.tactic_num,
+        self.tactic_embedding = tf.keras.layers.Embedding(input_dim=self._graph_constants.tactic_num,
                                                           output_dim=tactic_embedding_size)
-        self.tactic_embedding(tf.range(self._nn_graph_constants.tactic_num))
+        self.tactic_embedding(tf.range(self._graph_constants.tactic_num))
 
         # create the tactic head
         tactic_head_constructor = get_tactic_head_constructor(tactic_head_type)
@@ -432,7 +432,7 @@ class TacticPrediction(PredictionTask):
         # a layer to compute tactic logits from tactic embeddings
         self.tactic_logits_from_embeddings = LogitsFromEmbeddings(
             embedding_matrix=self.tactic_embedding.embeddings,
-            valid_indices=tf.range(self._nn_graph_constants.tactic_num),
+            valid_indices=tf.range(self._graph_constants.tactic_num),
             cosine_similarity=False,
             name=self.TACTIC_LOGITS
         )
@@ -500,7 +500,7 @@ class TacticPrediction(PredictionTask):
 
         @warning: we do not use the GraphConstants saved in this task since during inference these may not be up-to-date
         @tactic_expand_bound: the number of base tactic predictions to produce for each proofstate
-        @graph_constants: the graph constants to use during inference (with a possibly updated global context). We don't look at the edges here, so we don't need nn_graph_constants.
+        @graph_constants: the graph constants to use during inference (with a possibly updated global context)
         @return: a keras model consuming proof-state graphs and producing tactic predictions and logits
         """
         proofstate_graph = tf.keras.layers.Input(type_spec=batch_graph_spec(proofstate_graph_spec),
@@ -630,7 +630,7 @@ class LocalArgumentPrediction(TacticPrediction):
         return arguments_logits + tf.expand_dims(context_mask, axis=1)
 
     def _hidden_state_sequences(self, hidden_graph: tfgnn.GraphTensor, tactic: tf.Tensor) -> tf.RaggedTensor:
-        num_arguments = tf.gather(tf.constant(self._nn_graph_constants.tactic_index_to_numargs, dtype=tf.int64), tactic)
+        num_arguments = tf.gather(tf.constant(self._graph_constants.tactic_index_to_numargs, dtype=tf.int64), tactic)
         return self.arguments_head((hidden_graph, self.tactic_embedding(tactic), num_arguments))
 
     @staticmethod
@@ -673,7 +673,7 @@ class LocalArgumentPrediction(TacticPrediction):
 
         @warning: we do not use the GraphConstants saved in this task since during inference these may not be up-to-date
         @param tactic_expand_bound: the number of base tactic predictions to produce for each proofstate
-        @param graph_constants: the graph constants to use during inference (with a possibly updated global context). We don't look at the edges here, so we don't need nn_graph_constants.
+        @param graph_constants: the graph constants to use during inference (with a possibly updated global context)
         @return: a keras model consuming graphs and producing tactic logits and local arguments logits
         """
         proofstate_graph = tf.keras.layers.Input(type_spec=batch_graph_spec(proofstate_graph_spec),
@@ -772,7 +772,7 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
         # create a layer to extract logits from the node label embeddings
         self.global_arguments_logits = LogitsFromEmbeddings(
             embedding_matrix=self.graph_embedding.get_node_embeddings(),
-            valid_indices=tf.constant(self._nn_graph_constants.global_context, dtype=tf.int32),
+            valid_indices=tf.constant(self._graph_constants.global_context, dtype=tf.int32),
             cosine_similarity=self._global_cosine_similarity
         )
 
@@ -859,7 +859,7 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
         global_hidden_state_sequences = self.global_arguments_head(hidden_state_sequences)
         global_arguments_logits = self.global_arguments_logits(global_hidden_state_sequences.to_tensor())  # noqa
         if self._dynamic_global_context:
-            global_arguments_logits_mask = self._global_arguments_logits_mask(scalar_proofstate_graph=scalar_proofstate_graph, global_context_size=len(self._nn_graph_constants.global_context))
+            global_arguments_logits_mask = self._global_arguments_logits_mask(scalar_proofstate_graph=scalar_proofstate_graph, global_context_size=len(self._graph_constants.global_context))
             global_arguments_logits += tf.expand_dims(global_arguments_logits_mask, axis=1)
 
         normalized_local_arguments_logits, normalized_global_arguments_logits = self._normalize_logits(local_arguments_logits=local_arguments_logits, global_arguments_logits=global_arguments_logits)
@@ -880,7 +880,7 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
 
         @warning: we do not use the GraphConstants saved in this task since during inference these may not be up-to-date
         @param tactic_expand_bound: the number of base tactic predictions to produce for each proofstate
-        @param graph_constants: the graph constants to use during inference (with a possibly updated global context). We don't look at the edges here, so we don't need nn_graph_constants.
+        @param graph_constants: the graph constants to use during inference (with a possibly updated global context)
         @return: a keras model consuming graphs and producing tactic and local/global arguments logits
         """
         proofstate_graph = tf.keras.layers.Input(type_spec=batch_graph_spec(proofstate_graph_spec),

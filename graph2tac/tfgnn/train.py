@@ -134,7 +134,7 @@ class Trainer:
 
             self._to_yaml_config(directory=config_dir,
                                  filename='graph_constants',
-                                 config=dataset._graph_constants.__dict__)
+                                 config=dataset.graph_constants.__dict__)
 
             self._to_yaml_config(directory=config_dir,
                                  filename='dataset',
@@ -190,7 +190,7 @@ class Trainer:
         with trainer_config.open() as yaml_file:
             trainer_config = yaml.load(yaml_file, Loader=yaml.SafeLoader)
 
-        prediction_task = PredictionTask.from_yaml_config(nn_graph_constants=dataset.nn_graph_constants(),
+        prediction_task = PredictionTask.from_yaml_config(graph_constants=dataset.graph_constants,
                                                           yaml_filepath=prediction_task_config)
 
         if definition_task_config is not None:

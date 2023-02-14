@@ -94,7 +94,7 @@ class DataServerDataset:
         self.max_subgraph_size = max_subgraph_size
         self.exclude_none_arguments = exclude_none_arguments
         self.exclude_not_faithful = exclude_not_faithful
-        self._graph_constants = graph_constants
+        self.graph_constants = graph_constants
         vocabulary = [
             chr(i) for i in range(ord('a'), ord('z')+1)
         ] + [
@@ -134,7 +134,6 @@ class DataServerDataset:
                 proofstate_dataset = proofstate_dataset.filter(self._no_none_arguments)
 
             # apply the symmetrization and self-edge transformations
-            proofstate_dataset = proofstate_dataset.apply(self._preprocess)
             proofstate_dataset = proofstate_dataset.cache()
             data_parts.append(proofstate_dataset)
 
@@ -152,7 +151,7 @@ class DataServerDataset:
         @param shuffle: whether to shuffle the resulting dataset
         @return: a dataset with all the definition clusters
         """
-        definitions = self._definitions(label).apply(self._preprocess)
+        definitions = self._definitions(label)
         definitions = definitions.cache()
         if shuffle:
             definitions = definitions.shuffle(buffer_size=self.SHUFFLE_BUFFER_SIZE)
@@ -171,19 +170,6 @@ class DataServerDataset:
         vectorized_definition_names = self._label_tokenizer(definition_names)
         context['definition_name_vectors'] = tf.expand_dims(vectorized_definition_names.with_row_splits_dtype(tf.int32), axis=0)
         return definition_graph.replace_features(context=context)
-
-    def nn_graph_constants(self) -> GraphConstants:
-        """
-        Update the original GraphConstants object according to the graph transformations used.
-
-        :return: a GraphConstants object with a possibly updated number of edge labels
-        """
-        nn_graph_constants = GraphConstants(**self._graph_constants.__dict__)
-        if self.symmetrization == BIDIRECTIONAL:
-            nn_graph_constants.edge_label_num *= 2
-        if self.add_self_edges:
-            nn_graph_constants.edge_label_num += 1
-        return nn_graph_constants
 
     @staticmethod
     def _no_none_arguments(proofstate_graph: tfgnn.GraphTensor) -> tf.Tensor:
@@ -263,28 +249,6 @@ class DataServerDataset:
         return tfgnn.GraphTensor.from_pieces(context=graph_tensor.context,
                                              node_sets=graph_tensor.node_sets,
                                              edge_sets={'edge': edge_set})
-
-    def _preprocess_single(self, x):
-        # applying symmetrization
-        edge_label_num = self._graph_constants.edge_label_num
-        if self.symmetrization == UNDIRECTED:
-            x = self._symmetrize(x, edge_label_num, True)
-        elif self.symmetrization == BIDIRECTIONAL:
-            x = self._symmetrize(x, edge_label_num, False)
-            edge_label_num *= 2
-        # introducing self edges
-        if self.add_self_edges:
-            x = self._add_self_edges(x, edge_label_num)
-        return x
-
-    def _preprocess(self, dataset: tf.data.Dataset) -> tf.data.Dataset:
-        """
-        Applies the symmetrization and adds self-edges to the GraphTensor objects streamed by the input dataset.
-
-        @param dataset: the dataset of GraphTensor objects we want to process
-        @return: a tf.data.Dataset object with symmetrization and self-edges added according to the dataset config
-        """
-        return dataset.map(self._preprocess_single)
 
     def get_config(self) -> dict:
         return {

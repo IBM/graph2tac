@@ -230,7 +230,7 @@ class TFGNNPredict(Predict):
 
         # create prediction task
         prediction_yaml_filepath = log_dir / 'config' / 'prediction.yaml'
-        self.prediction_task = PredictionTask.from_yaml_config(nn_graph_constants=dataset.nn_graph_constants(),
+        self.prediction_task = PredictionTask.from_yaml_config(graph_constants=dataset.graph_constants,
                                                                yaml_filepath=prediction_yaml_filepath)
         self.prediction_task_type = self.prediction_task.get_config()['prediction_task_type']
 
@@ -342,7 +342,6 @@ class TFGNNPredict(Predict):
     @tf.function(input_signature = DataServerDataset.proofstate_data_spec)
     def _make_proofstate_graph_tensor_from_data(self, state, action, graph_id):
         x = DataServerDataset._make_proofstate_graph_tensor(state, action, graph_id)
-        x = self._dataset._preprocess_single(x)
         return x
 
     def _make_proofstate_graph_tensor(self, state : LoaderProofstate):
@@ -374,13 +373,11 @@ class TFGNNPredict(Predict):
         dataset = tf.data.Dataset.from_generator(lambda: self._dummy_proofstate_data_generator(states),
                                                  output_signature=DataServerDataset.proofstate_data_spec)
         dataset = dataset.map(DataServerDataset._make_proofstate_graph_tensor)
-        dataset = dataset.apply(self._dataset._preprocess)
         return dataset
 
     @tf.function(input_signature = DataServerDataset.definition_data_spec)
     def _make_definition_graph_tensor_from_data(self, loader_graph, num_definitions, definition_names):
         x = DataServerDataset._make_definition_graph_tensor(loader_graph, num_definitions, definition_names)
-        x = self._dataset._preprocess_single(x)
         x = self._dataset.tokenize_definition_graph(x)
         return x
 

@@ -26,15 +26,24 @@ class IterableLen:
     def __len__(self):
         return self.length
 
+# possible symmetrizations
+BIDIRECTIONAL = 'bidirectional'
+UNDIRECTED = 'undirected'
+
 class AbstractDataServer:
     def __init__(self,
-                 max_subgraph_size,
-                 bfs_option = True,
+                 max_subgraph_size: int = 0,
+                 bfs_option: bool = True,
                  stop_at_definitions: bool = True,
+                 symmetrization: Optional[str] = None,
+                 add_self_edges: bool = False,
     ):
+        assert max_subgraph_size, "Necessary to set max_subgraph_size"
         self.max_subgraph_size = max_subgraph_size
         self.bfs_option = bfs_option
         self.stop_at_definitions = stop_at_definitions
+        self.symmetrization = symmetrization
+        self.add_self_edges = add_self_edges
 
         self._initialize()
 
@@ -76,6 +85,11 @@ class AbstractDataServer:
                 edge_labels[i] = edge_label_num
             edge_label_num += 1
         self._edge_labels = edge_labels
+        self._base_edge_label_num = edge_label_num
+        if self.symmetrization == BIDIRECTIONAL:
+            edge_label_num *= 2
+        if self.add_self_edges:
+            edge_label_num += 1
         self._edge_label_num = edge_label_num
 
     # Definition / Tactic registration
@@ -140,10 +154,29 @@ class AbstractDataServer:
             for node in nodes
         ]
 
-        if edges:
-            edges_by_labels = [[] for _ in range(self._edge_label_num)]
+        if edges or (nodes and self.add_self_edges):
+            edges_by_labels = [[] for _ in range(self._base_edge_label_num)]
             for edge in edges:
                 edges_by_labels[edge[2]].append(edge)
+            if self.symmetrization == UNDIRECTED:
+                for e in edges_by_labels:
+                    e.extend(
+                        (b,a,l)
+                        for a,b,l in list(e)
+                    )
+            elif self.symmetrization == BIDIRECTIONAL:
+                edges_by_labels.extend(
+                    [
+                        (b,a, l+self._base_edge_label_num)
+                        for a,b,l in e
+                    ]
+                    for e in list(edges_by_labels)
+                )
+            if self.add_self_edges:
+                l = len(edges_by_labels)
+                edges_by_labels.append(
+                    [a,a,l] for a in range(len(nodes))
+                )
             edge_offsets = np.cumsum([
                 len(x) for x in edges_by_labels
             ])[:-1].astype(np.uint32)
@@ -173,7 +206,7 @@ class AbstractDataServer:
                 for n in roots
             ], dtype = self._def_name_dtype)
         )
-
+    
 TRAIN = 0
 VALID = 1
 HOLDOUT = 2 # maybe unnecessary
@@ -260,15 +293,20 @@ def get_splitter(split_method, split):
 class DataServer(AbstractDataServer):
     def __init__(self,
                  data_dir: Path,
-                 max_subgraph_size,
                  split : Splitter = SplitByHash([9,1],0),
-                 bfs_option = True,
                  restrict_to_spine: bool = False,
-                 stop_at_definitions: bool = True,
+                 exclude_none_arguments: bool = False,
+                 exclude_not_faithful: bool = False,
+                 **kwargs,
     ):
-        super().__init__(max_subgraph_size, bfs_option, stop_at_definitions)
+        super().__init__(**kwargs)
         self.data_dir = data_dir
         self.restrict_to_spine = restrict_to_spine
+
+        # TODO: the following arguments are not taken into account here yet,
+        # still processed inside tfgnn.Dataset
+        self.exclude_none_arguments = exclude_none_arguments
+        self.exclude_not_faithful = exclude_not_faithful
 
         self._proof_steps : list[tuple[Outcome, Definition, int]] = []
         self._def_clusters : list[list[Definition]] = []
