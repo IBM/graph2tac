@@ -460,7 +460,7 @@ class DataServer(AbstractDataServer):
         self._def_to_file_ctx[definition] = res        
         return res
 
-    def _datapoint_graph(self, i):
+    def datapoint_graph(self, i):
         proof_step, definition, index = self._proof_steps[i]
         graph, node_to_i = self._downward_closure(
             [proof_step.before.root]
@@ -525,40 +525,42 @@ class DataServer(AbstractDataServer):
         )
         return proofstate, action, i
 
-    def _datapoint_text(self, i):
+    def datapoint_text(self, i):
         proof_step, _, _ = self._proof_steps[i]
         state_text = proof_step.before.text
         label_text = proof_step.tactic.text
         return state_text, label_text
 
-    def _select_data_points(self, label : int):
-        return [
+    def datapoint_indices(self, *labels):
+        if not labels: return list(range(self._proof_steps))
+        else: return [
             i for i,(_,d,_) in enumerate(self._proof_steps)
-            if self.split.lemma(d) == label
+            if self.split.lemma(d) in labels
         ]
 
-    def get_datapoints(self, label : int, shuffled: bool = False, as_text: bool = False) -> Iterable[tuple[LoaderProofstate, LoaderAction, int] | tuple[str, str]]:
-        ids = self._select_data_points(label)
+    def get_datapoints(self, label : int, shuffled: bool = False) -> Iterable[tuple[LoaderProofstate, LoaderAction, int] | tuple[str, str]]:
+        ids = self.datapoint_indices(label)
         if shuffled:
             ids = list(ids)
             random.shuffle(ids)
 
-        if as_text:
-            return IterableLen(map(self._datapoint_text, ids), len(ids))
-        else:
-            return IterableLen(map(self._datapoint_graph, ids), len(ids))
-    
+        return IterableLen(map(self.datapoint_graph, ids), len(ids))
+
     def data_train(self, shuffled: bool = False,  as_text: bool = False) -> Iterable[Union[tuple[LoaderProofstate, LoaderAction, int], tuple[str, str]]]:
         return self.get_datapoints(TRAIN, shuffled = shuffled, as_text = as_text)
     def data_valid(self, as_text: bool = False) -> Iterable[Union[tuple[LoaderProofstate, LoaderAction, int], tuple[str, str]]]:
         return self.get_datapoints(VALID, as_text = as_text)
 
+    def def_cluster_indices(self, *labels):
+        if not labels: return list(range(self._def_clusters))
+        else: return [
+            i for i,ds in enumerate(self._def_clusters)
+            if self.split.definition_cluster(ds) in labels
+        ]
+
     def def_cluster_subgraph(self, i : int) -> LoaderDefinition:
         return self.cluster_to_graph(self._def_clusters[i])
 
     def def_cluster_subgraphs(self, label : int = TRAIN) -> Iterable[LoaderDefinition]:
-        ids = [
-            i for i,ds in enumerate(self._def_clusters)
-            if self.split.definition_cluster(ds) == label
-        ]
+        ids = self.def_cluster_indices(label)
         return IterableLen(map(self.def_cluster_subgraph, ids), len(self._def_clusters))

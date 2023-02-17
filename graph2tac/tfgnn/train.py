@@ -231,12 +231,12 @@ class Trainer:
         return (proofstate_graph, definition_graph), outputs
 
     def _prepare_dataset(self, dataset: tf.data.Dataset, definitions: Optional[tf.data.Dataset]) -> tf.data.Dataset:
+
         # create input-output pairs
         dataset = dataset.map(self.prediction_task.create_input_output)
 
         # add definitions if necessary
         if definitions is not None:
-            definitions = definitions.map(self.dataset.tokenize_definition_graph)
             definitions = definitions.repeat()
             dataset = tf.data.Dataset.zip(datasets=(dataset, definitions))
             dataset = dataset.map(self._input_output_mixing)

@@ -15,6 +15,7 @@ from graph2tac.tfgnn.models import GraphEmbedding, LogitsFromEmbeddings
 from graph2tac.tfgnn.train import Trainer
 from graph2tac.common import logger
 from graph2tac.predict import Predict, predict_api_debugging, cartesian_product, NUMPY_NDIM_LIMIT
+from graph2tac.tfgnn.graph_schema import proofstate_graph_spec, vectorized_definition_graph_spec
 
 
 def stack_dicts_with(f, ds):
@@ -309,11 +310,9 @@ class TFGNNPredict(Predict):
         if self.cached_definition_computation is not None:
             return self.cached_definition_computation
         
-        @tf.function(input_signature = DataServerDataset.definition_data_spec)
-        def _compute_and_replace_definition_embs(loader_graph, num_definitions, definition_names):
-            definition_graph = stack_graph_tensors([
-                self._make_definition_graph_tensor_from_data(loader_graph, num_definitions, definition_names)
-            ])
+        @tf.function(input_signature = (vectorized_definition_graph_spec,))
+        def _compute_and_replace_definition_embs(graph_tensor):
+            definition_graph = stack_graph_tensors([graph_tensor])
 
             scalar_definition_graph = definition_graph.merge_batch_to_components()
             definition_embeddings = self.definition_task(scalar_definition_graph).flat_values
@@ -333,22 +332,22 @@ class TFGNNPredict(Predict):
             raise RuntimeError('cannot update definitions when a definition task is not present')
 
         assert len(new_cluster_subgraphs) == 1
-        new_cluster_subgraph = DataServerDataset._loader_to_definition_data(new_cluster_subgraphs[0])
+        new_cluster_subgraph = self._dataset._loader_to_definition_graph_tensor(new_cluster_subgraphs[0])
 
         compute_and_replace_definition_embs = self._fetch_definition_computation()
-        compute_and_replace_definition_embs(*new_cluster_subgraph)
+        compute_and_replace_definition_embs(new_cluster_subgraph)
         
 
-    @tf.function(input_signature = DataServerDataset.proofstate_data_spec)
-    def _make_proofstate_graph_tensor_from_data(self, state, action, graph_id):
-        x = DataServerDataset._make_proofstate_graph_tensor(state, action, graph_id)
-        return x
+    # @tf.function(input_signature = DataServerDataset.proofstate_data_spec)
+    # def _make_proofstate_graph_tensor_from_data(self, state, action, graph_id):
+    #     x = DataServerDataset._make_proofstate_graph_tensor(state, action, graph_id)
+    #     return x
 
     def _make_proofstate_graph_tensor(self, state : LoaderProofstate):
         action = LoaderAction(self._dummy_tactic_id, tf.zeros(shape=(0, 2), dtype=tf.int64))
         graph_id = tf.constant(-1, dtype=tf.int64)
-        x = DataServerDataset._loader_to_proofstate_data((state, action, graph_id))
-        x = self._make_proofstate_graph_tensor_from_data(*x)
+        x = DataServerDataset._loader_to_proofstate_graph_tensor((state, action, graph_id))
+        #x = self._make_proofstate_graph_tensor_from_data(*x)
         return x
 
     def _make_proofstate_batch(self, datapoints : Iterable[LoaderProofstate]):
@@ -361,7 +360,7 @@ class TFGNNPredict(Predict):
         for state in states:
             action = LoaderAction(self._dummy_tactic_id, tf.zeros(shape=(0, 2), dtype=tf.int64))
             graph_id = tf.constant(-1, dtype=tf.int64)
-            yield DataServerDataset._loader_to_proofstate_data((state, action, graph_id))
+            yield DataServerDataset._loader_to_proofstate_graph_tensor((state, action, graph_id))
 
     def _make_dummy_proofstate_dataset(self, states: List[LoaderProofstate]) -> tf.data.Dataset:
         """
@@ -372,14 +371,14 @@ class TFGNNPredict(Predict):
         """
         dataset = tf.data.Dataset.from_generator(lambda: self._dummy_proofstate_data_generator(states),
                                                  output_signature=DataServerDataset.proofstate_data_spec)
-        dataset = dataset.map(DataServerDataset._make_proofstate_graph_tensor)
+        #dataset = dataset.map(DataServerDataset._make_proofstate_graph_tensor)
         return dataset
 
-    @tf.function(input_signature = DataServerDataset.definition_data_spec)
-    def _make_definition_graph_tensor_from_data(self, loader_graph, num_definitions, definition_names):
-        x = DataServerDataset._make_definition_graph_tensor(loader_graph, num_definitions, definition_names)
-        x = self._dataset.tokenize_definition_graph(x)
-        return x
+    # @tf.function(input_signature = DataServerDataset.definition_data_spec)
+    # def _make_definition_graph_tensor_from_data(self, loader_graph, num_definitions, definition_names):
+    #     x = DataServerDataset._make_definition_graph_tensor(loader_graph, num_definitions, definition_names)
+    #     x = self._dataset.tokenize_definition_graph(x)
+    #     return x
 
     @staticmethod
     def _logits_decoder(logits: tf.Tensor, total_expand_bound: int) -> Tuple[np.ndarray, np.ndarray]:
