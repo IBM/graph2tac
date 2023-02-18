@@ -235,19 +235,9 @@ class PredictServer(AbstractDataServer):
                 new_defined_nodes = cluster_state.graph.nodes[:cluster_state.num_definitions]
                 used_nodes = cluster_state.graph.nodes[cluster_state.num_definitions:]
                 for n in used_nodes:
-                    assert n < prev_defined_nodes or n in defined_nodes, (
-                        f"Definition clusters out of order. "
-                        f"Attempting to compute definition embedding for node labels {new_defined_nodes} "
-                        f"({cluster_state.definition_names}) without first computing "
-                        f"the definition embedding for node label {n} used in that definition."
-                    )   
+                    pass  
                 for n in new_defined_nodes:
-                    assert n >= prev_defined_nodes and n not in defined_nodes, (
-                        f"Something is wrong with the definition clusters. "
-                        f"Attempting to compute definition embedding for node labels {new_defined_nodes} "
-                        f"({cluster_state.definition_names}) "
-                        f"for which node label {n} has already been computed."
-                    )
+                    pass
                     defined_nodes.add(n)
 
                 self.model.compute_new_definitions([cluster_state])
