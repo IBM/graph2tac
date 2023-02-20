@@ -294,9 +294,7 @@ class PredictServer(AbstractDataServer):
             raise Exception("Cannot predict outside 'with predict_server.coq_context()'")
 
         root = proof_state.root
-        graph, node_to_i = self._downward_closure(
-            [root]
-        )
+        graph, node_to_i = self._downward_closure([root])
         root_i = 0
         local_context = proof_state.context
         local_context_i = [node_to_i[n] for n in local_context]

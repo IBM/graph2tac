@@ -462,9 +462,7 @@ class DataServer(AbstractDataServer):
 
     def datapoint_graph(self, i):
         proof_step, definition, index = self._proof_steps[i]
-        graph, node_to_i = self._downward_closure(
-            [proof_step.before.root]
-        )
+        graph, node_to_i = self._downward_closure([proof_step.before.root])
         root_i = 0
         local_context = proof_step.before.context
         local_context_i = [node_to_i[n] for n in local_context]
