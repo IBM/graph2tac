@@ -271,15 +271,16 @@ class DataServerDataset:
         })
         return DataServerDataset._make_graph_tensor(defn.graph, context)
 
-    def _proofstates_generator(self, *labels, shuffle = False):
-        indices = self.data_server.datapoint_indices(*labels)
+
+    def _proofstates_generator(self, label, shuffle):
+        indices = self.data_server.datapoint_indices(label)
         if shuffle: random.shuffle(indices)
         for i in indices:
             loader_proofstate = self.data_server.datapoint_graph(i)
             yield self._loader_to_proofstate_graph_tensor(loader_proofstate)
 
-    def _definitions_generator(self, *labels, shuffle = False):
-        indices = self.data_server.def_cluster_indices(*labels)
+    def _definitions_generator(self, label, shuffle):
+        indices = self.data_server.def_cluster_indices(label)
         if shuffle: random.shuffle(indices)
         for i in indices:
             loader_proofstate = self.data_server.def_cluster_subgraph(i)
