@@ -538,9 +538,7 @@ class DataServer(AbstractDataServer):
 
     def get_datapoints(self, label : int, shuffled: bool = False) -> Iterable[tuple[LoaderProofstate, LoaderAction, int] | tuple[str, str]]:
         ids = self.datapoint_indices(label)
-        if shuffled:
-            ids = list(ids)
-            random.shuffle(ids)
+        if shuffled: random.shuffle(ids)
 
         return IterableLen(map(self.datapoint_graph, ids), len(ids))
 
@@ -559,6 +557,7 @@ class DataServer(AbstractDataServer):
     def def_cluster_subgraph(self, i : int) -> LoaderDefinition:
         return self.cluster_to_graph(self._def_clusters[i])
 
-    def def_cluster_subgraphs(self, label : int = TRAIN) -> Iterable[LoaderDefinition]:
+    def def_cluster_subgraphs(self, label : int = TRAIN, shuffled: bool = False) -> Iterable[LoaderDefinition]:
         ids = self.def_cluster_indices(label)
+        if shuffled: random.shuffle(ids)
         return IterableLen(map(self.def_cluster_subgraph, ids), len(self._def_clusters))

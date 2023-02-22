@@ -1,118 +1,79 @@
-from numpy.typing import NDArray
 import numpy as np
 from dataclasses import dataclass
+import tensorflow as tf
+from collections import namedtuple
 
-def custom_dataclass_repr(obj) -> str:
-    """String repr for a dataclass, but removing the array data."""
-    kws = {k: f"array(shape={v.shape}, dtype={v.dtype})" if isinstance(v, np.ndarray) else repr(v) for k,v in obj.__dict__.items()}
-    return obj.__class__.__qualname__ + "(" + ", ".join(k + "=" + v for k,v in kws.items()) + ")"
+int64_spec = tf.TensorSpec(shape=(), dtype=tf.int64)
+str_spec = tf.TensorSpec(shape=(), dtype=tf.string)
 
+def namedtuple_with_spec(namedtuple_name, **item_spec_d):
+    res = namedtuple(namedtuple_name, list(item_spec_d.keys()))
+    spec = res(**item_spec_d)
+    return res, spec
 
-@dataclass(repr=False)
-class LoaderGraph:
-    """A single graph as it comes from the loader"""
-    nodes: NDArray[np.uint32]  # [nodes]
-    """Node class labels.  Shape: [number of nodes]"""
-    edges: NDArray[np.uint32]  # [edges,2]
-    """Edges as source-target pairs indexed into `nodes`.  Shape: [number of edges, 2]"""
-    edge_labels: NDArray[np.uint32]  # [edges]
-    """Edge labels.  Shape: [number of edges]"""
-    edge_offsets: NDArray[np.uint32]  # [edge_labels]
-    """Start position in `edges` of each edge label.  Shape: [number of edge labels]"""
+LoaderGraph, LoaderGraphSpec = namedtuple_with_spec(
+    "LoaderGraph",
+    nodes = tf.TensorSpec([None], tf.int64), # Node class labels
+    edges = tf.TensorSpec([None,2], tf.int32), # Edges as source-target pairs indexed into `nodes`
+    edge_labels = tf.TensorSpec([None], tf.int64),
+    edge_offsets = tf.TensorSpec([None], tf.int32), # Start position in `edges` of each edge label.
+)
 
-    def __repr__(self):
-        return custom_dataclass_repr(self)
+ProofstateMetadata, ProofstateMetadataSpec = namedtuple_with_spec(
+    "ProofstateMetadata",
+    name = tf.TensorSpec([], tf.string),
+    step = tf.TensorSpec([], tf.int64),
+    is_faithful = tf.TensorSpec([], tf.int64),
+)
 
-@dataclass(repr=False)
-class ProofstateMetadata:
-    """Metadata for a single proof state"""
-    name: bytes
-    """Theorem name"""
-    step: int
-    """Step of the proof"""
-    is_faithful: bool
-    """Represents if the action is faithful, meaning that the action fully encodes the original tactic"""
+ProofstateContext, ProofstateContextSpec = namedtuple_with_spec(
+    "ProofstateMetadata",
+    local_context = tf.TensorSpec([None], dtype=tf.int64),
+    # Local context as indices into the `node` field of the corresponding graph.
+    global_context = tf.TensorSpec([None], dtype=tf.int64),
+    # Global context as indices into list of all global identifiers.
+    # Shape: [size of global context]
+    # The index is into the list of global definitions maintained by the dataserver and kept in the model
+    # (not the list of node labels).  Hence the smallest `global_context` value is usually 0.
+)
 
-    def __repr__(self):
-        return custom_dataclass_repr(self)
+LoaderProofstate, LoaderProofstateSpec = namedtuple_with_spec(
+    "LoaderProofstate",
+    graph = LoaderGraphSpec,
+    root = tf.TensorSpec([], dtype=tf.int64), # Index of the root node in `graph.nodes`. Currently always 0.
+    context = ProofstateContextSpec,
+    metadata = ProofstateMetadataSpec,
+)
 
-@dataclass(repr=False)
-class ProofstateContext:
-    """Local and global context for a single proofstate"""
-    local_context: NDArray[np.uint32]  # [loc_cxt]
-    """Local context as indices into the `node` field of the corresponding graph.  Shape: [size of local context]"""
-    global_context: NDArray[np.uint32]  # [global_cxt]
-    """
-    Global context as indices into list of all global identifiers.
-    Shape: [size of global context]
+LoaderAction, LoaderActionSpec = namedtuple_with_spec(
+    "LoaderAction",
+    tactic_id = tf.TensorSpec([], tf.int64), # Base tactic id
+    args = tf.TensorSpec([None, 2], dtype=tf.int64),
+    # Tactic arguments (local or global or none).  Using the indices in the `context` field of the proofstate.
     
-    The index is into the list of global definitions maintained by the dataserver and kept in the model
-    (not the list of node labels).  Hence the smallest `global_context` value is usually 0.
-    """
-
-    def __repr__(self):
-        return custom_dataclass_repr(self)
-
-@dataclass(repr=False)
-class LoaderProofstate:
-    """A single proofstate as it comes from the loader"""
-    graph: LoaderGraph
-    """Proofstate graph as it comes from the loader"""
-    root: int
-    """Index of the root node in `graph.nodes`.  Currently the root is always 0."""
-    context: ProofstateContext
-    """Local and global context"""
-    metadata: ProofstateMetadata
-    """Proofstate metadata"""
-
-    def __repr__(self):
-        return custom_dataclass_repr(self)
-
-@dataclass(repr=False)
-class LoaderAction:
-    """A single tactic as it comes from the loader"""
-    tactic_id: int
-    """Base tactic id"""
-    args: NDArray[np.uint32]
-    """
-    Tactic arguments (local or global or none).  Using the indices in the `context` field of the proofstate.
+    # If `args[i] == [0, l] for l < local_cxt_size`, then the `i`th arg is a local context variable with index `l`.
+    # If `args[i] == [0, local_cxt_size]`, then the `i`th arg is a none argument (can't be represented).
+    # If `args[i] == [1, g]` for `g > 0`, then the `i`th arg is a global definition with index `g`.
     
-    If `args[i] == [0, l] for l < local_cxt_size`, then the `i`th arg is a local context variable with index `l`.
-    If `args[i] == [0, local_cxt_size]`, then the `i`th arg is a none argument (can't be represented).
-    If `args[i] == [1, g]` for `g > 0`, then the `i`th arg is a global definition with index `g`.
-    
-    The local argument is an index into `context.local_context` for the corresponding proofstate,
-    but the global argument is the index into the list of global definitions returned by the dataserver and kept
-    in the model.  In particular, the global argument is neither an index into `context.global_context`
-    for the proofstate nor the node label of a definition (which would instead be offset by the number of base node labels).
+    # The local argument is an index into `context.local_context` for the corresponding proofstate,
+    # but the global argument is the index into the list of global definitions returned by the dataserver and kept
+    # in the model.  In particular, the global argument is neither an index into `context.global_context`
+    # for the proofstate nor the node label of a definition (which would instead be offset by the number of base node labels).
 
-    Hence the smallest possible global argument index is 0 and it can be larger than
-    `len(context.global_context)` for the corresponding proofstate.
+    # Hence the smallest possible global argument index is 0 and it can be larger than
+    # `len(context.global_context)` for the corresponding proofstate.
+)
 
-    Shape: [number of args for this tactic, 2]
-    """
-
-    def __repr__(self):
-        return custom_dataclass_repr(self)
-
-@dataclass(repr=False)
-class LoaderDefinition:
-    """A single definition declaration as it comes from the loader"""
-    graph: LoaderGraph
-    """Definition graph as it comes from the loader"""
-    num_definitions: int
-    """
-    Number of definitions in the graph.
-    
-    The roots for these definitions are the nodes of the `graph.nodes`.
-    (E.g. inductive types are packaged as a single graph with
-    mulitple definitions, one for the type and one for each constructor
-    """
-    definition_names: NDArray[np.object_]
-    """Names of the definitions.  Stored as either bytestrings or strings.  Shape: [number of definitions in the graph]"""
-
-    def __repr__(self):
-        return custom_dataclass_repr(self)
+LoaderDefinition, LoaderDefinitionSpec = namedtuple_with_spec(
+    "LoaderDefinition",
+    graph = LoaderGraphSpec,
+    num_definitions = tf.TensorSpec([], tf.int64),
+    # Number of definitions in the graph.
+    # The roots for these definitions are the nodes of the `graph.nodes`.
+    # (E.g. inductive types are packaged as a single graph with
+    # mulitple definitions, one for the type and one for each constructor
+    definition_names = tf.TensorSpec([None], tf.string),
+)
 
 @dataclass
 class GraphConstants:

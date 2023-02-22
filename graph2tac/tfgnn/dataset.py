@@ -8,7 +8,8 @@ from pathlib import Path
 import numpy as np
 import random
 
-from graph2tac.loader.data_classes import GraphConstants, LoaderGraph, LoaderAction, LoaderDefinition, LoaderProofstate
+from graph2tac.loader.data_classes import GraphConstants, LoaderGraph, LoaderAction, LoaderDefinition, LoaderProofstate,\
+    LoaderGraphSpec, LoaderActionSpec, LoaderDefinitionSpec, LoaderProofstateSpec
 from graph2tac.loader.data_server import DataServer, get_splitter, TRAIN, VALID
 from graph2tac.tfgnn.graph_schema import proofstate_graph_spec, vectorized_definition_graph_spec
 from graph2tac.common import logger
@@ -120,11 +121,13 @@ class DataServerDataset:
         @return: a dataset of (GraphTensor, label) pairs
         """
 
+        graph_id_spec = tf.TensorSpec([], tf.int64)
         # get proof-states
         proofstate_dataset = tf.data.Dataset.from_generator(
-            lambda: self._proofstates_generator(label, shuffle),
-            output_signature=proofstate_graph_spec
+            lambda: self.data_server.get_datapoints(label, shuffle),
+            output_signature=(LoaderProofstateSpec, LoaderActionSpec, graph_id_spec),
         )
+        proofstate_dataset = proofstate_dataset.map(self._loader_to_proofstate_graph_tensor)
 
         # filter out proof-states with term arguments
         if self.exclude_not_faithful:
@@ -143,10 +146,12 @@ class DataServerDataset:
         @param shuffle: whether to shuffle the resulting dataset
         @return: a dataset with all the definition clusters
         """
-        return tf.data.Dataset.from_generator(
-            lambda: self._definitions_generator(label, shuffle),
-            output_signature=vectorized_definition_graph_spec
+        res = tf.data.Dataset.from_generator(
+            lambda: self.data_server.def_cluster_subgraphs(label, shuffle),
+            output_signature=LoaderDefinitionSpec,
         )
+        res = res.map(self._loader_to_definition_graph_tensor)
+        return res
 
     @staticmethod
     def _no_none_arguments(proofstate_graph: tfgnn.GraphTensor) -> tf.Tensor:
@@ -229,11 +234,9 @@ class DataServerDataset:
         return local_arguments, global_arguments
 
     @staticmethod
-    def _loader_to_proofstate_graph_tensor(loader_data: tuple[LoaderProofstate, LoaderAction, int]) -> tfgnn.GraphTensor:
+    def _loader_to_proofstate_graph_tensor(state: LoaderProofstate, action: LoaderAction, id: int) -> tfgnn.GraphTensor:
         """Convert loader proofstate and action format to graph tensor"""
-        state, action, id = loader_data 
 
-        # state
         available_global_context = tf.convert_to_tensor(state.context.global_context, dtype = tf.int64)
         context_node_ids = tf.convert_to_tensor(state.context.local_context, dtype = tf.int64)
 
@@ -270,18 +273,3 @@ class DataServerDataset:
             'definition_name_vectors': tf.expand_dims(vectorized_definition_names.with_row_splits_dtype(tf.int32), axis=0)
         })
         return DataServerDataset._make_graph_tensor(defn.graph, context)
-
-
-    def _proofstates_generator(self, label, shuffle):
-        indices = self.data_server.datapoint_indices(label)
-        if shuffle: random.shuffle(indices)
-        for i in indices:
-            loader_proofstate = self.data_server.datapoint_graph(i)
-            yield self._loader_to_proofstate_graph_tensor(loader_proofstate)
-
-    def _definitions_generator(self, label, shuffle):
-        indices = self.data_server.def_cluster_indices(label)
-        if shuffle: random.shuffle(indices)
-        for i in indices:
-            loader_proofstate = self.data_server.def_cluster_subgraph(i)
-            yield self._loader_to_definition_graph_tensor(loader_proofstate)
