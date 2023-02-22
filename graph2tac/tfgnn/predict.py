@@ -8,7 +8,7 @@ import tensorflow_gnn as tfgnn
 from dataclasses import dataclass
 from pathlib import Path
 
-from graph2tac.loader.data_classes import GraphConstants, LoaderAction, LoaderProofstate, LoaderDefinition
+from graph2tac.loader.data_classes import GraphConstants, LoaderAction, LoaderProofstate, LoaderProofstateSpec, LoaderDefinition
 from graph2tac.tfgnn.dataset import DataServerDataset
 from graph2tac.tfgnn.tasks import PredictionTask, TacticPrediction, DefinitionTask, GLOBAL_ARGUMENT_PREDICTION
 from graph2tac.tfgnn.models import GraphEmbedding, LogitsFromEmbeddings
@@ -336,13 +336,8 @@ class TFGNNPredict(Predict):
 
         compute_and_replace_definition_embs = self._fetch_definition_computation()
         compute_and_replace_definition_embs(new_cluster_subgraph)
-        
 
-    # @tf.function(input_signature = DataServerDataset.proofstate_data_spec)
-    # def _make_proofstate_graph_tensor_from_data(self, state, action, graph_id):
-    #     x = DataServerDataset._make_proofstate_graph_tensor(state, action, graph_id)
-    #     return x
-
+    @tf.function(input_signature = (LoaderProofstateSpec,))
     def _make_proofstate_graph_tensor(self, state : LoaderProofstate):
         action = LoaderAction(self._dummy_tactic_id, tf.zeros(shape=(0, 2), dtype=tf.int64))
         graph_id = tf.constant(-1, dtype=tf.int64)
