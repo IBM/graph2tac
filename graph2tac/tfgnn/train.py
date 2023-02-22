@@ -306,10 +306,10 @@ class Trainer:
                                  metrics=self.prediction_task.metrics())
 
         # get training data
-        train_proofstates = self.dataset.proofstates(TRAIN, True)
-        valid_proofstates = self.dataset.proofstates(VALID, False)
+        train_proofstates = self.dataset.proofstates(TRAIN, shuffle=True)
+        valid_proofstates = self.dataset.proofstates(VALID, shuffle=False)
         if self.definition_task:
-            definitions = self.dataset.definitions(TRAIN, False)
+            definitions = self.dataset.definitions(TRAIN, shuffle=True)
         else:
             definitions = None
 
