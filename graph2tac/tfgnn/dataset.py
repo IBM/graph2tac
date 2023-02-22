@@ -92,7 +92,7 @@ class Dataset:
         data_parts = []
         for label in (TRAIN, VALID):
             # get proof-states
-            proofstate_dataset = self._proofstates(label)
+            proofstate_dataset = self._proofstates(label, shuffle=False)
 
             # filter out proof-states with term arguments
             if self.exclude_not_faithful:
@@ -104,7 +104,7 @@ class Dataset:
 
             # apply the symmetrization and self-edge transformations
             proofstate_dataset = proofstate_dataset.apply(self._preprocess)
-            proofstate_dataset = proofstate_dataset.cache()
+            #proofstate_dataset = proofstate_dataset.cache()
             data_parts.append(proofstate_dataset)
 
         train, valid = data_parts
@@ -122,7 +122,7 @@ class Dataset:
         @return: a dataset with all the definition clusters
         """
         definitions = self._definitions(label).apply(self._preprocess)
-        definitions = definitions.cache()
+        #definitions = definitions.cache()
         if shuffle:
             definitions = definitions.shuffle(buffer_size=self.SHUFFLE_BUFFER_SIZE)
         return definitions
