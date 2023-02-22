@@ -542,10 +542,10 @@ class DataServer(AbstractDataServer):
 
         return IterableLen(map(self.datapoint_graph, ids), len(ids))
 
-    def data_train(self, shuffled: bool = False,  as_text: bool = False) -> Iterable[Union[tuple[LoaderProofstate, LoaderAction, int], tuple[str, str]]]:
-        return self.get_datapoints(TRAIN, shuffled = shuffled, as_text = as_text)
-    def data_valid(self, as_text: bool = False) -> Iterable[Union[tuple[LoaderProofstate, LoaderAction, int], tuple[str, str]]]:
-        return self.get_datapoints(VALID, as_text = as_text)
+    def data_train(self, shuffled: bool = False) -> Iterable[Union[tuple[LoaderProofstate, LoaderAction, int], tuple[str, str]]]:
+        return self.get_datapoints(TRAIN, shuffled = shuffled)
+    def data_valid(self) -> Iterable[Union[tuple[LoaderProofstate, LoaderAction, int], tuple[str, str]]]:
+        return self.get_datapoints(VALID)
 
     def def_cluster_indices(self, *labels):
         if not labels: return list(range(self._def_clusters))
