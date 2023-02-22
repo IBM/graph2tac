@@ -346,7 +346,7 @@ class TFGNNPredict(Predict):
     def _make_proofstate_graph_tensor(self, state : LoaderProofstate):
         action = LoaderAction(self._dummy_tactic_id, tf.zeros(shape=(0, 2), dtype=tf.int64))
         graph_id = tf.constant(-1, dtype=tf.int64)
-        x = DataServerDataset._loader_to_proofstate_graph_tensor((state, action, graph_id))
+        x = DataServerDataset._loader_to_proofstate_graph_tensor(state, action, graph_id)
         #x = self._make_proofstate_graph_tensor_from_data(*x)
         return x
 
