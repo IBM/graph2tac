@@ -643,9 +643,9 @@ class DataServerDataset(Dataset):
         state, action, id = loader_data 
         # state
         graph = state.graph
-        graph_tuple = (graph.nodes.astype("int64"), graph.edges.astype("int32"), graph.edge_labels.astype("int64"), graph.edge_offsets.astype("int64"))
-        context_tuple = (state.context.local_context.astype("int64"), state.context.global_context.astype("int64"))
-        metadata_tuple = (state.metadata.name, np.array(state.metadata.step, dtype="int64"), np.array(state.metadata.is_faithful, dtype="int64"))
+        graph_tuple = (graph.nodes, graph.edges, graph.edge_labels, graph.edge_offsets)
+        context_tuple = (state.context.local_context, state.context.global_context)
+        metadata_tuple = (state.metadata.name, state.metadata.step, state.metadata.is_faithful)
         state_tuple = (graph_tuple, state.root, context_tuple, metadata_tuple)
 
         # action
@@ -668,9 +668,9 @@ class DataServerDataset(Dataset):
     def _loader_to_definition_data(defn: LoaderDefinition) -> tuple:
         """Convert loader definition format to corresponding format for definition_data_spec"""
         graph = defn.graph
-        graph_tuple = (graph.nodes.astype("int64"), graph.edges.astype("int32"), graph.edge_labels.astype("int64"), graph.edge_offsets.astype("int64"))
+        graph_tuple = (graph.nodes, graph.edges, graph.edge_labels, graph.edge_offsets)
 
-        return (graph_tuple, np.array(defn.num_definitions, dtype="int64"), defn.definition_names)
+        return (graph_tuple, defn.num_definitions, defn.definition_names)
 
     def _definitions(self, label) -> tf.data.Dataset:
         """
