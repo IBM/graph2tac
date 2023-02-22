@@ -26,6 +26,11 @@ class IterableLen:
     def __len__(self):
         return self.length
 
+def filtermap(f, it):
+    for x in it:
+        y = f(it)
+        if y is not None: yield y
+
 # possible symmetrizations
 BIDIRECTIONAL = 'bidirectional'
 UNDIRECTED = 'undirected'
@@ -483,6 +488,8 @@ class DataServer(AbstractDataServer):
         )
 
         is_faithful = proof_step.tactic.text.replace('@', '') == proof_step.tactic.interm_text.replace('@', '')
+        if self.exclude_not_faithful and not is_faithful: return None
+
         metadata = ProofstateMetadata(
             name=definition.name.encode('utf-8'),
             step=index,
@@ -498,6 +505,7 @@ class DataServer(AbstractDataServer):
 
         tactic_i = self._tactic_to_i[proof_step.tactic.ident]
 
+        has_none_argument = False
         if proof_step.tactic_arguments:
             arguments = []
             local_nodes_to_ctx_i = { node : i for i,node in enumerate(local_context) }
@@ -512,10 +520,14 @@ class DataServer(AbstractDataServer):
                     arguments.append([1, arg_global])
                     continue
                 else:
+                    has_none_argument = False
                     arguments.append([0, len(local_context_i)])
             arguments = np.array(arguments, dtype = np.uint32)
         else:
+            has_none_argument = True
             arguments = np.zeros([0,2], dtype = np.uint32)
+
+        if has_none_argument and self.exclude_none_arguments: return None
 
         action = LoaderAction(
             tactic_id=tactic_i,
@@ -540,7 +552,7 @@ class DataServer(AbstractDataServer):
         ids = self.datapoint_indices(label)
         if shuffled: random.shuffle(ids)
 
-        return IterableLen(map(self.datapoint_graph, ids), len(ids))
+        return IterableLen(filtermap(self.datapoint_graph, ids), len(ids))
 
     def data_train(self, shuffled: bool = False) -> Iterable[Union[tuple[LoaderProofstate, LoaderAction, int], tuple[str, str]]]:
         return self.get_datapoints(TRAIN, shuffled = shuffled)
@@ -560,4 +572,4 @@ class DataServer(AbstractDataServer):
     def def_cluster_subgraphs(self, label : int = TRAIN, shuffled: bool = False) -> Iterable[LoaderDefinition]:
         ids = self.def_cluster_indices(label)
         if shuffled: random.shuffle(ids)
-        return IterableLen(map(self.def_cluster_subgraph, ids), len(self._def_clusters))
+        return IterableLen(map(self.def_cluster_subgraph, ids), len(ids))
