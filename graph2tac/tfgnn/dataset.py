@@ -550,6 +550,7 @@ class DataServerDataset(Dataset):
         return local_arguments, global_arguments
 
     @classmethod
+    @tf.function(input_signature = proofstate_data_spec)
     def _make_proofstate_graph_tensor(cls,
                                       state: Tuple,
                                       action: Tuple,
@@ -602,6 +603,7 @@ class DataServerDataset(Dataset):
         return DataServerDataset._make_proofstate_graph_tensor(state, action, graph_id)
     
     @classmethod
+    @tf.function(input_signature = definition_data_spec)
     def _make_definition_graph_tensor(cls,
                                       loader_graph: Tuple,
                                       num_definitions: tf.Tensor,
