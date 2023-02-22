@@ -1,6 +1,7 @@
 from typing import Tuple, Dict, Optional, Any, Callable
 
 import argparse
+import numpy as np
 import yaml
 import tensorflow as tf
 import tensorflow_gnn as tfgnn
@@ -594,7 +595,12 @@ class DataServerDataset(Dataset):
         return tfgnn.GraphTensor.from_pieces(node_sets=bare_graph_tensor.node_sets,
                                              edge_sets=bare_graph_tensor.edge_sets,
                                              context=context)
-
+    
+    @staticmethod
+    def _wrap_make_proofstate_graph_tensor(x) -> tfgnn.GraphTensor:
+        state, action, graph_id = x
+        return DataServerDataset._make_proofstate_graph_tensor(state, action, graph_id)
+    
     @classmethod
     def _make_definition_graph_tensor(cls,
                                       loader_graph: Tuple,
@@ -625,20 +631,25 @@ class DataServerDataset(Dataset):
                                              context=context)
 
     @staticmethod
+    def _wrap_make_definition_graph_tensor(x) -> tfgnn.GraphTensor:
+        loader_graph, num_definitions, definition_names = x
+        return DataServerDataset._make_definition_graph_tensor(loader_graph, num_definitions, definition_names)
+
+    @staticmethod
     def _loader_to_proofstate_data(loader_data: tuple[LoaderProofstate, LoaderAction, int]) -> tuple:
         """Convert loader proofstate and action format to corresponding format for proofstate_data_spec"""
         state, action, id = loader_data 
         # state
         graph = state.graph
-        graph_tuple = (graph.nodes, graph.edges, graph.edge_labels, graph.edge_offsets)
-        context_tuple = (state.context.local_context, state.context.global_context)
-        metadata_tuple = (state.metadata.name, state.metadata.step, state.metadata.is_faithful)
+        graph_tuple = (graph.nodes.astype("int64"), graph.edges.astype("int32"), graph.edge_labels.astype("int64"), graph.edge_offsets.astype("int64"))
+        context_tuple = (state.context.local_context.astype("int64"), state.context.global_context.astype("int64"))
+        metadata_tuple = (state.metadata.name, np.array(state.metadata.step, dtype="int64"), np.array(state.metadata.is_faithful, dtype="int64"))
         state_tuple = (graph_tuple, state.root, context_tuple, metadata_tuple)
 
         # action
-        action_tuple = (action.tactic_id, action.args)
+        action_tuple = (np.array(action.tactic_id, dtype="int64"), action.args.astype("int64"))
 
-        return (state_tuple, action_tuple, id)
+        return (state_tuple, action_tuple, np.array(id, dtype="int64"))
 
     def _proofstates(self, label : int = TRAIN) -> tf.data.Dataset:
         """
@@ -647,18 +658,17 @@ class DataServerDataset(Dataset):
         @return: a tf.data.Dataset streaming GraphTensor objects
         """
         proofstates = tf.data.Dataset.from_generator(
-            lambda: map(self._loader_to_proofstate_data, self.data_server.get_datapoints(label, shuffled=False, as_text=False)),
-            output_signature=self.proofstate_data_spec
-        )
-        return proofstates.map(self._make_proofstate_graph_tensor, num_parallel_calls=tf.data.AUTOTUNE)
+            lambda: map(self._wrap_make_proofstate_graph_tensor, map(self._loader_to_proofstate_data, self.data_server.get_datapoints(label, shuffled=False, as_text=False))),
+            output_signature=proofstate_graph_spec)
+        return proofstates
 
     @staticmethod
     def _loader_to_definition_data(defn: LoaderDefinition) -> tuple:
         """Convert loader definition format to corresponding format for definition_data_spec"""
         graph = defn.graph
-        graph_tuple = (graph.nodes, graph.edges, graph.edge_labels, graph.edge_offsets)
+        graph_tuple = (graph.nodes.astype("int64"), graph.edges.astype("int32"), graph.edge_labels.astype("int64"), graph.edge_offsets.astype("int64"))
 
-        return (graph_tuple, defn.num_definitions, defn.definition_names)
+        return (graph_tuple, np.array(defn.num_definitions, dtype="int64"), defn.definition_names)
 
     def _definitions(self, label) -> tf.data.Dataset:
         """
@@ -667,7 +677,7 @@ class DataServerDataset(Dataset):
         @return: a tf.data.Dataset streaming GraphTensor objects
         """
         dataset = tf.data.Dataset.from_generator(
-            lambda: map(self._loader_to_definition_data, self.data_server.def_cluster_subgraphs(label)),
-            output_signature=self.definition_data_spec
+            lambda: map(self._wrap_make_definition_graph_tensor, map(self._loader_to_definition_data, self.data_server.def_cluster_subgraphs(label))),
+            output_signature=definition_graph_spec
         )
-        return dataset.map(self._make_definition_graph_tensor, num_parallel_calls=tf.data.AUTOTUNE)
+        return dataset
