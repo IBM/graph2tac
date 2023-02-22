@@ -316,11 +316,13 @@ class Trainer:
         train_proofstates = (train_proofstates
             .apply(lambda dataset: self._prepare_dataset(dataset, definitions))
             .batch(batch_size)
+            .cache()
             .prefetch(tf.data.AUTOTUNE)
         )
         valid_proofstates = (valid_proofstates
             .apply(lambda dataset: self._prepare_dataset(dataset, definitions))
             .batch(batch_size)
+            .cache()
             .prefetch(tf.data.AUTOTUNE)
         )
 
