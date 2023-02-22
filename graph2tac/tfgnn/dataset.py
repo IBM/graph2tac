@@ -92,7 +92,7 @@ class Dataset:
         data_parts = []
         for label in (TRAIN, VALID):
             # get proof-states
-            proofstate_dataset = self._proofstates(label, shuffle=False)
+            proofstate_dataset = self._proofstates(label)
 
             # filter out proof-states with term arguments
             if self.exclude_not_faithful:
