@@ -15,7 +15,7 @@ from graph2tac.tfgnn.models import GraphEmbedding, LogitsFromEmbeddings
 from graph2tac.tfgnn.train import Trainer
 from graph2tac.common import logger
 from graph2tac.predict import Predict, predict_api_debugging, cartesian_product, NUMPY_NDIM_LIMIT
-from graph2tac.tfgnn.graph_schema import proofstate_graph_spec, vectorized_definition_graph_spec
+from graph2tac.tfgnn.graph_schema import vectorized_definition_graph_spec
 
 
 def stack_dicts_with(f, ds):
@@ -366,12 +366,6 @@ class TFGNNPredict(Predict):
                                                  output_signature=DataServerDataset.proofstate_data_spec)
         #dataset = dataset.map(DataServerDataset._make_proofstate_graph_tensor)
         return dataset
-
-    # @tf.function(input_signature = DataServerDataset.definition_data_spec)
-    # def _make_definition_graph_tensor_from_data(self, loader_graph, num_definitions, definition_names):
-    #     x = DataServerDataset._make_definition_graph_tensor(loader_graph, num_definitions, definition_names)
-    #     x = self._dataset.tokenize_definition_graph(x)
-    #     return x
 
     @staticmethod
     def _logits_decoder(logits: tf.Tensor, total_expand_bound: int) -> Tuple[np.ndarray, np.ndarray]:

@@ -1,4 +1,3 @@
-import numpy as np
 from dataclasses import dataclass
 import tensorflow as tf
 from collections import namedtuple

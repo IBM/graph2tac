@@ -106,7 +106,7 @@ class DataServerDataset:
                                                                   ragged=True)
         #self._label_tokenizer.adapt(graph_constants.label_to_names)
 
-    def proofstates(self, label, shuffle) -> Tuple[tf.data.Dataset, tf.data.Dataset]:
+    def proofstates(self, label, shuffle) -> tf.data.Dataset:
         """
         Returns a pair of proof-state datasets for train and validation.
 
@@ -255,7 +255,7 @@ class DataServerDataset:
         })
         return DataServerDataset._make_graph_tensor(state.graph, context)
 
-    def _loader_to_definition_graph_tensor(self, defn: LoaderDefinition) -> tuple:
+    def _loader_to_definition_graph_tensor(self, defn: LoaderDefinition) -> tfgnn.GraphTensor:
         """Convert loader definition format to corresponding format for definition_data_spec"""
 
         num_definitions = tf.convert_to_tensor(defn.num_definitions, dtype = tf.int64)
