@@ -309,7 +309,7 @@ class Trainer:
         train_proofstates = self.dataset.proofstates(TRAIN, True)
         valid_proofstates = self.dataset.proofstates(VALID, False)
         if self.definition_task:
-            definitions = self.dataset.definitions(TRAIN, False)
+            definitions = self.dataset.definitions(TRAIN, True)
         else:
             definitions = None
 
