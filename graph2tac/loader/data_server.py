@@ -28,7 +28,7 @@ class IterableLen:
 
 def filtermap(f, it):
     for x in it:
-        y = f(it)
+        y = f(x)
         if y is not None: yield y
 
 # possible symmetrizations
