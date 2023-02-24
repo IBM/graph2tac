@@ -174,9 +174,9 @@ class AbstractDataServer:
                 )
             if self.add_self_edges:
                 l = len(edges_by_labels)
-                edges_by_labels.append(
+                edges_by_labels.append([
                     [a,a,l] for a in range(len(nodes))
-                )
+                ])
             edge_offsets = np.cumsum([
                 len(x) for x in edges_by_labels
             ])[:-1].astype(np.uint32)
