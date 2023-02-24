@@ -308,7 +308,7 @@ class Trainer:
         # get training data
         train_proofstates, valid_proofstates = self.dataset.proofstates(shuffle=True)
         if self.definition_task:
-            definitions = self.dataset.definitions(TRAIN, shuffle=False)
+            definitions = self.dataset.definitions(TRAIN, shuffle=True)
         else:
             definitions = None
 
