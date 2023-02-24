@@ -42,6 +42,8 @@ class AbstractDataServer:
         self.max_subgraph_size = max_subgraph_size
         self.bfs_option = bfs_option
         self.stop_at_definitions = stop_at_definitions
+        if symmetrization not in (BIDIRECTIONAL, UNDIRECTED, None):
+            raise ValueError(f'{symmetrization} is not a valid graph symmetrization scheme (use {BIDIRECTIONAL}, {UNDIRECTED} or None)')
         self.symmetrization = symmetrization
         self.add_self_edges = add_self_edges
 
