@@ -26,15 +26,26 @@ class IterableLen:
     def __len__(self):
         return self.length
 
+# possible symmetrizations
+BIDIRECTIONAL = 'bidirectional'
+UNDIRECTED = 'undirected'
+
 class AbstractDataServer:
     def __init__(self,
-                 max_subgraph_size,
-                 bfs_option = True,
+                 max_subgraph_size: int = 0,
+                 bfs_option: bool = True,
                  stop_at_definitions: bool = True,
+                 symmetrization: Optional[str] = None,
+                 add_self_edges: bool = False,
     ):
+        assert max_subgraph_size, "Necessary to set max_subgraph_size"
         self.max_subgraph_size = max_subgraph_size
         self.bfs_option = bfs_option
         self.stop_at_definitions = stop_at_definitions
+        if symmetrization not in (BIDIRECTIONAL, UNDIRECTED, None):
+            raise ValueError(f'{symmetrization} is not a valid graph symmetrization scheme (use {BIDIRECTIONAL}, {UNDIRECTED} or None)')
+        self.symmetrization = symmetrization
+        self.add_self_edges = add_self_edges
 
         self._initialize()
 
@@ -76,6 +87,11 @@ class AbstractDataServer:
                 edge_labels[i] = edge_label_num
             edge_label_num += 1
         self._edge_labels = edge_labels
+        self._base_edge_label_num = edge_label_num
+        if self.symmetrization == BIDIRECTIONAL:
+            edge_label_num *= 2
+        if self.add_self_edges:
+            edge_label_num += 1
         self._edge_label_num = edge_label_num
 
     # Definition / Tactic registration
@@ -140,10 +156,29 @@ class AbstractDataServer:
             for node in nodes
         ]
 
-        if edges:
-            edges_by_labels = [[] for _ in range(self._edge_label_num)]
+        if edges or (nodes and self.add_self_edges):
+            edges_by_labels = [[] for _ in range(self._base_edge_label_num)]
             for edge in edges:
                 edges_by_labels[edge[2]].append(edge)
+            if self.symmetrization == UNDIRECTED:
+                for e in edges_by_labels:
+                    e.extend(
+                        (b,a,l)
+                        for a,b,l in list(e)
+                    )
+            elif self.symmetrization == BIDIRECTIONAL:
+                edges_by_labels.extend(
+                    [
+                        (b,a, l+self._base_edge_label_num)
+                        for a,b,l in e
+                    ]
+                    for e in list(edges_by_labels)
+                )
+            if self.add_self_edges:
+                l = len(edges_by_labels)
+                edges_by_labels.append([
+                    [a,a,l] for a in range(len(nodes))
+                ])
             edge_offsets = np.cumsum([
                 len(x) for x in edges_by_labels
             ])[:-1].astype(np.uint32)
@@ -173,7 +208,7 @@ class AbstractDataServer:
                 for n in roots
             ], dtype = self._def_name_dtype)
         )
-
+    
 TRAIN = 0
 VALID = 1
 HOLDOUT = 2 # maybe unnecessary
@@ -260,15 +295,20 @@ def get_splitter(split_method, split):
 class DataServer(AbstractDataServer):
     def __init__(self,
                  data_dir: Path,
-                 max_subgraph_size,
                  split : Splitter = SplitByHash([9,1],0),
-                 bfs_option = True,
                  restrict_to_spine: bool = False,
-                 stop_at_definitions: bool = True,
+                 exclude_none_arguments: bool = False,
+                 exclude_not_faithful: bool = False,
+                 **kwargs,
     ):
-        super().__init__(max_subgraph_size, bfs_option, stop_at_definitions)
+        super().__init__(**kwargs)
         self.data_dir = data_dir
         self.restrict_to_spine = restrict_to_spine
+
+        # TODO: the following arguments are not taken into account here yet,
+        # still processed inside tfgnn.Dataset
+        self.exclude_none_arguments = exclude_none_arguments
+        self.exclude_not_faithful = exclude_not_faithful
 
         self._proof_steps : list[tuple[Outcome, Definition, int]] = []
         self._def_clusters : list[list[Definition]] = []
@@ -422,11 +462,9 @@ class DataServer(AbstractDataServer):
         self._def_to_file_ctx[definition] = res        
         return res
 
-    def _datapoint_graph(self, i):
+    def datapoint_graph(self, i):
         proof_step, definition, index = self._proof_steps[i]
-        graph, node_to_i = self._downward_closure(
-            [proof_step.before.root]
-        )
+        graph, node_to_i = self._downward_closure([proof_step.before.root])
         root_i = 0
         local_context = proof_step.before.context
         local_context_i = [node_to_i[n] for n in local_context]
@@ -487,40 +525,41 @@ class DataServer(AbstractDataServer):
         )
         return proofstate, action, i
 
-    def _datapoint_text(self, i):
+    def datapoint_text(self, i):
         proof_step, _, _ = self._proof_steps[i]
         state_text = proof_step.before.text
         label_text = proof_step.tactic.text
         return state_text, label_text
 
-    def _select_data_points(self, label : int):
-        return [
+    def datapoint_indices(self, *labels):
+        if not labels: return list(range(len(self._proof_steps)))
+        else: return [
             i for i,(_,d,_) in enumerate(self._proof_steps)
-            if self.split.lemma(d) == label
+            if self.split.lemma(d) in labels
         ]
 
-    def get_datapoints(self, label : int, shuffled: bool = False, as_text: bool = False) -> Iterable[tuple[LoaderProofstate, LoaderAction, int] | tuple[str, str]]:
-        ids = self._select_data_points(label)
-        if shuffled:
-            ids = list(ids)
-            random.shuffle(ids)
+    def get_datapoints(self, label : int, shuffled: bool = False) -> Iterable[tuple[LoaderProofstate, LoaderAction, int] | tuple[str, str]]:
+        ids = self.datapoint_indices(label)
+        if shuffled: random.shuffle(ids)
 
-        if as_text:
-            return IterableLen(map(self._datapoint_text, ids), len(ids))
-        else:
-            return IterableLen(map(self._datapoint_graph, ids), len(ids))
-    
-    def data_train(self, shuffled: bool = False,  as_text: bool = False) -> Iterable[Union[tuple[LoaderProofstate, LoaderAction, int], tuple[str, str]]]:
-        return self.get_datapoints(TRAIN, shuffled = shuffled, as_text = as_text)
-    def data_valid(self, as_text: bool = False) -> Iterable[Union[tuple[LoaderProofstate, LoaderAction, int], tuple[str, str]]]:
-        return self.get_datapoints(VALID, as_text = as_text)
+        return IterableLen(map(self.datapoint_graph, ids), len(ids))
+
+    def data_train(self, shuffled: bool = False) -> Iterable[tuple[LoaderProofstate, LoaderAction, int]]:
+        return self.get_datapoints(TRAIN, shuffled = shuffled)
+    def data_valid(self) -> Iterable[Union[tuple[LoaderProofstate, LoaderAction, int]]]:
+        return self.get_datapoints(VALID)
+
+    def def_cluster_indices(self, *labels):
+        if not labels: return list(range(len(self._def_clusters)))
+        else: return [
+            i for i,ds in enumerate(self._def_clusters)
+            if self.split.definition_cluster(ds) in labels
+        ]
 
     def def_cluster_subgraph(self, i : int) -> LoaderDefinition:
         return self.cluster_to_graph(self._def_clusters[i])
 
-    def def_cluster_subgraphs(self, label : int = TRAIN) -> Iterable[LoaderDefinition]:
-        ids = [
-            i for i,ds in enumerate(self._def_clusters)
-            if self.split.definition_cluster(ds) == label
-        ]
+    def def_cluster_subgraphs(self, label : int = TRAIN, shuffled: bool = False) -> Iterable[LoaderDefinition]:
+        ids = self.def_cluster_indices(label)
+        if shuffled: random.shuffle(ids)
         return IterableLen(map(self.def_cluster_subgraph, ids), len(self._def_clusters))

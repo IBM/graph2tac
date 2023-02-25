@@ -1,5 +1,5 @@
 from typing import Iterable, Dict, Any, Callable, Optional, Tuple, Union
-from graph2tac.tfgnn.dataset import Dataset
+from graph2tac.tfgnn.dataset import DataServerDataset
 
 import tensorflow as tf
 import tensorflow_gnn as tfgnn
@@ -975,7 +975,7 @@ class DenseDefinitionHead(tf.keras.layers.Layer):
             self._name_layer = tf.keras.Sequential([
                 tf.keras.layers.Input(shape=[None], dtype=tf.float32, ragged=True),
                 tf.keras.layers.Embedding(
-                    input_dim=Dataset.MAX_LABEL_TOKENS,
+                    input_dim=DataServerDataset.MAX_LABEL_TOKENS,
                     output_dim=hidden_size,
                 ),
                 self._name_layer_core,

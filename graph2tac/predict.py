@@ -54,14 +54,10 @@ class Predict:
         - `initialize`: set the global context during evaluation
         - `compute_new_definitions`: update node label embeddings using definition cluster graphs
         - `ranked_predictions`: make predictions for a single proof-state
-        - `get_tactic_index_to_numargs`: access the value of `tactic_index_to_numargs` seen during training
-        - `get_tactic_index_to_hash`: access the value of `tactic_index_to_hash` seen during training
-        - `get_label_to_name`: access the value of `label_to_name` seen during training
-        - `get_label_to_ident`: access the value of `label_to_ident` seen during training
-        - `get_label_in_spine`: access the value of `label_in_spine` seen during training
-        - `get_max_subgraph_size`: access the value of `max_subgraph_size` seen during training
+    and the following attribute:
+        - `graph_constants`: Dataset constants of type `GraphConstants` seen during training
     """
-    _graph_constants: GraphConstants
+    graph_constants: GraphConstants
     _debug_dir: Optional[Path]
     _timings: Dict[str, Tuple[float, int]]
 
@@ -71,10 +67,10 @@ class Predict:
         @param graph_constants: the graph constants seen during training
         @param debug_dir: a directory where all api calls will be logged for debugging purposes
         """
-        self._graph_constants = graph_constants
+        self.graph_constants = graph_constants 
         self._debug_dir = debug_dir
         self._timings = {}
-        assert self._graph_constants is not None
+        assert self.graph_constants is not None
 
         # if debug mode is on, initialize evaluation logging directory
         if self._debug_dir is not None:
@@ -88,55 +84,6 @@ class Predict:
             logger.info(f'running Predict in debug mode, messages will be stored at {self._run_dir}')
 
             self._debug_message_number = 0
-
-    @predict_api_debugging
-    def get_tactic_index_to_numargs(self) -> np.ndarray:
-        """
-        [ Public API ] Returns the tactic_index_to_numargs seen during training
-        """
-        return self._graph_constants.tactic_index_to_numargs
-
-    @predict_api_debugging
-    def get_tactic_index_to_hash(self) -> np.ndarray:
-        """
-        [ Public API ] Returns the tactic_index_to_hash seen during training
-        """
-        return self._graph_constants.tactic_index_to_hash
-
-    @predict_api_debugging
-    def get_tactic_index_to_string(self) -> np.ndarray:
-        """
-        [ Public API ] Returns the tactic_index_to_string seen during training
-        """
-        return self._graph_constants.tactic_index_to_string
-
-    @predict_api_debugging
-    def get_label_to_name(self) -> List[str]:
-        """
-        [ Public API ] Returns the label_to_names seen during training
-        """
-        return self._graph_constants.label_to_names
-
-    @predict_api_debugging
-    def get_label_to_ident(self) -> List[str]:
-        """
-        [ Public API ] Returns the label_to_names seen during training
-        """
-        return self._graph_constants.label_to_ident
-
-    @predict_api_debugging
-    def get_label_in_spine(self) -> List[bool]:
-        """
-        [ Public API ] Returns the label_in_spine seen during training
-        """
-        return self._graph_constants.label_in_spine
-
-    @predict_api_debugging
-    def get_max_subgraph_size(self) -> int:
-        """
-        [ Public API ] Returns the max_subgraph_size seen during training
-        """
-        return self._graph_constants.max_subgraph_size
 
     @predict_api_debugging
     def initialize(self, global_context: Optional[List[int]] = None) -> None:

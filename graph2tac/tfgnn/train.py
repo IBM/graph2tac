@@ -10,7 +10,7 @@ import tensorflow as tf
 import tensorflow_gnn as tfgnn
 from pathlib import Path
 
-from graph2tac.tfgnn.dataset import Dataset, DataServerDataset, TRAIN, VALID
+from graph2tac.tfgnn.dataset import DataServerDataset, TRAIN, VALID
 from graph2tac.tfgnn.tasks import PredictionTask, DefinitionTask, DefinitionNormSquaredLoss
 from graph2tac.tfgnn.graph_schema import vectorized_definition_graph_spec, batch_graph_spec
 from graph2tac.tfgnn.train_utils import QCheckpointManager, ExtendedTensorBoard, DefinitionLossScheduler
@@ -25,7 +25,7 @@ class Trainer:
     DEFINITION_EMBEDDING = 'definition_embedding'
 
     def __init__(self,
-                 dataset: Dataset,
+                 dataset: DataServerDataset,
                  prediction_task: PredictionTask,
                  serialized_optimizer: Dict,
                  definition_task: Optional[DefinitionTask] = None,
@@ -41,7 +41,7 @@ class Trainer:
         definition task, if using). This is automatically the case when calling the `from_yaml_config` method, but
         it is otherwise the end-user's responsibility.
 
-        @param dataset: a `graph2tac.tfgnn.dataset.Dataset` object providing proof-states and definitions
+        @param dataset: a `graph2tac.tfgnn.dataset.DataServerDataset` object providing proof-states and definitions
         @param prediction_task: the `graph2tac.tfgnn.tasks.PredictionTask` to use for proofstates
         @param serialized_optimizer: the optimizer to use, as serialized by tf.keras.optimizers.serialize
         @param definition_task: the `graph2tac.tfgnn.tasks.DefinitionTask` to use for definitions (or `None` to skip)
@@ -134,7 +134,7 @@ class Trainer:
 
             self._to_yaml_config(directory=config_dir,
                                  filename='graph_constants',
-                                 config=dataset._graph_constants.__dict__)
+                                 config=dataset.graph_constants.__dict__)
 
             self._to_yaml_config(directory=config_dir,
                                  filename='dataset',
@@ -181,7 +181,7 @@ class Trainer:
 
     @classmethod
     def from_yaml_config(cls,
-                         dataset: Dataset,
+                         dataset: DataServerDataset,
                          trainer_config: Path,
                          prediction_task_config: Path,
                          definition_task_config: Optional[Path] = None,
@@ -190,7 +190,7 @@ class Trainer:
         with trainer_config.open() as yaml_file:
             trainer_config = yaml.load(yaml_file, Loader=yaml.SafeLoader)
 
-        prediction_task = PredictionTask.from_yaml_config(graph_constants=dataset.graph_constants(),
+        prediction_task = PredictionTask.from_yaml_config(graph_constants=dataset.graph_constants,
                                                           yaml_filepath=prediction_task_config)
 
         if definition_task_config is not None:
@@ -231,12 +231,12 @@ class Trainer:
         return (proofstate_graph, definition_graph), outputs
 
     def _prepare_dataset(self, dataset: tf.data.Dataset, definitions: Optional[tf.data.Dataset]) -> tf.data.Dataset:
+
         # create input-output pairs
         dataset = dataset.map(self.prediction_task.create_input_output)
 
         # add definitions if necessary
         if definitions is not None:
-            definitions = definitions.map(self.dataset.tokenize_definition_graph)
             definitions = definitions.repeat()
             dataset = tf.data.Dataset.zip(datasets=(dataset, definitions))
             dataset = dataset.map(self._input_output_mixing)
@@ -306,9 +306,10 @@ class Trainer:
                                  metrics=self.prediction_task.metrics())
 
         # get training data
-        train_proofstates, valid_proofstates = self.dataset.proofstates(shuffle=True)
+        train_proofstates = self.dataset.proofstates(TRAIN, shuffle=True)
+        valid_proofstates = self.dataset.proofstates(VALID, shuffle=False)
         if self.definition_task:
-            definitions = self.dataset.definitions(TRAIN, shuffle=False)
+            definitions = self.dataset.definitions(TRAIN, shuffle=True)
         else:
             definitions = None
 
