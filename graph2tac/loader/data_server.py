@@ -520,11 +520,10 @@ class DataServer(AbstractDataServer):
                     arguments.append([1, arg_global])
                     continue
                 else:
-                    has_none_argument = False
+                    has_none_argument = True
                     arguments.append([0, len(local_context_i)])
             arguments = np.array(arguments, dtype = np.uint32)
         else:
-            has_none_argument = True
             arguments = np.zeros([0,2], dtype = np.uint32)
 
         if has_none_argument and self.exclude_none_arguments: return None

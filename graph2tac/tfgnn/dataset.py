@@ -27,8 +27,6 @@ class DataServerDataset:
                  data_dir: Path,
                  split_method : str,
                  split,
-                 exclude_none_arguments: bool = False,
-                 exclude_not_faithful: bool = False,
                  graph_constants = None,
                  **kwargs,
     ):
@@ -53,8 +51,6 @@ class DataServerDataset:
         if graph_constants is None:
             graph_constants = self.data_server.graph_constants()
 
-        self.exclude_none_arguments = exclude_none_arguments
-        self.exclude_not_faithful = exclude_not_faithful
         self.graph_constants = graph_constants
         vocabulary = [
             chr(i) for i in range(ord('a'), ord('z')+1)
@@ -86,14 +82,6 @@ class DataServerDataset:
             output_signature=(LoaderProofstateSpec, LoaderActionSpec, graph_id_spec),
         )
         proofstate_dataset = proofstate_dataset.map(self._loader_to_proofstate_graph_tensor)
-
-        # filter out proof-states with term arguments
-        # if self.exclude_not_faithful:
-        #     proofstate_dataset = proofstate_dataset.filter(lambda proofstate_graph: tf.reduce_all(proofstate_graph.context['faithful'] == 1))
-
-        # filter out proof-states with `None` arguments
-        # if self.exclude_none_arguments:
-        #     proofstate_dataset = proofstate_dataset.filter(self._no_none_arguments)
 
         return proofstate_dataset
 
