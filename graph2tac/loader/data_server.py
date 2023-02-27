@@ -310,8 +310,6 @@ class DataServer(AbstractDataServer):
         self.data_dir = data_dir
         self.restrict_to_spine = restrict_to_spine
 
-        # TODO: the following arguments are not taken into account here yet,
-        # still processed inside tfgnn.Dataset
         self.exclude_none_arguments = exclude_none_arguments
         self.exclude_not_faithful = exclude_not_faithful
 

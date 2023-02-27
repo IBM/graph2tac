@@ -70,7 +70,6 @@ class DataServerDataset:
                                                                   max_tokens=self.MAX_LABEL_TOKENS,
                                                                   vocabulary = vocabulary,
                                                                   ragged=True)
-        #self._label_tokenizer.adapt(graph_constants.label_to_names)
 
     def proofstates(self, label, shuffle) -> tf.data.Dataset:
         """
@@ -127,8 +126,8 @@ class DataServerDataset:
             'symmetrization': self.data_server.symmetrization,
             'add_self_edges': self.data_server.add_self_edges,
             'max_subgraph_size': self.data_server.max_subgraph_size,
-            'exclude_none_arguments': self.exclude_none_arguments,
-            'exclude_not_faithful': self.exclude_not_faithful
+            'exclude_none_arguments': self.data_server.exclude_none_arguments,
+            'exclude_not_faithful': self.data_server.exclude_not_faithful
         }
 
     @classmethod
