@@ -27,12 +27,10 @@ class DataServerDataset:
                  data_dir: Path,
                  split_method : str,
                  split,
-                 max_subgraph_size: int = 1024,
-                 symmetrization: Optional[str] = None,
-                 add_self_edges: bool = False,
                  exclude_none_arguments: bool = False,
                  exclude_not_faithful: bool = False,
                  graph_constants = None,
+                 **kwargs,
     ):
         """
         @param data_dir: the directory containing the data
@@ -48,18 +46,13 @@ class DataServerDataset:
 
         if data_dir is not None:
             self.data_server = DataServer(data_dir=data_dir,
-                                          max_subgraph_size=max_subgraph_size,
                                           split = get_splitter(split_method, split),
+                                          **kwargs,
             )
 
         if graph_constants is None:
             graph_constants = self.data_server.graph_constants()
 
-        if symmetrization is not None and symmetrization != BIDIRECTIONAL and symmetrization != UNDIRECTED:
-            raise ValueError(f'{symmetrization} is not a valid graph symmetrization scheme (use {BIDIRECTIONAL}, {UNDIRECTED} or None)')
-        self.symmetrization = symmetrization
-        self.add_self_edges = add_self_edges
-        self.max_subgraph_size = max_subgraph_size
         self.exclude_none_arguments = exclude_none_arguments
         self.exclude_not_faithful = exclude_not_faithful
         self.graph_constants = graph_constants
@@ -79,7 +72,7 @@ class DataServerDataset:
                                                                   ragged=True)
         #self._label_tokenizer.adapt(graph_constants.label_to_names)
 
-    def proofstates(self, label, shuffle) -> Tuple[tf.data.Dataset, tf.data.Dataset]:
+    def proofstates(self, label, shuffle) -> tf.data.Dataset:
         """
         Returns a pair of proof-state datasets for train and validation.
 
@@ -131,9 +124,9 @@ class DataServerDataset:
 
     def get_config(self) -> dict:
         return {
-            'symmetrization': self.symmetrization,
-            'add_self_edges': self.add_self_edges,
-            'max_subgraph_size': self.max_subgraph_size,
+            'symmetrization': self.data_server.symmetrization,
+            'add_self_edges': self.data_server.add_self_edges,
+            'max_subgraph_size': self.data_server.max_subgraph_size,
             'exclude_none_arguments': self.exclude_none_arguments,
             'exclude_not_faithful': self.exclude_not_faithful
         }
@@ -228,7 +221,7 @@ class DataServerDataset:
         })
         return DataServerDataset._make_graph_tensor(state.graph, context)
 
-    def _loader_to_definition_graph_tensor(self, defn: LoaderDefinition) -> tuple:
+    def _loader_to_definition_graph_tensor(self, defn: LoaderDefinition) -> tfgnn.GraphTensor:
         """Convert loader definition format to corresponding format for definition_data_spec"""
 
         num_definitions = tf.convert_to_tensor(defn.num_definitions, dtype = tf.int64)

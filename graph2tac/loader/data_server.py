@@ -47,6 +47,8 @@ class AbstractDataServer:
         self.max_subgraph_size = max_subgraph_size
         self.bfs_option = bfs_option
         self.stop_at_definitions = stop_at_definitions
+        if symmetrization not in (BIDIRECTIONAL, UNDIRECTED, None):
+            raise ValueError(f'{symmetrization} is not a valid graph symmetrization scheme (use {BIDIRECTIONAL}, {UNDIRECTED} or None)')
         self.symmetrization = symmetrization
         self.add_self_edges = add_self_edges
 
@@ -179,9 +181,9 @@ class AbstractDataServer:
                 )
             if self.add_self_edges:
                 l = len(edges_by_labels)
-                edges_by_labels.append(
+                edges_by_labels.append([
                     [a,a,l] for a in range(len(nodes))
-                )
+                ])
             edge_offsets = np.cumsum([
                 len(x) for x in edges_by_labels
             ])[:-1].astype(np.uint32)
@@ -542,7 +544,7 @@ class DataServer(AbstractDataServer):
         return state_text, label_text
 
     def datapoint_indices(self, *labels):
-        if not labels: return list(range(self._proof_steps))
+        if not labels: return list(range(len(self._proof_steps)))
         else: return [
             i for i,(_,d,_) in enumerate(self._proof_steps)
             if self.split.lemma(d) in labels
@@ -554,13 +556,13 @@ class DataServer(AbstractDataServer):
 
         return IterableLen(filtermap(self.datapoint_graph, ids), len(ids))
 
-    def data_train(self, shuffled: bool = False) -> Iterable[Union[tuple[LoaderProofstate, LoaderAction, int], tuple[str, str]]]:
+    def data_train(self, shuffled: bool = False) -> Iterable[tuple[LoaderProofstate, LoaderAction, int]]:
         return self.get_datapoints(TRAIN, shuffled = shuffled)
-    def data_valid(self) -> Iterable[Union[tuple[LoaderProofstate, LoaderAction, int], tuple[str, str]]]:
+    def data_valid(self) -> Iterable[Union[tuple[LoaderProofstate, LoaderAction, int]]]:
         return self.get_datapoints(VALID)
 
     def def_cluster_indices(self, *labels):
-        if not labels: return list(range(self._def_clusters))
+        if not labels: return list(range(len(self._def_clusters)))
         else: return [
             i for i,ds in enumerate(self._def_clusters)
             if self.split.definition_cluster(ds) in labels

@@ -15,6 +15,7 @@ import psutil
 import logging
 import contextlib
 import yaml
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
 from pytact.data_reader import (capnp_message_generator,
                                 TacticPredictionGraph, TacticPredictionsGraph,

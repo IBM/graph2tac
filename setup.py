@@ -29,7 +29,7 @@ setup(
         'psutil',
         'pyyaml',
         'graphviz',
-        'pytact @ git+https://git@github.com/coq-tactician/coq-tactician-reinforce@77f4ba43af8794d76745f9eacf8e91e7b88c3158',
+        'pytact @ git+https://git@github.com/coq-tactician/coq-tactician-reinforce@134d81a5934e6aa14dce18306781a7183d281f34',
         'pytest',
     ]
 )
