@@ -15,7 +15,7 @@ from graph2tac.tfgnn.models import GraphEmbedding, LogitsFromEmbeddings
 from graph2tac.tfgnn.train import Trainer
 from graph2tac.common import logger
 from graph2tac.predict import Predict, predict_api_debugging, cartesian_product, NUMPY_NDIM_LIMIT
-from graph2tac.tfgnn.graph_schema import vectorized_definition_graph_spec
+from graph2tac.tfgnn.graph_schema import proofstate_graph_spec, vectorized_definition_graph_spec
 
 
 def stack_dicts_with(f, ds):
@@ -344,10 +344,11 @@ class TFGNNPredict(Predict):
         return x
 
     def _make_proofstate_batch(self, datapoints : Iterable[LoaderProofstate]):
-        return stack_graph_tensors([
-            self._make_proofstate_graph_tensor(x)
-            for x in datapoints
-        ])
+        return self._make_dummy_proofstate_dataset(datapoints).batch(len(datapoints)).get_single_element()
+        # return stack_graph_tensors([
+        #     self._make_proofstate_graph_tensor(x)
+        #     for x in datapoints
+        # ])
 
     def _dummy_proofstate_data_generator(self, states: List[LoaderProofstate]):
         for state in states:
@@ -362,10 +363,15 @@ class TFGNNPredict(Predict):
         @param states: list of proof-states in tuple form (as returned by the data loader)
         @return: a `tf.data.Dataset` producing `GraphTensor` objects following the `proofstate_graph_spec` schema
         """
-        dataset = tf.data.Dataset.from_generator(lambda: self._dummy_proofstate_data_generator(states),
-                                                 output_signature=DataServerDataset.proofstate_data_spec)
-        #dataset = dataset.map(DataServerDataset._make_proofstate_graph_tensor)
-        return dataset
+        # return tf.data.Dataset.from_generator(
+        #     lambda: states,
+        #     output_signature=LoaderProofstateSpec,
+        # ).map(self._make_proofstate_graph_tensor)
+
+        return tf.data.Dataset.from_generator(
+            lambda: map(self._make_proofstate_graph_tensor, states),
+            output_signature=proofstate_graph_spec,
+        )
 
     @staticmethod
     def _logits_decoder(logits: tf.Tensor, total_expand_bound: int) -> Tuple[np.ndarray, np.ndarray]:
