@@ -486,6 +486,7 @@ class TFGNNPredict(Predict):
                                  ) -> List[Union[PredictOutput, Tuple[List[np.ndarray], np.ndarray]]]:
         # convert the input to a batch of graph tensors (rank 1)
         proofstate_graph = self._make_proofstate_batch(states)
+        print("Ragged shape:", proofstate_graph.context.features["global_arguments"].shape)
 
         # create the tactic mask input
         tactic_mask = self._tactic_mask_from_allowed_model_tactics(allowed_model_tactics)
