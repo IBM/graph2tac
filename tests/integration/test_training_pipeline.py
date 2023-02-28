@@ -8,11 +8,13 @@ import sys
 from unittest.mock import patch
 import tensorflow as tf
 import warnings
+import random
 
 import graph2tac.tfgnn.train
 
 # this helps with determinism
 tf.config.experimental.enable_op_determinism()
+random.seed(42)
 
 REL_ERROR_TOLERANCE = 1e-5
 

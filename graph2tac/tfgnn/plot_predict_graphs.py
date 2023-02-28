@@ -115,8 +115,7 @@ def main():
 
             # compute accuracies without definition reconstruction
             global_argument_predict = TFGNNPredict(log_dir=log_dir,
-                                                   checkpoint_number=checkpoint_number,
-                                                   numpy_output=False)
+                                                   checkpoint_number=checkpoint_number)
 
             per_proofstate, per_lemma = global_argument_predict._evaluate(all_proofstates, 
                                                                           batch_size=batch_size, 
