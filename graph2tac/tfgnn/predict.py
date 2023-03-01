@@ -17,14 +17,16 @@ from graph2tac.common import logger
 from graph2tac.predict import Predict, predict_api_debugging, cartesian_product, NUMPY_NDIM_LIMIT
 from graph2tac.tfgnn.graph_schema import vectorized_definition_graph_spec, proofstate_graph_spec, batch_graph_spec
 
-batched_vectorized_definition_graph_spec = batch_graph_spec(vectorized_definition_graph_spec)
-
 class Batcher:
-    def __init__(self, input_spec, convert_function, batch_size = 1):
-        self.dataset = tf.data.Dataset.from_generator(
+    def __init__(self, input_spec, prebatch_convert = None, postbatch_convert = None, batch_size = 1):
+        dataset = tf.data.Dataset.from_generator(
             lambda: iter(self.current_data),
             output_signature = input_spec,
-        ).map(convert_function).batch(batch_size)
+        )
+        if prebatch_convert is not None: dataset = dataset.map(prebatch_convert)
+        dataset = dataset.batch(batch_size)
+        if postbatch_convert is not None: dataset = dataset.map(postbatch_convert)
+        self.dataset = dataset
         self.current_data = None
     def __call__(self, data):
         assert self.current_data is None
@@ -207,7 +209,8 @@ class TFGNNPredict(Predict):
                  debug_dir: Optional[Path] = None,
                  checkpoint_number: Optional[int] = None,
                  exclude_tactics: Optional[List[str]] = None,
-                 numpy_output: bool = True
+                 numpy_output: bool = True,
+                 pipeline_mode = "function", # "main" / "function" / "dataset"
                  ):
         """
         @param log_dir: the directory for the checkpoint that is to be loaded (as passed to the Trainer class)
@@ -220,6 +223,8 @@ class TFGNNPredict(Predict):
         # initialize inference model cache (most of the time we always use one model for a fixed tactic_expand_bound)
         self._inference_model_cache = {}
         self.cached_definition_computation = None
+        self.pipeline_mode = pipeline_mode
+        assert pipeline_mode in ("main", "function", "dataset")
 
         # create dummy dataset for pre-processing purposes
         graph_constants_filepath = log_dir / 'config' / 'graph_constants.yaml'
@@ -284,17 +289,6 @@ class TFGNNPredict(Predict):
             load_status.expect_partial().assert_nontrivial_match().assert_existing_objects_matched().run_restore_ops()
             logger.info(f'restored checkpoint #{checkpoint_number}!')
 
-        # prepare datasets for making singleton batches
-        self.proofstate_batcher = Batcher(
-            input_spec = (LoaderProofstateSpec, LoaderActionSpec, tf.TensorSpec([], tf.int64)),
-            convert_function = self._dataset._loader_to_proofstate_graph_tensor,
-        )
-        self.definition_batcher = Batcher(
-            input_spec = LoaderDefinitionSpec,
-            convert_function = self._dataset._loader_to_definition_graph_tensor,
-        )
-
-
     @predict_api_debugging
     def initialize(self, global_context: Optional[List[int]] = None) -> None:
         if self.prediction_task_type != GLOBAL_ARGUMENT_PREDICTION:
@@ -326,6 +320,57 @@ class TFGNNPredict(Predict):
             self._inference_model_cache = {}
             self.cached_definition_computation = None
 
+        ########################## Experimental code
+            
+        inference_model = self._inference_model(8)
+        graph_id_spec = tf.TensorSpec([], tf.int64)
+        tactic_mask_spec = tf.TensorSpec(shape=(self.graph_constants.tactic_num,), dtype=bool)
+        batched_tactic_mask_spec = tf.TensorSpec(shape=(None,self.graph_constants.tactic_num,), dtype=bool)
+        input_spec = (
+            (
+                LoaderProofstateSpec,
+                LoaderActionSpec,
+                graph_id_spec,
+            ),
+            tactic_mask_spec,
+        )
+
+        # compiling these helps "main" pipeline_mode, and slows down "dataset"
+        #@tf.function(input_signature = input_spec)
+        def prebatch_convert(proofstate_data, tactic_mask):
+            return (
+                self._dataset._loader_to_proofstate_graph_tensor(*proofstate_data),
+                tactic_mask,
+            )
+        #@tf.function(input_signature = (batch_graph_spec(proofstate_graph_spec), batched_tactic_mask_spec))
+        def postbatch_convert(proofstate_graph, tactic_mask):
+            return inference_model({
+                self.prediction_task.PROOFSTATE_GRAPH: proofstate_graph,
+                self.prediction_task.TACTIC_MASK: tactic_mask
+            })
+        self.prebatch_convert = prebatch_convert
+        self.postbatch_convert = postbatch_convert
+        self.proofstate_batcher = Batcher(
+            input_spec = input_spec,
+            prebatch_convert = prebatch_convert,
+            postbatch_convert = postbatch_convert if self.pipeline_mode == "dataset" else None,
+        )
+        self.definition_batcher = Batcher(
+            input_spec = LoaderDefinitionSpec,
+            prebatch_convert = self._dataset._loader_to_definition_graph_tensor,
+        )
+        @tf.function(input_signature = (LoaderProofstateSpec,tactic_mask_spec))
+        def prediction_function(proofstate, tactic_mask):
+            dummy_action = LoaderAction(self._dummy_tactic_id, tf.zeros(shape=(0, 2), dtype=tf.int64))
+            proofstate_graph, tactic_mask = prebatch_convert((proofstate,dummy_action,-1), tactic_mask)
+            proofstate_graph = stack_graph_tensors([proofstate_graph])
+            tactic_mask = tf.expand_dims(tactic_mask, axis=0)
+            res = postbatch_convert(proofstate_graph, tactic_mask)
+            return res
+        self.prediction_function = prediction_function
+
+        ########################## / Experimental code    
+
     def _fetch_definition_computation(self):
         """
         The definition computation needs to be rebuilt when the embeddings table is swapped out.
@@ -336,13 +381,14 @@ class TFGNNPredict(Predict):
 
         if self.cached_definition_computation is not None:
             return self.cached_definition_computation
-        
-        @tf.function(input_signature = (batched_vectorized_definition_graph_spec,))
-        def _compute_and_replace_definition_embs(definition_graph):
-        # @tf.function(input_signature = (LoaderDefinitionSpec,))
-        # def _compute_and_replace_definition_embs(loader_definition):
-        #     graph_tensor = self._dataset._loader_to_definition_graph_tensor(loader_definition)
-        #     definition_graph = stack_graph_tensors([graph_tensor])
+
+        batched_vectorized_definition_graph_spec = batch_graph_spec(vectorized_definition_graph_spec)
+        # @tf.function(input_signature = (batched_vectorized_definition_graph_spec,))
+        # def _compute_and_replace_definition_embs(definition_graph):
+        @tf.function(input_signature = (LoaderDefinitionSpec,))
+        def _compute_and_replace_definition_embs(loader_definition):
+            graph_tensor = self._dataset._loader_to_definition_graph_tensor(loader_definition)
+            definition_graph = stack_graph_tensors([graph_tensor])
 
             scalar_definition_graph = definition_graph.merge_batch_to_components()
             definition_embeddings = self.definition_task(scalar_definition_graph).flat_values
@@ -361,16 +407,14 @@ class TFGNNPredict(Predict):
         if self.definition_task is None:
             raise RuntimeError('cannot update definitions when a definition task is not present')
 
-        for _ in range(1000):
-            assert len(new_cluster_subgraphs) == 1
-            compute_and_replace_definition_embs = self._fetch_definition_computation()
-            #compute_and_replace_definition_embs(new_cluster_subgraphs[0])
-            #continue
+        assert len(new_cluster_subgraphs) == 1
+        compute_and_replace_definition_embs = self._fetch_definition_computation()
+        compute_and_replace_definition_embs(new_cluster_subgraphs[0])
 
-            graph_tensor = self._dataset._loader_to_definition_graph_tensor(new_cluster_subgraphs[0])
-            definition_graph = stack_graph_tensors([graph_tensor])
-            #definition_graph = self.definition_batcher.single(new_cluster_subgraphs[0])
-            compute_and_replace_definition_embs(definition_graph)
+        # graph_tensor = self._dataset._loader_to_definition_graph_tensor(new_cluster_subgraphs[0])
+        # definition_graph = stack_graph_tensors([graph_tensor])
+        # #definition_graph = self.definition_batcher.single(new_cluster_subgraphs[0])
+        # compute_and_replace_definition_embs(definition_graph)
 
     @tf.function(input_signature = (LoaderProofstateSpec,))
     def _make_proofstate_graph_tensor(self, state : LoaderProofstate):
@@ -469,6 +513,8 @@ class TFGNNPredict(Predict):
                     for arguments, value in zip(tf.cast(arg_combinations, dtype=tf.int64), combination_values)]
 
     def _inference_model(self, tactic_expand_bound: int) -> tf.keras.Model:
+        assert tactic_expand_bound == 8
+        print("tactic_expand_bound = ", tactic_expand_bound)
         if tactic_expand_bound not in self._inference_model_cache.keys():
             inference_model = self.prediction_task.create_inference_model(tactic_expand_bound=tactic_expand_bound,
                                                                           graph_constants=self.graph_constants)
@@ -531,52 +577,41 @@ class TFGNNPredict(Predict):
         if available_global is not None:
             raise NotImplementedError('available_global is not supported yet')
 
-        # convert the input to a batch of graph tensors (rank 1)
-        dummy_action = LoaderAction(self._dummy_tactic_id, tf.zeros(shape=(0, 2), dtype=tf.int64))
-        proofstate_graph = self.proofstate_batcher.single((state, dummy_action, -1))
-        #proofstate_graph = stack_graph_tensors([self._make_proofstate_graph_tensor(state)])
-        #proofstate_graph = self._make_dummy_proofstate_dataset([state]).batch(1).get_single_element()
-        # r1 = proofstate_graph.context.features["global_arguments"].values
-        # r2 = tf.RaggedTensor.from_row_splits(
-        #     values = proofstate_graph1.context.features["global_arguments"].values.values,
-        #     row_splits = proofstate_graph1.context.features["global_arguments"].values.row_splits,
-        # )
-        # print("=============== 1 =================")
-        # print(r1.dtype, r1.flat_values, r1.nested_row_splits, r1.ragged_rank, r1.row_splits, r1.shape, r1.uniform_row_length, r1.values)
-        # print("=============== 2 =================")
-        # print(r2.dtype, r2.flat_values, r2.nested_row_splits, r2.ragged_rank, r2.row_splits, r2.shape, r2.uniform_row_length, r2.values)
-        # proofstate_graph = tfgnn.GraphTensor.from_pieces(
-        #     context = tfgnn.Context.from_fields(
-        #         sizes = proofstate_graph2.context.sizes,
-        #         features = {
-        #             "tactic" : proofstate_graph2.context.features["tactic"],
-        #             "local_context_ids" : proofstate_graph2.context.features["local_context_ids"],
-        #             "global_context_ids" : proofstate_graph2.context.features["global_context_ids"],
-        #             "local_arguments" : proofstate_graph2.context.features["local_arguments"],
-        #             "global_arguments" : tf.RaggedTensor.from_row_splits(
-        #                 values = r1,
-        #                 #values = r2,
-        #                 row_splits = proofstate_graph2.context.features["global_arguments"].row_splits,
-        #             ),
-        #             "graph_id" : proofstate_graph2.context.features["graph_id"],
-        #             "name" : proofstate_graph2.context.features["name"],
-        #             "step" : proofstate_graph2.context.features["step"],
-        #             "faithful" : proofstate_graph2.context.features["faithful"],
-        #         }
-        #     ),
-        #     node_sets = proofstate_graph2.node_sets,
-        #     edge_sets = proofstate_graph2.edge_sets,
-        # )
-
         # create the tactic mask input
         tactic_mask = self._tactic_mask_from_allowed_model_tactics(allowed_model_tactics)
-        tactic_mask = tf.expand_dims(tactic_mask, axis=0)
 
-        # make predictions
-        [predict_output] = self._batch_ranked_predictions(proofstate_graph=proofstate_graph,
-                                                          tactic_expand_bound=tactic_expand_bound,
-                                                          total_expand_bound=total_expand_bound,
-                                                          tactic_mask=tactic_mask)
+        ########################## Experimental code
+
+        # convert the input to a batch of graph tensors (rank 1)
+        if self.pipeline_mode == "function":
+            inference_output = self.prediction_function(state, tactic_mask)
+        else:
+            dummy_action = LoaderAction(self._dummy_tactic_id, tf.zeros(shape=(0, 2), dtype=tf.int64))
+            batcher_input = (
+                (state, dummy_action, -1),
+                tactic_mask,
+            )
+            x = self.proofstate_batcher.single(batcher_input)
+            if self.pipeline_mode == "main":
+                x = self.postbatch_convert(*x)
+            inference_output = x
+
+        ########################## / Experimental code
+
+        predict_output = PredictOutput(state=None, predictions=[])
+        local_context_size = len(state.context.local_context)
+
+        # go over the tactic_expand_bound batches
+        for proofstate_output in zip(*inference_output.values()):
+            assert len(proofstate_output[0]) == 1
+            inference_data = {output_name: output_value[0] for output_name, output_value in zip(inference_output.keys(), proofstate_output)}
+            num_arguments = self.graph_constants.tactic_index_to_numargs[inference_data[TacticPrediction.TACTIC]]
+            predictions = self._expand_arguments_logits(total_expand_bound=total_expand_bound,
+                                                        num_arguments=num_arguments,
+                                                        local_context_size=local_context_size,
+                                                        global_context_size=len(self.graph_constants.global_context),
+                                                        **inference_data)
+            predict_output.predictions.extend(filter(lambda inference: inference.value > -float('inf'), predictions))
 
         # fill in the states in loader format
         predict_output.state = state
