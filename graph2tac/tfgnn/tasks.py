@@ -171,6 +171,23 @@ class ArgumentSparseCategoricalAccuracy(tf.keras.metrics.SparseCategoricalAccura
     """
     def update_state(self, y_true, y_pred, sample_weight=None):
         arguments_true, arguments_pred = arguments_filter(y_true, y_pred)
+        index_true = arguments_true
+        index_pred = tf.argmax(arguments_pred, axis=-1)
+        log_prob_true = tf.gather(arguments_pred, index_true, axis=-1, batch_dims=1)
+        log_prob_pred = tf.gather(arguments_pred, index_pred, axis=-1, batch_dims=1)
+        global_count = tf.math.count_nonzero(arguments_pred != -float("inf"), axis=-1)
+        prob_global = tf.reduce_sum(tf.math.exp(arguments_pred), axis=-1)
+
+        order = tf.argsort(log_prob_true)
+        tf.print("\n")
+        tf.print("index_true", tf.gather(index_true, order))
+        tf.print("index_pred", tf.gather(index_pred, order))
+        tf.print("log_prob_true", tf.gather(log_prob_true, order))
+        tf.print("log_prob_pred", tf.gather(log_prob_pred, order))
+        tf.print("global_count", tf.gather(global_count, order))
+        tf.print("prob_global", tf.gather(prob_global, order))
+        
+
         if tf.shape(arguments_pred)[-1] > 0:
             super().update_state(arguments_true, arguments_pred, sample_weight)
 
