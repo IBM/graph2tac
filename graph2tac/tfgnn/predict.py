@@ -8,14 +8,16 @@ import tensorflow_gnn as tfgnn
 from dataclasses import dataclass
 from pathlib import Path
 
-from graph2tac.loader.data_classes import GraphConstants, LoaderAction, LoaderProofstate, LoaderProofstateSpec, LoaderDefinition, LoaderDefinitionSpec
+from graph2tac.loader.data_classes import GraphConstants, LoaderAction, LoaderActionSpec, LoaderProofstate, LoaderProofstateSpec, LoaderDefinition, LoaderDefinitionSpec
 from graph2tac.tfgnn.dataset import DataServerDataset
 from graph2tac.tfgnn.tasks import PredictionTask, TacticPrediction, DefinitionTask, GLOBAL_ARGUMENT_PREDICTION
 from graph2tac.tfgnn.models import GraphEmbedding, LogitsFromEmbeddings
 from graph2tac.tfgnn.train import Trainer
 from graph2tac.common import logger
 from graph2tac.predict import Predict, predict_api_debugging, cartesian_product, NUMPY_NDIM_LIMIT
-from graph2tac.tfgnn.graph_schema import vectorized_definition_graph_spec, proofstate_graph_spec
+from graph2tac.tfgnn.graph_schema import vectorized_definition_graph_spec, proofstate_graph_spec, batch_graph_spec
+
+batched_vectorized_definition_graph_spec = batch_graph_spec(vectorized_definition_graph_spec)
 
 class Batcher:
     def __init__(self, input_spec, convert_function, batch_size = 1):
@@ -284,8 +286,8 @@ class TFGNNPredict(Predict):
 
         # prepare datasets for making singleton batches
         self.proofstate_batcher = Batcher(
-            input_spec = LoaderProofstateSpec,
-            convert_function = self._make_proofstate_graph_tensor,
+            input_spec = (LoaderProofstateSpec, LoaderActionSpec, tf.TensorSpec([], tf.int64)),
+            convert_function = self._dataset._loader_to_proofstate_graph_tensor,
         )
         self.definition_batcher = Batcher(
             input_spec = LoaderDefinitionSpec,
@@ -335,10 +337,12 @@ class TFGNNPredict(Predict):
         if self.cached_definition_computation is not None:
             return self.cached_definition_computation
         
-        @tf.function(input_signature = (LoaderDefinitionSpec,))
-        def _compute_and_replace_definition_embs(loader_definition):
-            graph_tensor = self._dataset._loader_to_definition_graph_tensor(loader_definition)
-            definition_graph = stack_graph_tensors([graph_tensor])
+        @tf.function(input_signature = (batched_vectorized_definition_graph_spec,))
+        def _compute_and_replace_definition_embs(definition_graph):
+        # @tf.function(input_signature = (LoaderDefinitionSpec,))
+        # def _compute_and_replace_definition_embs(loader_definition):
+        #     graph_tensor = self._dataset._loader_to_definition_graph_tensor(loader_definition)
+        #     definition_graph = stack_graph_tensors([graph_tensor])
 
             scalar_definition_graph = definition_graph.merge_batch_to_components()
             definition_embeddings = self.definition_task(scalar_definition_graph).flat_values
@@ -357,9 +361,16 @@ class TFGNNPredict(Predict):
         if self.definition_task is None:
             raise RuntimeError('cannot update definitions when a definition task is not present')
 
-        assert len(new_cluster_subgraphs) == 1
-        compute_and_replace_definition_embs = self._fetch_definition_computation()
-        compute_and_replace_definition_embs(new_cluster_subgraphs[0])
+        for _ in range(1000):
+            assert len(new_cluster_subgraphs) == 1
+            compute_and_replace_definition_embs = self._fetch_definition_computation()
+            #compute_and_replace_definition_embs(new_cluster_subgraphs[0])
+            #continue
+
+            graph_tensor = self._dataset._loader_to_definition_graph_tensor(new_cluster_subgraphs[0])
+            definition_graph = stack_graph_tensors([graph_tensor])
+            #definition_graph = self.definition_batcher.single(new_cluster_subgraphs[0])
+            compute_and_replace_definition_embs(definition_graph)
 
     @tf.function(input_signature = (LoaderProofstateSpec,))
     def _make_proofstate_graph_tensor(self, state : LoaderProofstate):
@@ -387,9 +398,18 @@ class TFGNNPredict(Predict):
         @param states: list of proof-states in tuple form (as returned by the data loader)
         @return: a `tf.data.Dataset` producing `GraphTensor` objects following the `proofstate_graph_spec` schema
         """
-        dataset = tf.data.Dataset.from_generator(lambda: states,
-                                                 output_signature=LoaderProofstateSpec)
-        dataset = dataset.map(self._make_proofstate_graph_tensor)
+        # dataset = tf.data.Dataset.from_generator(lambda: states,
+        #                                          output_signature=LoaderProofstateSpec)
+        # dataset = dataset.map(self._make_proofstate_graph_tensor)
+
+        action = LoaderAction(self._dummy_tactic_id, tf.zeros(shape=(0, 2), dtype=tf.int64))
+        graph_id = tf.constant(-1, dtype=tf.int64)
+        states_actions_ids = [(state, action, graph_id) for state in states]
+        return tf.data.Dataset.from_generator(
+            lambda: states_actions_ids,
+            output_signature=(LoaderProofstateSpec, LoaderActionSpec, tf.TensorSpec([], tf.int64)),
+        ).map(DataServerDataset._loader_to_proofstate_graph_tensor)
+
         return dataset
 
     @staticmethod
@@ -512,11 +532,11 @@ class TFGNNPredict(Predict):
             raise NotImplementedError('available_global is not supported yet')
 
         # convert the input to a batch of graph tensors (rank 1)
-        proofstate_graph1 = self.proofstate_batcher.single(state)
-        proofstate_graph2 = stack_graph_tensors([self._make_proofstate_graph_tensor(state)])
-        proofstate_graph3 = self._make_dummy_proofstate_dataset([state]).batch(1).get_single_element()
-        proofstate_graph = proofstate_graph3
-        # r1 = proofstate_graph1.context.features["global_arguments"].values
+        dummy_action = LoaderAction(self._dummy_tactic_id, tf.zeros(shape=(0, 2), dtype=tf.int64))
+        proofstate_graph = self.proofstate_batcher.single((state, dummy_action, -1))
+        #proofstate_graph = stack_graph_tensors([self._make_proofstate_graph_tensor(state)])
+        #proofstate_graph = self._make_dummy_proofstate_dataset([state]).batch(1).get_single_element()
+        # r1 = proofstate_graph.context.features["global_arguments"].values
         # r2 = tf.RaggedTensor.from_row_splits(
         #     values = proofstate_graph1.context.features["global_arguments"].values.values,
         #     row_splits = proofstate_graph1.context.features["global_arguments"].values.row_splits,
