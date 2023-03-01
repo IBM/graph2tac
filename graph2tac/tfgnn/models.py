@@ -96,7 +96,7 @@ class LogitsFromEmbeddings(tf.keras.layers.Layer):
         logits = tf.matmul(a=hidden_state, b=tf.gather(emb_matrix, self._valid_indices), transpose_b=True)
 
         if self._cosine_similarity:
-            tf.print("temp", self._temp)
+            tf.print("\ntemp", self._temp)
             logits = logits / self._temp
 
         return logits
