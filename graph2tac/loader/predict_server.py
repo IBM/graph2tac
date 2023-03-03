@@ -142,6 +142,8 @@ class PredictServer(AbstractDataServer):
             max_subgraph_size = model.graph_constants.max_subgraph_size,
             bfs_option = bfs_option,
             stop_at_definitions = stop_at_definitions,
+            symmetrization = 'bidirectional',
+            add_self_edges = True,
         )
         self.model = model
         self.config = config
