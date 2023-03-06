@@ -37,6 +37,7 @@ class AbstractDataServer:
                  stop_at_definitions: bool = True,
                  symmetrization: Optional[str] = None,
                  add_self_edges: bool = False,
+                 shuffle_random_seed: int = 0
     ):
         assert max_subgraph_size, "Necessary to set max_subgraph_size"
         self.max_subgraph_size = max_subgraph_size
@@ -46,6 +47,11 @@ class AbstractDataServer:
             raise ValueError(f'{symmetrization} is not a valid graph symmetrization scheme (use {BIDIRECTIONAL}, {UNDIRECTED} or None)')
         self.symmetrization = symmetrization
         self.add_self_edges = add_self_edges
+
+        # split the shuffle seed into two random number generators, one for proof states and one for definitions
+        rng = random.Random(shuffle_random_seed)
+        self.rng_proofstates = random.Random(rng.random())
+        self.rng_definitions = random.Random(rng.random())
 
         self._initialize()
 
@@ -538,15 +544,16 @@ class DataServer(AbstractDataServer):
             if self.split.lemma(d) in labels
         ]
 
-    def get_datapoints(self, label : int, shuffled: bool = False) -> Iterable[tuple[LoaderProofstate, LoaderAction, int] | tuple[str, str]]:
+    def get_datapoints(self, label : int, shuffled: bool = False) -> Iterable[tuple[LoaderProofstate, LoaderAction, int]]:
         ids = self.datapoint_indices(label)
-        if shuffled: random.shuffle(ids)
-
+        if shuffled:
+            self.rng_proofstates.shuffle(ids)
         return IterableLen(map(self.datapoint_graph, ids), len(ids))
 
     def data_train(self, shuffled: bool = False) -> Iterable[tuple[LoaderProofstate, LoaderAction, int]]:
         return self.get_datapoints(TRAIN, shuffled = shuffled)
-    def data_valid(self) -> Iterable[Union[tuple[LoaderProofstate, LoaderAction, int]]]:
+
+    def data_valid(self) -> Iterable[tuple[LoaderProofstate, LoaderAction, int]]:
         return self.get_datapoints(VALID)
 
     def def_cluster_indices(self, *labels):
@@ -561,5 +568,6 @@ class DataServer(AbstractDataServer):
 
     def def_cluster_subgraphs(self, label : int = TRAIN, shuffled: bool = False) -> Iterable[LoaderDefinition]:
         ids = self.def_cluster_indices(label)
-        if shuffled: random.shuffle(ids)
+        if shuffled:
+            self.rng_definitions.shuffle(ids)
         return IterableLen(map(self.def_cluster_subgraph, ids), len(self._def_clusters))

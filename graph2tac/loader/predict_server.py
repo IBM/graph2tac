@@ -337,7 +337,7 @@ class PredictServer(AbstractDataServer):
         ]
         unaligned_definitions = [
             d for d in msg.definitions.definitions
-            if d.node.idenity not in self._def_ident_to_i
+            if d.node.identity not in self._def_ident_to_i
         ]
 
         return CheckAlignmentResponse(
