@@ -183,7 +183,7 @@ class PredictServer(AbstractDataServer):
         self._globarg_i_to_node = []
         global_context = []
         self._def_node_to_i = dict()
-        for d in definitions.definitions:
+        for d in definitions.definitions():
             i = self._def_ident_to_i.get(d.node.identity, None)
             if i is None:
                 i = self._register_definition(d)
@@ -205,7 +205,7 @@ class PredictServer(AbstractDataServer):
 
         # definition recalculation
         if self.config.update_all_definitions:
-            def_clusters_for_update = list(definitions.clustered_definitions)
+            def_clusters_for_update = list(definitions.clustered_definitions())
             prev_defined_nodes = self._base_node_label_num
             logger.info(f"Prepared for update all {len(def_clusters_for_update)} definition clusters")
         elif self.config.update_new_definitions:
@@ -328,13 +328,13 @@ class PredictServer(AbstractDataServer):
             for action, confidence in zip(actions, confidences)
         ])
 
-    def check_alignment(self, msg: CheckAlignmentMessage) -> CheckAlignmentResponse:
+    def check_alignment(self, msg: GlobalContextMessage) -> CheckAlignmentResponse:
         unaligned_tactics = [
             tactic.ident for tactic in msg.tactics
             if tactic.ident not in self._tactic_to_i
         ]
         unaligned_definitions = [
-            d for d in msg.definitions.definitions
+            d for d in msg.definitions.definitions()
             if d.node.identity not in self._def_ident_to_i
         ]
 
@@ -343,29 +343,25 @@ class PredictServer(AbstractDataServer):
             unknown_definitions = unaligned_definitions,
         )
 
-def prediction_loop(predict_server: PredictServer, capnp_socket: socket.socket, record_file: Optional[BinaryIO]):
-    
-    message_generator = capnp_message_generator(capnp_socket, record_file)
+def prediction_loop(predict_server: PredictServer, context: GlobalContextMessage):
+
+    prediction_requests = context.prediction_requests
     if predict_server.config.with_meter:
-        message_iterator = tqdm.tqdm(message_generator)
+        message_iterator = tqdm.tqdm(prediction_requests)
     else:
-        message_iterator = message_generator
+        message_iterator = prediction_requests
     log_cnts = predict_server.log_cnts
     log_cnts.session_idx += 1
     log_cnts.thm_idx = -1
 
-    for msg in message_iterator:
-        if isinstance(msg, CheckAlignmentMessage):
-            logger.info("checkAlignment request")
-            response = predict_server.check_alignment(msg)
-            logger.info("sending checkAlignment response to coq")
-            message_generator.send(response)
-        elif isinstance(msg, GlobalContextMessage):
+    msg = next(message_iterator, None)
+    while msg is not None:
+        if isinstance(msg, ProofState):
             log_cnts.thm_idx += 1
-            log_cnts.thm_annotation = msg.log_annotation
+            log_cnts.thm_annotation = context.log_annotation
 
-            with predict_server.coq_context(msg):
-                prediction_requests = msg.prediction_requests
+            # FIXME: Implement incremental updating of the context
+            with predict_server.coq_context(context):
 
                 log_cnts.msg_idx = -1
                 log_cnts.t_predict = 0.0
@@ -375,31 +371,47 @@ def prediction_loop(predict_server: PredictServer, capnp_socket: socket.socket, 
                 log_cnts.t_coq = 0.0
                 log_cnts.n_coq = 0
                 t0_coq = time.time()
-                for proof_state in prediction_requests:
-                    log_cnts.t_coq += (time.time() - t0_coq)
-                    log_cnts.n_coq += 1
-                    log_cnts.msg_idx += 1
+                while msg is not None:
+                    if isinstance(msg, ProofState):
+                        log_cnts.t_coq += (time.time() - t0_coq)
+                        log_cnts.n_coq += 1
+                        log_cnts.msg_idx += 1
 
-                    t0 = time.time()
+                        t0 = time.time()
 
-                    # important line -- getting prediction
-                    response = predict_server.predict(proof_state)
+                        # important line -- getting prediction
+                        response = predict_server.predict(msg)
 
-                    t1 = time.time()
-                    if t1-t0 > log_cnts.max_t_predict:
-                        log_cnts.max_t_predict = t1-t0
-                        log_cnts.argmax_t_predict = log_cnts.msg_idx
+                        t1 = time.time()
+                        if t1-t0 > log_cnts.max_t_predict:
+                            log_cnts.max_t_predict = t1-t0
+                            log_cnts.argmax_t_predict = log_cnts.msg_idx
 
-                    log_cnts.t_predict += (t1 - t0)
-                    log_cnts.n_predict += 1
-                    
-                    # important line -- sending prediction
-                    prediction_requests.send(response)
+                        log_cnts.t_predict += (t1 - t0)
+                        log_cnts.n_predict += 1
+
+                        # important line -- sending prediction
+                        prediction_requests.send(response)
+                        msg = next(message_iterator, None)
+                    else:
+                        break
 
             log_cnts.update_process_stats()
             logger.summary(log_cnts.summary_log_message())
+        elif isinstance(msg, CheckAlignmentMessage):
+            logger.info("checkAlignment request")
+            response = predict_server.check_alignment(context)
+            logger.info("sending checkAlignment response to coq")
+            prediction_requests.send(response)
+            msg = next(message_iterator, None)
+        elif isinstance(msg, GlobalContextMessage):
+            prediction_loop(predict_server, msg)
+            msg = next(message_iterator, None)
         else:
             raise Exception("Capnp protocol error")
+
+def start_prediction_loop(predict_server: PredictServer, capnp_socket: socket.socket, record_file: Optional[BinaryIO]):
+    prediction_loop(predict_server, capnp_message_generator(capnp_socket, record_file))
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -584,7 +596,7 @@ def main():
         if not config.tcp:
             logger.info("starting stdin server")
             capnp_socket = socket.socket(fileno=sys.stdin.fileno())
-            prediction_loop(predict_server, capnp_socket, record_file)
+            start_prediction_loop(predict_server, capnp_socket, record_file)
         else:
             logger.info(f"starting tcp/ip server on port {config.port}")
             addr = (config.host, config.port)
@@ -605,7 +617,7 @@ def main():
                     capnp_socket, remote_addr = server_sock.accept()
                     logger.info(f"coq client connected {remote_addr}")
 
-                    prediction_loop(predict_server, capnp_socket, record_file)
+                    start_prediction_loop(predict_server, capnp_socket, record_file)
                     logger.info(f"coq client disconnected {remote_addr}")
             finally:
                 logger.info(f'closing the server on port {config.port}')
