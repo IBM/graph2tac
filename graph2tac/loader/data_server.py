@@ -2,7 +2,6 @@ from heapq import heappush, heappop
 from pathlib import Path
 import pytact.common
 from pytact.data_reader import data_reader, Outcome, Node, Definition
-from dataclasses import dataclass
 from numpy.typing import NDArray
 import numpy as np
 from collections import deque
@@ -10,7 +9,7 @@ import itertools
 import random
 from graph2tac.hash import get_split_label
 from collections import defaultdict
-from typing import Iterable, Any, Callable, Optional, Tuple, Union
+from typing import Iterable, Optional
 
 from graph2tac.loader.data_classes import *
 import pytact.graph_api_capnp as graph_api_capnp
@@ -37,7 +36,6 @@ class AbstractDataServer:
                  stop_at_definitions: bool = True,
                  symmetrization: Optional[str] = None,
                  add_self_edges: bool = False,
-                 shuffle_random_seed: int = 0
     ):
         assert max_subgraph_size, "Necessary to set max_subgraph_size"
         self.max_subgraph_size = max_subgraph_size
@@ -47,11 +45,6 @@ class AbstractDataServer:
             raise ValueError(f'{symmetrization} is not a valid graph symmetrization scheme (use {BIDIRECTIONAL}, {UNDIRECTED} or None)')
         self.symmetrization = symmetrization
         self.add_self_edges = add_self_edges
-
-        # split the shuffle seed into two random number generators, one for proof states and one for definitions
-        rng = random.Random(shuffle_random_seed)
-        self.rng_proofstates = random.Random(rng.random())
-        self.rng_definitions = random.Random(rng.random())
 
         self._initialize()
 
@@ -305,6 +298,7 @@ class DataServer(AbstractDataServer):
                  restrict_to_spine: bool = False,
                  exclude_none_arguments: bool = False,
                  exclude_not_faithful: bool = False,
+                 shuffle_random_seed: int = 0,
                  **kwargs,
     ):
         super().__init__(**kwargs)
@@ -343,6 +337,11 @@ class DataServer(AbstractDataServer):
         self.split = split
         self.split.assign_data_server(self)
 
+        # split the shuffle seed into two random number generators, one for proof states and one for definitions
+        rng = random.Random(shuffle_random_seed)
+        self.rng_proofstates = random.Random(rng.random())
+        self.rng_definitions = random.Random(rng.random())
+
     def graph_constants(self):
         total_node_label_num = len(self._node_i_to_name)
         return GraphConstants(
@@ -359,6 +358,10 @@ class DataServer(AbstractDataServer):
             label_to_ident = self._node_i_to_ident,
             label_in_spine = self._node_i_in_spine,
             max_subgraph_size = self.max_subgraph_size,
+            bfs_option = self.bfs_option,
+            stop_at_definitions = self.stop_at_definitions,
+            symmetrization = self.symmetrization,
+            add_self_edges = self.add_self_edges,
         )
 
     def topo_file_order(self):

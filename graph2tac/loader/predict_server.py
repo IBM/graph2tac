@@ -140,10 +140,10 @@ class PredictServer(AbstractDataServer):
         stop_at_definitions = True
         super().__init__(
             max_subgraph_size = model.graph_constants.max_subgraph_size,
-            bfs_option = bfs_option,  # TODO(jrute): Don't hard code this
-            stop_at_definitions = stop_at_definitions,  # TODO(jrute): Don't hard code this
-            symmetrization = 'bidirectional',  # TODO(jrute): Don't hard code this
-            add_self_edges = True,  # TODO(jrute): Don't hard code this
+            bfs_option =  model.graph_constants.bfs_option,
+            stop_at_definitions =  model.graph_constants.stop_at_definitions,
+            symmetrization =  model.graph_constants.symmetrization,
+            add_self_edges =  model.graph_constants.add_self_edges
         )
         self.model = model
         self.config = config
