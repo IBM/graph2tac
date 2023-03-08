@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from typing import Optional
 import tensorflow as tf
 from collections import namedtuple
 
@@ -89,3 +90,7 @@ class GraphConstants:
     label_to_ident: list[int]
     label_in_spine: list[bool]
     max_subgraph_size: int
+    bfs_option: bool
+    stop_at_definitions: bool
+    symmetrization: Optional[str]
+    add_self_edges: bool
