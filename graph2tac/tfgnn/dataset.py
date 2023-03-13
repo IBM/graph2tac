@@ -47,7 +47,7 @@ class DataServerDataset:
                                           split = get_splitter(split_method, split),
                                           restrict_to_spine = False,
                                           shuffle_random_seed = 0,
-                                          stop_at_definitions = False,
+                                          stop_at_definitions = True,
                                           bfs_option = True,
                                           **kwargs,
             )

@@ -309,13 +309,11 @@ class TFGNNPredict(Predict):
 
         if self.cached_definition_computation is not None:
             return self.cached_definition_computation
-        
-        @tf.function(input_signature = (batched_vectorized_definition_graph_spec,))
-        def _compute_and_replace_definition_embs(definition_graph):
-        # @tf.function(input_signature = (LoaderDefinitionSpec,))
-        # def _compute_and_replace_definition_embs(loader_definition):
-        #     graph_tensor = self._dataset._loader_to_definition_graph_tensor(loader_definition)
-        #     definition_graph = stack_graph_tensors([graph_tensor])
+
+        @tf.function(input_signature = (LoaderDefinitionSpec,))
+        def _compute_and_replace_definition_embs(loader_definition):
+            graph_tensor = self._dataset._loader_to_definition_graph_tensor(loader_definition)
+            definition_graph = stack_graph_tensors([graph_tensor])
 
             scalar_definition_graph = definition_graph.merge_batch_to_components()
             definition_embeddings = self.definition_task(scalar_definition_graph).flat_values
@@ -336,12 +334,7 @@ class TFGNNPredict(Predict):
 
         assert len(new_cluster_subgraphs) == 1
         compute_and_replace_definition_embs = self._fetch_definition_computation()
-        #compute_and_replace_definition_embs(new_cluster_subgraphs[0])
-        #return
-
-        graph_tensor = self._dataset._loader_to_definition_graph_tensor(new_cluster_subgraphs[0])
-        definition_graph = stack_graph_tensors([graph_tensor])
-        compute_and_replace_definition_embs(definition_graph)
+        compute_and_replace_definition_embs(new_cluster_subgraphs[0])
 
     @tf.function(input_signature = (LoaderProofstateSpec,))
     def _make_proofstate_graph_tensor(self, state : LoaderProofstate):
