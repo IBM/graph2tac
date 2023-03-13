@@ -2,7 +2,6 @@ from heapq import heappush, heappop
 from pathlib import Path
 import pytact.common
 from pytact.data_reader import data_reader, Outcome, Node, Definition
-from dataclasses import dataclass
 from numpy.typing import NDArray
 import numpy as np
 from collections import deque
@@ -10,7 +9,7 @@ import itertools
 import random
 from graph2tac.hash import get_split_label
 from collections import defaultdict
-from typing import Iterable, Any, Callable, Optional, Tuple, Union
+from typing import Iterable, Optional
 
 from graph2tac.loader.data_classes import *
 import pytact.graph_api_capnp as graph_api_capnp
@@ -37,11 +36,11 @@ UNDIRECTED = 'undirected'
 
 class AbstractDataServer:
     def __init__(self,
-                 max_subgraph_size: int = 0,
-                 bfs_option: bool = True,
-                 stop_at_definitions: bool = True,
-                 symmetrization: Optional[str] = None,
-                 add_self_edges: bool = False,
+                 max_subgraph_size,
+                 bfs_option,
+                 stop_at_definitions,
+                 symmetrization,
+                 add_self_edges,
     ):
         assert max_subgraph_size, "Necessary to set max_subgraph_size"
         self.max_subgraph_size = max_subgraph_size
@@ -238,7 +237,7 @@ class SplitByHash(Splitter):
         self.random_seed = random_seed
     def lemma(self, d : Definition) -> int:
         # to make it identical to vasily's loader
-        ident_64 = np.array(d.node.identity, dtype = np.uint64).item()
+        ident_64 = np.uint64(d.node.identity)
         return get_split_label(ident_64, self.proportions, self.random_seed)
     def definition_cluster(self, d : list[Definition]) -> int:
         return TRAIN
@@ -300,10 +299,11 @@ def get_splitter(split_method, split):
 class DataServer(AbstractDataServer):
     def __init__(self,
                  data_dir: Path,
-                 split : Splitter = SplitByHash([9,1],0),
-                 restrict_to_spine: bool = False,
-                 exclude_none_arguments: bool = False,
-                 exclude_not_faithful: bool = False,
+                 split : Splitter,
+                 restrict_to_spine,
+                 exclude_none_arguments,
+                 exclude_not_faithful,
+                 shuffle_random_seed,
                  **kwargs,
     ):
         super().__init__(**kwargs)
@@ -335,10 +335,15 @@ class DataServer(AbstractDataServer):
             for d in cluster:
                 self.get_def_file_ctx(d)
                 max_def_name_len = max(len(d.name), max_def_name_len)
-        self._def_name_dtype = "S"+str(max_def_name_len)
+        self._def_name_dtype = "U"+str(max_def_name_len)
 
         self.split = split
         self.split.assign_data_server(self)
+
+        # split the shuffle seed into two random number generators, one for proof states and one for definitions
+        rng = random.Random(shuffle_random_seed)
+        self.rng_proofstates = random.Random(rng.random())
+        self.rng_definitions = random.Random(rng.random())
 
     def graph_constants(self):
         total_node_label_num = len(self._node_i_to_name)
@@ -356,6 +361,10 @@ class DataServer(AbstractDataServer):
             label_to_ident = self._node_i_to_ident,
             label_in_spine = self._node_i_in_spine,
             max_subgraph_size = self.max_subgraph_size,
+            bfs_option = self.bfs_option,
+            stop_at_definitions = self.stop_at_definitions,
+            symmetrization = self.symmetrization,
+            add_self_edges = self.add_self_edges,
         )
 
     def topo_file_order(self):
@@ -547,15 +556,16 @@ class DataServer(AbstractDataServer):
             if self.split.lemma(d) in labels
         ]
 
-    def get_datapoints(self, label : int, shuffled: bool = False) -> Iterable[tuple[LoaderProofstate, LoaderAction, int] | tuple[str, str]]:
+    def get_datapoints(self, label : int, shuffled: bool = False) -> Iterable[tuple[LoaderProofstate, LoaderAction, int]]:
         ids = self.datapoint_indices(label)
-        if shuffled: random.shuffle(ids)
-
+        if shuffled:
+            self.rng_proofstates.shuffle(ids)
         return IterableLen(filtermap(self.datapoint_graph, ids), len(ids))
 
     def data_train(self, shuffled: bool = False) -> Iterable[tuple[LoaderProofstate, LoaderAction, int]]:
         return self.get_datapoints(TRAIN, shuffled = shuffled)
-    def data_valid(self) -> Iterable[Union[tuple[LoaderProofstate, LoaderAction, int]]]:
+
+    def data_valid(self) -> Iterable[tuple[LoaderProofstate, LoaderAction, int]]:
         return self.get_datapoints(VALID)
 
     def def_cluster_indices(self, *labels):
@@ -570,5 +580,6 @@ class DataServer(AbstractDataServer):
 
     def def_cluster_subgraphs(self, label : int = TRAIN, shuffled: bool = False) -> Iterable[LoaderDefinition]:
         ids = self.def_cluster_indices(label)
-        if shuffled: random.shuffle(ids)
+        if shuffled:
+            self.rng_definitions.shuffle(ids)
         return IterableLen(map(self.def_cluster_subgraph, ids), len(ids))
