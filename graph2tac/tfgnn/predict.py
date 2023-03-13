@@ -19,22 +19,6 @@ from graph2tac.tfgnn.graph_schema import vectorized_definition_graph_spec, proof
 
 batched_vectorized_definition_graph_spec = batch_graph_spec(vectorized_definition_graph_spec)
 
-class Batcher:
-    def __init__(self, input_spec, convert_function, batch_size = 1):
-        self.dataset = tf.data.Dataset.from_generator(
-            lambda: iter(self.current_data),
-            output_signature = input_spec,
-        ).map(convert_function).batch(batch_size)
-        self.current_data = None
-    def __call__(self, data):
-        assert self.current_data is None
-        self.current_data = data
-        yield from self.dataset
-        self.current_data = None
-    def single(self, x):
-        [res] = self([x])
-        return res
-
 def stack_dicts_with(f, ds):
     keys = ds[0].keys()
     assert all(d.keys() == keys for d in ds)
@@ -284,17 +268,6 @@ class TFGNNPredict(Predict):
             load_status.expect_partial().assert_nontrivial_match().assert_existing_objects_matched().run_restore_ops()
             logger.info(f'restored checkpoint #{checkpoint_number}!')
 
-        # prepare datasets for making singleton batches
-        self.proofstate_batcher = Batcher(
-            input_spec = (LoaderProofstateSpec, LoaderActionSpec, tf.TensorSpec([], tf.int64)),
-            convert_function = self._dataset._loader_to_proofstate_graph_tensor,
-        )
-        self.definition_batcher = Batcher(
-            input_spec = LoaderDefinitionSpec,
-            convert_function = self._dataset._loader_to_definition_graph_tensor,
-        )
-
-
     @predict_api_debugging
     def initialize(self, global_context: Optional[List[int]] = None) -> None:
         if self.prediction_task_type != GLOBAL_ARGUMENT_PREDICTION:
@@ -361,16 +334,14 @@ class TFGNNPredict(Predict):
         if self.definition_task is None:
             raise RuntimeError('cannot update definitions when a definition task is not present')
 
-        for _ in range(1000):
-            assert len(new_cluster_subgraphs) == 1
-            compute_and_replace_definition_embs = self._fetch_definition_computation()
-            #compute_and_replace_definition_embs(new_cluster_subgraphs[0])
-            #continue
+        assert len(new_cluster_subgraphs) == 1
+        compute_and_replace_definition_embs = self._fetch_definition_computation()
+        #compute_and_replace_definition_embs(new_cluster_subgraphs[0])
+        #return
 
-            graph_tensor = self._dataset._loader_to_definition_graph_tensor(new_cluster_subgraphs[0])
-            definition_graph = stack_graph_tensors([graph_tensor])
-            #definition_graph = self.definition_batcher.single(new_cluster_subgraphs[0])
-            compute_and_replace_definition_embs(definition_graph)
+        graph_tensor = self._dataset._loader_to_definition_graph_tensor(new_cluster_subgraphs[0])
+        definition_graph = stack_graph_tensors([graph_tensor])
+        compute_and_replace_definition_embs(definition_graph)
 
     @tf.function(input_signature = (LoaderProofstateSpec,))
     def _make_proofstate_graph_tensor(self, state : LoaderProofstate):
@@ -533,8 +504,7 @@ class TFGNNPredict(Predict):
 
         # convert the input to a batch of graph tensors (rank 1)
         dummy_action = LoaderAction(self._dummy_tactic_id, tf.zeros(shape=(0, 2), dtype=tf.int64))
-        proofstate_graph = self.proofstate_batcher.single((state, dummy_action, -1))
-        #proofstate_graph = stack_graph_tensors([self._make_proofstate_graph_tensor(state)])
+        proofstate_graph = stack_graph_tensors([self._make_proofstate_graph_tensor(state)])
         #proofstate_graph = self._make_dummy_proofstate_dataset([state]).batch(1).get_single_element()
         # r1 = proofstate_graph.context.features["global_arguments"].values
         # r2 = tf.RaggedTensor.from_row_splits(

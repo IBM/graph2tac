@@ -45,6 +45,10 @@ class DataServerDataset:
         if data_dir is not None:
             self.data_server = DataServer(data_dir=data_dir,
                                           split = get_splitter(split_method, split),
+                                          restrict_to_spine = False,
+                                          shuffle_random_seed = 0,
+                                          stop_at_definitions = False,
+                                          bfs_option = True,
                                           **kwargs,
             )
 
