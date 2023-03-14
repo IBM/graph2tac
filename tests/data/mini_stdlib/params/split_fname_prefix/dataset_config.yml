@@ -3,6 +3,10 @@ add_self_edges: true
 max_subgraph_size: 1024
 exclude_none_arguments: false
 exclude_not_faithful: false
+shuffle_random_seed: 0
+restrict_to_spine: false
+stop_at_definitions: true
+bfs_option: true
 split_method: file_prefix
 split:
 - - coq-tactician-stdlib.dev/plugins

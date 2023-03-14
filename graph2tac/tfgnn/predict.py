@@ -17,8 +17,6 @@ from graph2tac.common import logger
 from graph2tac.predict import Predict, predict_api_debugging, cartesian_product, NUMPY_NDIM_LIMIT
 from graph2tac.tfgnn.graph_schema import vectorized_definition_graph_spec, proofstate_graph_spec, batch_graph_spec
 
-batched_vectorized_definition_graph_spec = batch_graph_spec(vectorized_definition_graph_spec)
-
 def stack_dicts_with(f, ds):
     keys = ds[0].keys()
     assert all(d.keys() == keys for d in ds)
@@ -212,7 +210,7 @@ class TFGNNPredict(Predict):
 
         dataset_yaml_filepath = log_dir / 'config' / 'dataset.yaml'
         with dataset_yaml_filepath.open('r') as yml_file:
-            dataset = DataServerDataset(None, None, None, graph_constants=graph_constants, **yaml.load(yml_file, Loader=yaml.SafeLoader))
+            dataset = DataServerDataset(None, graph_constants=graph_constants, **yaml.load(yml_file, Loader=yaml.SafeLoader))
         self._dataset = dataset
 
         # call to parent constructor to defines self.graph_constants
@@ -343,38 +341,12 @@ class TFGNNPredict(Predict):
         x = DataServerDataset._loader_to_proofstate_graph_tensor(state, action, graph_id)
         return x
 
+    # Currently not used
     def _make_proofstate_batch(self, datapoints : Iterable[LoaderProofstate]):
         return stack_graph_tensors([
             self._make_proofstate_graph_tensor(x)
             for x in datapoints
         ])
-
-    def _dummy_proofstate_data_generator(self, states: List[LoaderProofstate]):
-        for state in states:
-            action = LoaderAction(self._dummy_tactic_id, tf.zeros(shape=(0, 2), dtype=tf.int64))
-            graph_id = tf.constant(-1, dtype=tf.int64)
-            yield DataServerDataset._loader_to_proofstate_graph_tensor(state, action, graph_id)
-
-    def _make_dummy_proofstate_dataset(self, states: List[LoaderProofstate]) -> tf.data.Dataset:
-        """
-        Create a dataset of (dummy) proofstate graphs.
-
-        @param states: list of proof-states in tuple form (as returned by the data loader)
-        @return: a `tf.data.Dataset` producing `GraphTensor` objects following the `proofstate_graph_spec` schema
-        """
-        # dataset = tf.data.Dataset.from_generator(lambda: states,
-        #                                          output_signature=LoaderProofstateSpec)
-        # dataset = dataset.map(self._make_proofstate_graph_tensor)
-
-        action = LoaderAction(self._dummy_tactic_id, tf.zeros(shape=(0, 2), dtype=tf.int64))
-        graph_id = tf.constant(-1, dtype=tf.int64)
-        states_actions_ids = [(state, action, graph_id) for state in states]
-        return tf.data.Dataset.from_generator(
-            lambda: states_actions_ids,
-            output_signature=(LoaderProofstateSpec, LoaderActionSpec, tf.TensorSpec([], tf.int64)),
-        ).map(DataServerDataset._loader_to_proofstate_graph_tensor)
-
-        return dataset
 
     @staticmethod
     def _logits_decoder(logits: tf.Tensor, total_expand_bound: int) -> Tuple[np.ndarray, np.ndarray]:
@@ -434,11 +406,73 @@ class TFGNNPredict(Predict):
 
     def _inference_model(self, tactic_expand_bound: int) -> tf.keras.Model:
         if tactic_expand_bound not in self._inference_model_cache.keys():
-            inference_model = self.prediction_task.create_inference_model(tactic_expand_bound=tactic_expand_bound,
+            inference_model_bare = self.prediction_task.create_inference_model(tactic_expand_bound=tactic_expand_bound,
                                                                           graph_constants=self.graph_constants)
+            tactic_mask_spec = tf.TensorSpec(shape=(self.graph_constants.tactic_num,), dtype=bool)
+            @tf.function(input_signature = (LoaderProofstateSpec, tactic_mask_spec))
+            def inference_model(state, tactic_mask):
+                graph_tensor_single = self._make_proofstate_graph_tensor(state)
+                graph_tensor_stacked = stack_graph_tensors([graph_tensor_single])
+                inference_output = inference_model_bare({
+                    self.prediction_task.PROOFSTATE_GRAPH: graph_tensor_stacked,
+                    self.prediction_task.TACTIC_MASK: tf.expand_dims(tactic_mask, axis=0),
+                })
+                return inference_output
             self._inference_model_cache[tactic_expand_bound] = inference_model
         return self._inference_model_cache[tactic_expand_bound]
 
+    def _tactic_mask_from_allowed_model_tactics(self, allowed_model_tactics: Optional[Iterable[int]]) -> tf.Tensor:
+        tactic_num = self.graph_constants.tactic_num
+        if allowed_model_tactics is not None:
+            tactic_mask = tf.reduce_any(tf.cast(tf.one_hot(allowed_model_tactics, tactic_num), tf.bool), axis=0)
+        else:
+            tactic_mask = tf.ones(shape=(tactic_num,), dtype=tf.bool)
+        return tactic_mask & self.fixed_tactic_mask
+
+    @predict_api_debugging
+    def ranked_predictions(self,
+                           state: LoaderProofstate,
+                           tactic_expand_bound: int,
+                           total_expand_bound: int,
+                           available_global: Optional[np.ndarray] = None,
+                           allowed_model_tactics: Optional[Iterable[int]] = None
+                           ) -> Union[PredictOutput, Tuple[np.ndarray, np.ndarray]]:
+        """
+        Produces predictions for a single proof-state.
+        """
+        if available_global is not None:
+            raise NotImplementedError('available_global is not supported yet')
+
+        # create the tactic mask input
+        tactic_mask = self._tactic_mask_from_allowed_model_tactics(allowed_model_tactics)
+
+        inference_model = self._inference_model(tactic_expand_bound)
+        inference_output = inference_model(state, tactic_mask)
+        predict_output = PredictOutput(state=None, predictions=[])
+
+        # go over the tactic_expand_bound batches
+        for proofstate_batch_output in zip(*inference_output.values()):
+            # go over the individual proofstates in a batch
+            inference_data = {
+                output_name: output_value[0]
+                for output_name, output_value in zip(inference_output.keys(), proofstate_batch_output)
+            }
+
+            num_arguments = self.graph_constants.tactic_index_to_numargs[inference_data[TacticPrediction.TACTIC]]
+            predictions = self._expand_arguments_logits(total_expand_bound=total_expand_bound,
+                                                        num_arguments=num_arguments,
+                                                        local_context_size=len(state.context.local_context),
+                                                        global_context_size=len(self.graph_constants.global_context),
+                                                        **inference_data)
+            predict_output.predictions.extend(filter(lambda inference: inference.value > -float('inf'), predictions))
+
+        # fill in the states in loader format
+        predict_output.state = state
+
+        # return predictions in the appropriate format
+        return predict_output.numpy()
+
+    # (!) NOT MAINTAINED
     def _batch_ranked_predictions(self,
                                   proofstate_graph: tfgnn.GraphTensor,
                                   tactic_expand_bound: int,
@@ -446,6 +480,8 @@ class TFGNNPredict(Predict):
                                   tactic_mask: tf.Tensor
                                   ) -> List[PredictOutput]:
 
+        raise Exception("Running unmaintained code. Delete this line at your own risk.")
+        
         inference_model = self._inference_model(tactic_expand_bound)
 
         inference_output = inference_model({self.prediction_task.PROOFSTATE_GRAPH: proofstate_graph,
@@ -473,80 +509,8 @@ class TFGNNPredict(Predict):
                 predict_output.predictions.extend(filter(lambda inference: inference.value > -float('inf'), predictions))
         return predict_outputs
 
-    def _tactic_mask_from_allowed_model_tactics(self, allowed_model_tactics: Optional[Iterable[int]]) -> tf.Tensor:
-        tactic_num = self.graph_constants.tactic_num
-        if allowed_model_tactics is not None:
-            tactic_mask = tf.reduce_any(tf.cast(tf.one_hot(allowed_model_tactics, tactic_num), tf.bool), axis=0)
-        else:
-            tactic_mask = tf.ones(shape=(tactic_num,), dtype=tf.bool)
-        return tactic_mask & self.fixed_tactic_mask
-
-    @predict_api_debugging
-    def ranked_predictions(self,
-                           state: LoaderProofstate,
-                           tactic_expand_bound: int,
-                           total_expand_bound: int,
-                           available_global: Optional[np.ndarray] = None,
-                           allowed_model_tactics: Optional[Iterable[int]] = None
-                           ) -> Union[PredictOutput, Tuple[np.ndarray, np.ndarray]]:
-        """
-        Produces predictions for a single proof-state.
-        """
-        if available_global is not None:
-            raise NotImplementedError('available_global is not supported yet')
-
-        # convert the input to a batch of graph tensors (rank 1)
-        dummy_action = LoaderAction(self._dummy_tactic_id, tf.zeros(shape=(0, 2), dtype=tf.int64))
-        proofstate_graph = stack_graph_tensors([self._make_proofstate_graph_tensor(state)])
-        #proofstate_graph = self._make_dummy_proofstate_dataset([state]).batch(1).get_single_element()
-        # r1 = proofstate_graph.context.features["global_arguments"].values
-        # r2 = tf.RaggedTensor.from_row_splits(
-        #     values = proofstate_graph1.context.features["global_arguments"].values.values,
-        #     row_splits = proofstate_graph1.context.features["global_arguments"].values.row_splits,
-        # )
-        # print("=============== 1 =================")
-        # print(r1.dtype, r1.flat_values, r1.nested_row_splits, r1.ragged_rank, r1.row_splits, r1.shape, r1.uniform_row_length, r1.values)
-        # print("=============== 2 =================")
-        # print(r2.dtype, r2.flat_values, r2.nested_row_splits, r2.ragged_rank, r2.row_splits, r2.shape, r2.uniform_row_length, r2.values)
-        # proofstate_graph = tfgnn.GraphTensor.from_pieces(
-        #     context = tfgnn.Context.from_fields(
-        #         sizes = proofstate_graph2.context.sizes,
-        #         features = {
-        #             "tactic" : proofstate_graph2.context.features["tactic"],
-        #             "local_context_ids" : proofstate_graph2.context.features["local_context_ids"],
-        #             "global_context_ids" : proofstate_graph2.context.features["global_context_ids"],
-        #             "local_arguments" : proofstate_graph2.context.features["local_arguments"],
-        #             "global_arguments" : tf.RaggedTensor.from_row_splits(
-        #                 values = r1,
-        #                 #values = r2,
-        #                 row_splits = proofstate_graph2.context.features["global_arguments"].row_splits,
-        #             ),
-        #             "graph_id" : proofstate_graph2.context.features["graph_id"],
-        #             "name" : proofstate_graph2.context.features["name"],
-        #             "step" : proofstate_graph2.context.features["step"],
-        #             "faithful" : proofstate_graph2.context.features["faithful"],
-        #         }
-        #     ),
-        #     node_sets = proofstate_graph2.node_sets,
-        #     edge_sets = proofstate_graph2.edge_sets,
-        # )
-
-        # create the tactic mask input
-        tactic_mask = self._tactic_mask_from_allowed_model_tactics(allowed_model_tactics)
-        tactic_mask = tf.expand_dims(tactic_mask, axis=0)
-
-        # make predictions
-        [predict_output] = self._batch_ranked_predictions(proofstate_graph=proofstate_graph,
-                                                          tactic_expand_bound=tactic_expand_bound,
-                                                          total_expand_bound=total_expand_bound,
-                                                          tactic_mask=tactic_mask)
-
-        # fill in the states in loader format
-        predict_output.state = state
-
-        # return predictions in the appropriate format
-        return predict_output.numpy()
-
+    
+    # (!) NOT MAINTAINED
     def _evaluate(self,
                   proofstate_graph_dataset: tf.data.Dataset,
                   batch_size: int,
@@ -555,6 +519,8 @@ class TFGNNPredict(Predict):
                   search_expand_bound: Optional[int] = None,
                   allowed_model_tactics: Optional[Iterable[int]] = None
                   ) -> Tuple[float, float]:
+
+        raise Exception("Running unmaintained code. Delete this line at your own risk.")
 
         tactic_mask = self._tactic_mask_from_allowed_model_tactics(allowed_model_tactics)
 

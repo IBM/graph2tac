@@ -233,6 +233,8 @@ class SplitDisabled(Splitter):
 
 class SplitByHash(Splitter):
     def __init__(self, proportions : list[int], random_seed : int):
+        self.name = "hash"
+        self.args = {'proportions': proportions, 'random_seed': random_seed}
         self.proportions = proportions
         self.random_seed = random_seed
     def lemma(self, d : Definition) -> int:
@@ -244,6 +246,8 @@ class SplitByHash(Splitter):
 
 class SplitByFilePrefix(Splitter):
     def __init__(self, prefixes_per_label : list[list[str]]):
+        self.name = "file_prefix"
+        self.args = prefixes_per_label
         self.prefixes_per_label = [
             (label+1, prefixes)
             for label, prefixes in enumerate(prefixes_per_label)
@@ -342,6 +346,7 @@ class DataServer(AbstractDataServer):
 
         # split the shuffle seed into two random number generators, one for proof states and one for definitions
         rng = random.Random(shuffle_random_seed)
+        self.shuffle_random_seed = shuffle_random_seed
         self.rng_proofstates = random.Random(rng.random())
         self.rng_definitions = random.Random(rng.random())
 

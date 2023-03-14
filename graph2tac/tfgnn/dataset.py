@@ -45,10 +45,6 @@ class DataServerDataset:
         if data_dir is not None:
             self.data_server = DataServer(data_dir=data_dir,
                                           split = get_splitter(split_method, split),
-                                          restrict_to_spine = False,
-                                          shuffle_random_seed = 0,
-                                          stop_at_definitions = True,
-                                          bfs_option = True,
                                           **kwargs,
             )
 
@@ -103,23 +99,19 @@ class DataServerDataset:
         res = res.map(self._loader_to_definition_graph_tensor)
         return res
 
-    @staticmethod
-    def _no_none_arguments(proofstate_graph: tfgnn.GraphTensor) -> tf.Tensor:
-        """
-        Check whether a proof-state contains no `None` arguments.
-
-        @param proofstate_graph: a scalar GraphTensor for a proof-state
-        @return: true if the proof-state does not contain any `None` arguments
-        """
-        return tf.reduce_all(tf.reduce_max(tf.stack([proofstate_graph.context['local_arguments'], proofstate_graph.context['global_arguments']], axis=-1), axis=-1) != -1)
-
     def get_config(self) -> dict:
         return {
             'symmetrization': self.data_server.symmetrization,
             'add_self_edges': self.data_server.add_self_edges,
             'max_subgraph_size': self.data_server.max_subgraph_size,
             'exclude_none_arguments': self.data_server.exclude_none_arguments,
-            'exclude_not_faithful': self.data_server.exclude_not_faithful
+            'exclude_not_faithful': self.data_server.exclude_not_faithful,
+            'shuffle_random_seed': self.data_server.shuffle_random_seed,
+            'restrict_to_spine': self.data_server.restrict_to_spine,
+            'stop_at_definitions': self.data_server.stop_at_definitions,
+            'bfs_option': self.data_server.bfs_option,
+            'split_method': self.data_server.split.name,
+            'split': self.data_server.split.args,
         }
 
     @classmethod
