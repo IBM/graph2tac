@@ -132,14 +132,8 @@ class LoggingCounters:
 
 class DynamicDataServer(AbstractDataServer):
     def __init__(self, graph_constants):
-        super().__init__(
-            max_subgraph_size = graph_constants.max_subgraph_size,
-            bfs_option =  graph_constants.bfs_option,
-            stop_at_definitions =  graph_constants.stop_at_definitions,
-            symmetrization =  graph_constants.symmetrization,
-            add_self_edges =  graph_constants.add_self_edges
-        )
-        
+        super().__init__(graph_constants.data_config)
+
         self._tactic_i_to_numargs = list(graph_constants.tactic_index_to_numargs)
         self._tactic_i_to_hash = list(graph_constants.tactic_index_to_hash)
         self._tactic_to_i = {

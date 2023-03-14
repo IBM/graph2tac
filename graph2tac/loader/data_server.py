@@ -1,5 +1,6 @@
 from heapq import heappush, heappop
 from pathlib import Path
+import yaml
 import pytact.common
 from pytact.data_reader import data_reader, Outcome, Node, Definition
 from numpy.typing import NDArray
@@ -10,6 +11,8 @@ import random
 from graph2tac.hash import get_split_label
 from collections import defaultdict
 from typing import Iterable, Optional
+import tensorflow as tf
+import tensorflow_gnn as tfgnn
 
 from graph2tac.loader.data_classes import *
 import pytact.graph_api_capnp as graph_api_capnp
@@ -30,32 +33,14 @@ def filtermap(f, it):
         y = f(x)
         if y is not None: yield y
 
-# possible symmetrizations
-BIDIRECTIONAL = 'bidirectional'
-UNDIRECTED = 'undirected'
-
 class AbstractDataServer:
     def __init__(self,
-                 max_subgraph_size,
-                 bfs_option,
-                 stop_at_definitions,
-                 symmetrization,
-                 add_self_edges,
+                 data_config,
     ):
-        assert max_subgraph_size, "Necessary to set max_subgraph_size"
-        self.max_subgraph_size = max_subgraph_size
-        self.bfs_option = bfs_option
-        self.stop_at_definitions = stop_at_definitions
-        if symmetrization not in (BIDIRECTIONAL, UNDIRECTED, None):
-            raise ValueError(f'{symmetrization} is not a valid graph symmetrization scheme (use {BIDIRECTIONAL}, {UNDIRECTED} or None)')
-        self.symmetrization = symmetrization
-        self.add_self_edges = add_self_edges
+        if data_config.symmetrization not in (BIDIRECTIONAL, UNDIRECTED, None):
+            raise ValueError(f'{data_config.symmetrization} is not a valid graph symmetrization scheme (use {BIDIRECTIONAL}, {UNDIRECTED} or None)')
+        self.data_config = data_config
 
-        self._initialize()
-
-    # Initialization
-
-    def _initialize(self):
         self._initialize_edge_labels()
         self._node_i_to_name = list(graph_api_capnp.Graph.Node.Label.schema.union_fields)
         self._base_node_label_num = len(self._node_i_to_name)
@@ -92,9 +77,9 @@ class AbstractDataServer:
             edge_label_num += 1
         self._edge_labels = edge_labels
         self._base_edge_label_num = edge_label_num
-        if self.symmetrization == BIDIRECTIONAL:
+        if self.data_config.symmetrization == BIDIRECTIONAL:
             edge_label_num *= 2
-        if self.add_self_edges:
+        if self.data_config.add_self_edges:
             edge_label_num += 1
         self._edge_label_num = edge_label_num
 
@@ -131,9 +116,9 @@ class AbstractDataServer:
     # Obtaining data
 
     def _downward_closure(self, roots):
-        bfs_option = self.bfs_option
-        max_graph_size = self.max_subgraph_size
-        if self.stop_at_definitions:
+        bfs_option = self.data_config.bfs_option
+        max_graph_size = self.data_config.max_subgraph_size
+        if self.data_config.stop_at_definitions:
             stop_at = self._definition_label
         else:
             stop_at = None
@@ -160,17 +145,17 @@ class AbstractDataServer:
             for node in nodes
         ]
 
-        if edges or (nodes and self.add_self_edges):
+        if edges or (nodes and self.data_config.add_self_edges):
             edges_by_labels = [[] for _ in range(self._base_edge_label_num)]
             for edge in edges:
                 edges_by_labels[edge[2]].append(edge)
-            if self.symmetrization == UNDIRECTED:
+            if self.data_config.symmetrization == UNDIRECTED:
                 for e in edges_by_labels:
                     e.extend(
                         (b,a,l)
                         for a,b,l in list(e)
                     )
-            elif self.symmetrization == BIDIRECTIONAL:
+            elif self.data_config.symmetrization == BIDIRECTIONAL:
                 edges_by_labels.extend(
                     [
                         (b,a, l+self._base_edge_label_num)
@@ -178,7 +163,7 @@ class AbstractDataServer:
                     ]
                     for e in list(edges_by_labels)
                 )
-            if self.add_self_edges:
+            if self.data_config.add_self_edges:
                 l = len(edges_by_labels)
                 edges_by_labels.append([
                     [a,a,l] for a in range(len(nodes))
@@ -212,7 +197,88 @@ class AbstractDataServer:
                 for n in roots
             ], dtype = self._def_name_dtype)
         )
-    
+
+class DataToTFGNN:
+    """
+    Class for exporting Loader structures to TFGNN
+    """
+    MAX_LABEL_TOKENS = 128
+    def __init__(self):
+        vocabulary = [
+            chr(i) for i in range(ord('a'), ord('z')+1)
+        ] + [
+            chr(i) for i in range(ord('A'), ord('Z')+1)
+        ] + [
+            chr(i) for i in range(ord('0'), ord('9')+1)
+        ] + ["_", "'", "."]
+        self._label_tokenizer = tf.keras.layers.TextVectorization(standardize=None,
+                                                                  split='character',
+                                                                  ngrams=None,
+                                                                  output_mode='int',
+                                                                  max_tokens=self.MAX_LABEL_TOKENS,
+                                                                  vocabulary = vocabulary,
+                                                                  ragged=True)
+
+    @staticmethod
+    def graph_to_graph_tensor(graph: LoaderGraph, context) -> tfgnn.GraphTensor:
+        node_labels = tf.convert_to_tensor(graph.nodes, dtype = tf.int64)
+        edge_labels = tf.convert_to_tensor(graph.edge_labels, dtype = tf.int64)
+        sources = tf.convert_to_tensor(graph.edges[:,0], dtype = tf.int32)
+        targets = tf.convert_to_tensor(graph.edges[:,1], dtype = tf.int32)
+
+        node_set = tfgnn.NodeSet.from_fields(features={'node_label': node_labels},
+                                             sizes=tf.shape(node_labels))
+
+        adjacency = tfgnn.Adjacency.from_indices(source=('node', sources),
+                                                 target=('node', targets))
+
+        edge_set = tfgnn.EdgeSet.from_fields(features={'edge_label': edge_labels},
+                                             sizes=tf.shape(edge_labels),
+                                             adjacency=adjacency)
+
+        return tfgnn.GraphTensor.from_pieces(node_sets={'node': node_set}, edge_sets={'edge': edge_set}, context = context)
+
+
+    @staticmethod
+    def proofstate_to_graph_tensor(state: LoaderProofstate, action: LoaderAction, id: int) -> tfgnn.GraphTensor:
+
+        available_global_context = tf.convert_to_tensor(state.context.global_context, dtype = tf.int64)
+        context_node_ids = tf.convert_to_tensor(state.context.local_context, dtype = tf.int64)
+
+        local_context_length = tf.shape(context_node_ids, out_type=tf.int64)[0]
+
+        local_arguments = tf.convert_to_tensor(action.local_args, dtype = tf.int64)
+        global_arguments = tf.convert_to_tensor(action.global_args, dtype = tf.int64)
+
+        context = tfgnn.Context.from_fields(features={
+            'tactic': tf.convert_to_tensor([action.tactic_id], tf.int64),
+            'local_context_ids': tf.RaggedTensor.from_tensor(tensor=tf.expand_dims(context_node_ids, axis=0),
+                                                             row_splits_dtype=tf.int32),
+            'global_context_ids': tf.RaggedTensor.from_tensor(tensor=tf.expand_dims(available_global_context, axis=0),
+                                                              row_splits_dtype=tf.int32),
+            'local_arguments': tf.RaggedTensor.from_tensor(tensor=tf.expand_dims(local_arguments, axis=0),
+                                                           row_splits_dtype=tf.int32),
+            'global_arguments': tf.RaggedTensor.from_tensor(tensor=tf.expand_dims(global_arguments, axis=0),
+                                                            row_splits_dtype=tf.int32),
+            'graph_id': tf.expand_dims(tf.convert_to_tensor(id, dtype = tf.int64), axis=0),
+            'name': tf.expand_dims(state.metadata.name, axis=0),
+            'step': tf.expand_dims(tf.convert_to_tensor(state.metadata.step, dtype = tf.int64), axis=0),
+            'faithful': tf.expand_dims(tf.convert_to_tensor(state.metadata.is_faithful, dtype = tf.int64), axis=0)
+        })
+        return DataToTFGNN.graph_to_graph_tensor(state.graph, context)
+
+    def definition_to_graph_tensor(self, defn: LoaderDefinition) -> tfgnn.GraphTensor:
+        """Convert loader definition format to corresponding format for definition_data_spec"""
+
+        num_definitions = tf.convert_to_tensor(defn.num_definitions, dtype = tf.int64)
+        vectorized_definition_names = self._label_tokenizer(defn.definition_names)
+        
+        context = tfgnn.Context.from_fields(features={
+            'num_definitions': tf.expand_dims(num_definitions, axis=0),
+            'definition_name_vectors': tf.expand_dims(vectorized_definition_names.with_row_splits_dtype(tf.int32), axis=0)
+        })
+        return self.graph_to_graph_tensor(defn.graph, context)
+
 TRAIN = 0
 VALID = 1
 HOLDOUT = 2 # maybe unnecessary
@@ -233,8 +299,6 @@ class SplitDisabled(Splitter):
 
 class SplitByHash(Splitter):
     def __init__(self, proportions : list[int], random_seed : int):
-        self.name = "hash"
-        self.args = {'proportions': proportions, 'random_seed': random_seed}
         self.proportions = proportions
         self.random_seed = random_seed
     def lemma(self, d : Definition) -> int:
@@ -246,8 +310,6 @@ class SplitByHash(Splitter):
 
 class SplitByFilePrefix(Splitter):
     def __init__(self, prefixes_per_label : list[list[str]]):
-        self.name = "file_prefix"
-        self.args = prefixes_per_label
         self.prefixes_per_label = [
             (label+1, prefixes)
             for label, prefixes in enumerate(prefixes_per_label)
@@ -298,25 +360,16 @@ class SplitByFilePrefix(Splitter):
 def get_splitter(split_method, split):
     if split_method == "hash": return SplitByHash(**split)
     elif split_method == "file_prefix": return SplitByFilePrefix(split)
+    elif split_method == "disabled": return SplitDisabled()
     else: raise Exception(f"Unexpected split method: '{split_method}'")
 
 class DataServer(AbstractDataServer):
-    def __init__(self,
-                 data_dir: Path,
-                 split : Splitter,
-                 restrict_to_spine,
-                 exclude_none_arguments,
-                 exclude_not_faithful,
-                 shuffle_random_seed,
-                 **kwargs,
-    ):
-        super().__init__(**kwargs)
+    def __init__(self, data_dir : Path, dataset_config : DatasetConfig):
+        super().__init__(dataset_config.data_config)
         self.data_dir = data_dir
-        self.restrict_to_spine = restrict_to_spine
+        self.dataset_config = dataset_config
 
-        self.exclude_none_arguments = exclude_none_arguments
-        self.exclude_not_faithful = exclude_not_faithful
-
+        self._data_to_tfgnn = None
         self._proof_steps : list[tuple[Outcome, Definition, int]] = []
         self._def_clusters : list[list[Definition]] = []
         self._repr_to_spine : dict[Definition, NDArray[np.uint32]] = dict()
@@ -324,7 +377,7 @@ class DataServer(AbstractDataServer):
         self._repr_to_recdeps : dict[Definition, list[Definition]] = dict()
         self._def_to_file_ctx : dict[Definition, tuple[list[Definition], NDArray[np.uint32]]] = dict()
 
-        self._reader = data_reader(Path(data_dir))
+        self._reader = data_reader(Path(self.data_dir))
         self._data = self._reader.__enter__()
 
         fnames = self.topo_file_order()
@@ -341,18 +394,21 @@ class DataServer(AbstractDataServer):
                 max_def_name_len = max(len(d.name), max_def_name_len)
         self._def_name_dtype = "U"+str(max_def_name_len)
 
-        self.split = split
+        self.split = get_splitter(
+            self.dataset_config.split_method,
+            self.dataset_config.split
+        )
         self.split.assign_data_server(self)
 
         # split the shuffle seed into two random number generators, one for proof states and one for definitions
-        rng = random.Random(shuffle_random_seed)
-        self.shuffle_random_seed = shuffle_random_seed
+        rng = random.Random(self.dataset_config.shuffle_random_seed)
         self.rng_proofstates = random.Random(rng.random())
         self.rng_definitions = random.Random(rng.random())
 
     def graph_constants(self):
         total_node_label_num = len(self._node_i_to_name)
         return GraphConstants(
+            data_config = self.data_config,
             tactic_num = len(self._tactic_to_i),
             edge_label_num = self._edge_label_num,
             base_node_label_num = self._base_node_label_num,
@@ -365,11 +421,6 @@ class DataServer(AbstractDataServer):
             label_to_names = self._node_i_to_name,
             label_to_ident = self._node_i_to_ident,
             label_in_spine = self._node_i_in_spine,
-            max_subgraph_size = self.max_subgraph_size,
-            bfs_option = self.bfs_option,
-            stop_at_definitions = self.stop_at_definitions,
-            symmetrization = self.symmetrization,
-            add_self_edges = self.add_self_edges,
         )
 
     def topo_file_order(self):
@@ -408,7 +459,7 @@ class DataServer(AbstractDataServer):
     
     def _load_file(self, file_data):
         # load proof steps
-        for d in file_data.definitions(spine_only = self.restrict_to_spine):
+        for d in file_data.definitions(spine_only = self.dataset_config.restrict_to_spine):
             self._register_definition(d)
             proof = d.proof
             if proof is None: continue
@@ -502,7 +553,7 @@ class DataServer(AbstractDataServer):
         )
 
         is_faithful = proof_step.tactic.text.replace('@', '') == proof_step.tactic.interm_text.replace('@', '')
-        if self.exclude_not_faithful and not is_faithful: return None
+        if self.dataset_config.exclude_not_faithful and not is_faithful: return None
 
         metadata = ProofstateMetadata(
             name=definition.name.encode('utf-8'),
@@ -538,7 +589,7 @@ class DataServer(AbstractDataServer):
         local_args = np.array(local_args, dtype = np.int64)
         global_args = np.array(global_args, dtype = np.int64)
 
-        if has_none_argument and self.exclude_none_arguments: return None
+        if has_none_argument and self.dataset_config.exclude_none_arguments: return None
 
         action = LoaderAction(
             tactic_id=tactic_i,
@@ -587,3 +638,65 @@ class DataServer(AbstractDataServer):
         if shuffled:
             self.rng_definitions.shuffle(ids)
         return IterableLen(map(self.def_cluster_subgraph, ids), len(ids))
+
+    # YAML config stuff
+
+    def get_config(self) -> dict:
+        config_d = dict(self.dataset_config.__dict__)
+        config_d['data_config'] = config_d['data_config'].__dict__
+        return config_d
+
+    @classmethod
+    def from_yaml_config(cls, data_dir: Path, yaml_filepath: Path) -> "DataServer":
+        """
+        Create a DataLoaderDataset from a YAML configuration file
+
+        @param data_dir: the directory containing the data
+        @param yaml_filepath: the filepath to the YAML file containing the
+        @return: a DataLoaderDataset object
+        """
+        with yaml_filepath.open() as yaml_file:
+            config_d = yaml.load(yaml_file, Loader=yaml.SafeLoader)
+        config_d['data_config'] = DataConfig(**config_d['data_config'])
+        return cls(data_dir=data_dir, dataset_config = DatasetConfig(**config_d))
+
+    # export for TFGNN
+
+    def _get_data_to_tfgnn(self):
+        if self._data_to_tfgnn is None:
+            self._data_to_tfgnn = DataToTFGNN()
+        return self._data_to_tfgnn
+
+    def proofstates_tfgnn(self, label, shuffle) -> tf.data.Dataset:
+        """
+        Returns a pair of proof-state datasets for train and validation.
+
+        @param shuffle: whether to shuffle the resulting datasets
+        @return: a dataset of (GraphTensor, label) pairs
+        """
+
+        exporter = self._get_data_to_tfgnn()
+        graph_id_spec = tf.TensorSpec([], tf.int64)
+        # get proof-states
+        proofstate_dataset = tf.data.Dataset.from_generator(
+            lambda: self.get_datapoints(label, shuffle),
+            output_signature=(LoaderProofstateSpec, LoaderActionSpec, graph_id_spec),
+        )
+        proofstate_dataset = proofstate_dataset.map(exporter.proofstate_to_graph_tensor)
+
+        return proofstate_dataset
+
+    def definitions_tfgnn(self, label, shuffle) -> tf.data.Dataset:
+        """
+        Returns the definition dataset.
+
+        @param shuffle: whether to shuffle the resulting dataset
+        @return: a dataset with all the definition clusters
+        """
+        exporter = self._get_data_to_tfgnn()
+        res = tf.data.Dataset.from_generator(
+            lambda: self.def_cluster_subgraphs(label, shuffle),
+            output_signature=LoaderDefinitionSpec,
+        )
+        res = res.map(exporter.definition_to_graph_tensor)
+        return res

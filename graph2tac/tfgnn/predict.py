@@ -8,67 +8,15 @@ import tensorflow_gnn as tfgnn
 from dataclasses import dataclass
 from pathlib import Path
 
-from graph2tac.loader.data_classes import GraphConstants, LoaderAction, LoaderActionSpec, LoaderProofstate, LoaderProofstateSpec, LoaderDefinition, LoaderDefinitionSpec
-from graph2tac.tfgnn.dataset import DataServerDataset
+from graph2tac.loader.data_classes import DataConfig, GraphConstants, LoaderAction, LoaderActionSpec, LoaderProofstate, LoaderProofstateSpec, LoaderDefinition, LoaderDefinitionSpec
+from graph2tac.loader.data_server import DataToTFGNN
 from graph2tac.tfgnn.tasks import PredictionTask, TacticPrediction, DefinitionTask, GLOBAL_ARGUMENT_PREDICTION
 from graph2tac.tfgnn.models import GraphEmbedding, LogitsFromEmbeddings
 from graph2tac.tfgnn.train import Trainer
 from graph2tac.common import logger
 from graph2tac.predict import Predict, predict_api_debugging, cartesian_product, NUMPY_NDIM_LIMIT
 from graph2tac.tfgnn.graph_schema import vectorized_definition_graph_spec, proofstate_graph_spec, batch_graph_spec
-
-def stack_dicts_with(f, ds):
-    keys = ds[0].keys()
-    assert all(d.keys() == keys for d in ds)
-    return {
-        key : f([d[key] for d in ds])
-        for key in keys
-    }
-
-def stack_maybe_ragged(xs):
-    if isinstance(xs[0], tf.RaggedTensor):
-        return tf.ragged.stack(xs)
-    else:
-        return tf.stack(xs)
-
-def stack_contexts(cs):
-    return tfgnn.Context.from_fields(
-        sizes = tf.stack([c.sizes for c in cs]),
-        features = stack_dicts_with(stack_maybe_ragged, [c.features for c in cs]),
-    )
-
-def stack_node_sets(nss):
-    sizes = tf.stack([ns.sizes for ns in nss])
-    features = stack_dicts_with(tf.ragged.stack, [ns.features for ns in nss])
-    return tfgnn.NodeSet.from_fields(
-        sizes = sizes,
-        features = features,
-    )
-
-def stack_edge_sets(ess):
-    sizes = tf.stack([es.sizes for es in ess])
-    features = stack_dicts_with(tf.ragged.stack, [es.features for es in ess])
-    source_name = ess[0].adjacency.source_name
-    target_name = ess[0].adjacency.target_name
-    assert all(es.adjacency.source_name == source_name for es in ess)
-    assert all(es.adjacency.target_name == target_name for es in ess)
-    source = tf.ragged.stack([es.adjacency.source for es in ess])
-    target = tf.ragged.stack([es.adjacency.target for es in ess])
-    return tfgnn.EdgeSet.from_fields(
-        sizes = sizes,
-        features = features,
-        adjacency = tfgnn.Adjacency.from_indices(
-            source = (source_name, source),
-            target = (target_name, target),
-        ),
-    )
-
-def stack_graph_tensors(gts):
-    context = stack_contexts([gt.context for gt in gts])
-    node_sets = stack_dicts_with(stack_node_sets, [gt.node_sets for gt in gts])
-    edge_sets = stack_dicts_with(stack_edge_sets, [gt.edge_sets for gt in gts])
-    return tfgnn.GraphTensor.from_pieces(context = context, node_sets = node_sets, edge_sets = edge_sets)
-
+from graph2tac.tfgnn.stack_graph_tensors import stack_graph_tensors
 
 class Inference:
     """
@@ -203,17 +151,15 @@ class TFGNNPredict(Predict):
 
         # initialize inference model cache (most of the time we always use one model for a fixed tactic_expand_bound)
         self._inference_model_cache = {}
+        self._exporter = DataToTFGNN()
         self.cached_definition_computation = None
 
         # create dummy dataset for pre-processing purposes
         graph_constants_filepath = log_dir / 'config' / 'graph_constants.yaml'
         with graph_constants_filepath.open('r') as yml_file:
-            graph_constants = GraphConstants(**yaml.load(yml_file, Loader=yaml.UnsafeLoader))
-
-        dataset_yaml_filepath = log_dir / 'config' / 'dataset.yaml'
-        with dataset_yaml_filepath.open('r') as yml_file:
-            dataset = DataServerDataset(None, graph_constants=graph_constants, **yaml.load(yml_file, Loader=yaml.SafeLoader))
-        self._dataset = dataset
+            graph_constants_d = yaml.load(yml_file, Loader=yaml.UnsafeLoader)
+            graph_constants_d['data_config'] = DataConfig(**graph_constants_d['data_config'])
+            graph_constants = GraphConstants(**graph_constants_d)
 
         # call to parent constructor to defines self.graph_constants
         super().__init__(graph_constants=graph_constants, debug_dir=debug_dir)
@@ -231,7 +177,7 @@ class TFGNNPredict(Predict):
 
         # create prediction task
         prediction_yaml_filepath = log_dir / 'config' / 'prediction.yaml'
-        self.prediction_task = PredictionTask.from_yaml_config(graph_constants=dataset.graph_constants,
+        self.prediction_task = PredictionTask.from_yaml_config(graph_constants=graph_constants,
                                                                yaml_filepath=prediction_yaml_filepath)
         self.prediction_task_type = self.prediction_task.get_config()['prediction_task_type']
 
@@ -312,7 +258,7 @@ class TFGNNPredict(Predict):
 
         @tf.function(input_signature = (LoaderDefinitionSpec,))
         def _compute_and_replace_definition_embs(loader_definition):
-            graph_tensor = self._dataset._loader_to_definition_graph_tensor(loader_definition)
+            graph_tensor = self._exporter.definition_to_graph_tensor(loader_definition)
             definition_graph = stack_graph_tensors([graph_tensor])
 
             scalar_definition_graph = definition_graph.merge_batch_to_components()
@@ -344,7 +290,7 @@ class TFGNNPredict(Predict):
             tf.zeros(shape=(0), dtype=tf.int64),
         )
         graph_id = tf.constant(-1, dtype=tf.int64)
-        x = DataServerDataset._loader_to_proofstate_graph_tensor(state, action, graph_id)
+        x = DataToTFGNN.proofstate_to_graph_tensor(state, action, graph_id)
         return x
 
     # Currently not used

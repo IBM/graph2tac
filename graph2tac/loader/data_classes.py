@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Any
 import tensorflow as tf
 from collections import namedtuple
 
@@ -76,8 +76,31 @@ LoaderDefinition, LoaderDefinitionSpec = namedtuple_with_spec(
     definition_names = tf.TensorSpec([None], tf.string),
 )
 
+# possible symmetrizations
+BIDIRECTIONAL = 'bidirectional'
+UNDIRECTED = 'undirected'
+
+@dataclass
+class DataConfig:
+    max_subgraph_size: int
+    bfs_option: bool
+    stop_at_definitions: bool
+    symmetrization: Optional[str] # "bidirectional" or "undirected" or None
+    add_self_edges: bool
+
+@dataclass
+class DatasetConfig:
+    data_config: DataConfig
+    split_method : str # "hash" or "file_prefix"
+    split : Any # further argument for get_splitter
+    restrict_to_spine : bool
+    exclude_none_arguments : bool
+    exclude_not_faithful : bool
+    shuffle_random_seed : bool
+
 @dataclass
 class GraphConstants:
+    data_config : DataConfig
     tactic_num: int
     edge_label_num: int
     base_node_label_num: int
@@ -90,8 +113,3 @@ class GraphConstants:
     label_to_names: list[str]
     label_to_ident: list[int]
     label_in_spine: list[bool]
-    max_subgraph_size: int
-    bfs_option: bool
-    stop_at_definitions: bool
-    symmetrization: Optional[str]
-    add_self_edges: bool

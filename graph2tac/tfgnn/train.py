@@ -10,7 +10,7 @@ import tensorflow as tf
 import tensorflow_gnn as tfgnn
 from pathlib import Path
 
-from graph2tac.tfgnn.dataset import DataServerDataset, TRAIN, VALID
+from graph2tac.loader.data_server import DataServer, TRAIN, VALID
 from graph2tac.tfgnn.tasks import PredictionTask, DefinitionTask, DefinitionNormSquaredLoss
 from graph2tac.tfgnn.graph_schema import vectorized_definition_graph_spec, batch_graph_spec
 from graph2tac.tfgnn.train_utils import QCheckpointManager, ExtendedTensorBoard, DefinitionLossScheduler
@@ -25,7 +25,7 @@ class Trainer:
     DEFINITION_EMBEDDING = 'definition_embedding'
 
     def __init__(self,
-                 dataset: DataServerDataset,
+                 data_server: DataServer,
                  prediction_task: PredictionTask,
                  serialized_optimizer: Dict,
                  definition_task: Optional[DefinitionTask] = None,
@@ -41,7 +41,7 @@ class Trainer:
         definition task, if using). This is automatically the case when calling the `from_yaml_config` method, but
         it is otherwise the end-user's responsibility.
 
-        @param dataset: a `graph2tac.tfgnn.dataset.DataServerDataset` object providing proof-states and definitions
+        @param data_server: a `graph2tac.loader.data_server.DataServer` object providing proof-states and definitions
         @param prediction_task: the `graph2tac.tfgnn.tasks.PredictionTask` to use for proofstates
         @param serialized_optimizer: the optimizer to use, as serialized by tf.keras.optimizers.serialize
         @param definition_task: the `graph2tac.tfgnn.tasks.DefinitionTask` to use for definitions (or `None` to skip)
@@ -53,8 +53,8 @@ class Trainer:
         @param keep_checkpoint_every_n_hours: optionally keep additional checkpoints every given number of hours
         @param qsaving: additionally keep checkpoints at epochs [qsaving^n] for n = 0, 1, 2, ...
         """
-        # dataset
-        self.dataset = dataset
+        # data_server
+        self.data_server = data_server
         self.dataset_options = tf.data.Options()
         if isinstance(tf.distribute.get_strategy(), tf.distribute.MirroredStrategy):
             self.dataset_options.experimental_distribute.auto_shard_policy = tf.data.experimental.AutoShardPolicy.DATA
@@ -132,13 +132,16 @@ class Trainer:
             config_dir = log_dir / 'config'
             config_dir.mkdir(exist_ok=True)
 
+            graph_constants = data_server.graph_constants()
+            graph_constants_d = dict(graph_constants.__dict__)
+            graph_constants_d['data_config'] = graph_constants.data_config.__dict__
             self._to_yaml_config(directory=config_dir,
                                  filename='graph_constants',
-                                 config=dataset.graph_constants.__dict__)
+                                 config=graph_constants_d)
 
             self._to_yaml_config(directory=config_dir,
                                  filename='dataset',
-                                 config=dataset.get_config())
+                                 config=data_server.get_config())
 
             self._to_yaml_config(directory=config_dir,
                                  filename='prediction',
@@ -166,7 +169,7 @@ class Trainer:
 
     def get_config(self):
         config = {
-            'dataset': self.dataset.get_config(),
+            'dataset': self.data_server.get_config(),
             'prediction_task': self.prediction_task.get_config(),
             'serialized_optimizer': tf.keras.optimizers.serialize(self.optimizer),
             'definition_task': self.definition_task.get_config() if self.definition_task is not None else None,
@@ -181,7 +184,7 @@ class Trainer:
 
     @classmethod
     def from_yaml_config(cls,
-                         dataset: DataServerDataset,
+                         data_server: DataServer,
                          trainer_config: Path,
                          prediction_task_config: Path,
                          definition_task_config: Optional[Path] = None,
@@ -190,7 +193,7 @@ class Trainer:
         with trainer_config.open() as yaml_file:
             trainer_config = yaml.load(yaml_file, Loader=yaml.SafeLoader)
 
-        prediction_task = PredictionTask.from_yaml_config(graph_constants=dataset.graph_constants,
+        prediction_task = PredictionTask.from_yaml_config(graph_constants=data_server.graph_constants(),
                                                           yaml_filepath=prediction_task_config)
 
         if definition_task_config is not None:
@@ -200,7 +203,7 @@ class Trainer:
         else:
             definition_task = None
 
-        return cls(dataset=dataset,
+        return cls(data_server=data_server,
                    prediction_task=prediction_task,
                    definition_task=definition_task,
                    log_dir=log_dir,
@@ -306,10 +309,10 @@ class Trainer:
                                  metrics=self.prediction_task.metrics())
 
         # get training data
-        train_proofstates = self.dataset.proofstates(TRAIN, shuffle=True)
-        valid_proofstates = self.dataset.proofstates(VALID, shuffle=False)
+        train_proofstates = self.data_server.proofstates_tfgnn(TRAIN, shuffle=True)
+        valid_proofstates = self.data_server.proofstates_tfgnn(VALID, shuffle=False)
         if self.definition_task:
-            definitions = self.dataset.definitions(TRAIN, shuffle=True)
+            definitions = self.data_server.definitions_tfgnn(TRAIN, shuffle=True)
         else:
             definitions = None
 
@@ -402,8 +405,8 @@ def main():
         parser.error(f'--dataset-config {args.dataset_config} must be a YAML file')
 
     assert(args.data_dir) is not None
-    dataset = DataServerDataset.from_yaml_config(data_dir=args.data_dir,
-                                                 yaml_filepath=args.dataset_config)
+    data_server = DataServer.from_yaml_config(data_dir=args.data_dir,
+                                              yaml_filepath=args.dataset_config)
 
     # choice of distribution strategy
     if args.gpu == 'all':
@@ -428,7 +431,7 @@ def main():
         parser.error(f'--trainer-config {args.trainer_config} must be a YAML file')
 
     with strategy.scope():
-        trainer = Trainer.from_yaml_config(dataset=dataset,
+        trainer = Trainer.from_yaml_config(data_server=data_server,
                                            trainer_config=args.trainer_config,
                                            prediction_task_config=args.prediction_task_config,
                                            definition_task_config=args.definition_task_config,
