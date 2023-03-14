@@ -122,6 +122,9 @@ class DataServerDataset:
         )
         proofstate_dataset = proofstate_dataset.map(self._loader_to_proofstate_graph_tensor)
 
+        # HACK  filter out tactics with more than 5 args
+        proofstate_dataset = proofstate_dataset.filter(lambda proofstate_graph: tf.reduce_all(proofstate_graph.context['local_arguments'].row_lengths() <= 5))
+
         # filter out proof-states with term arguments
         if self.exclude_not_faithful:
             proofstate_dataset = proofstate_dataset.filter(lambda proofstate_graph: tf.reduce_all(proofstate_graph.context['faithful'] == 1))
