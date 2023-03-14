@@ -520,31 +520,30 @@ class DataServer(AbstractDataServer):
         tactic_i = self._tactic_to_i[proof_step.tactic.ident]
 
         has_none_argument = False
-        if proof_step.tactic_arguments:
-            arguments = []
-            local_nodes_to_ctx_i = { node : i for i,node in enumerate(local_context) }
-            for arg in proof_step.tactic_arguments:
-                arg_local = local_nodes_to_ctx_i.get(arg, None)
-                if arg_local is not None:
-                    arguments.append([0, arg_local])
-                    continue
-                arg_global = self._def_node_to_i.get(arg, None)
-                if arg_global is not None and arg_global >= self._base_node_label_num:
-                    arg_global -= self._base_node_label_num
-                    arguments.append([1, arg_global])
-                    continue
-                else:
-                    has_none_argument = True
-                    arguments.append([0, len(local_context_i)])
-            arguments = np.array(arguments, dtype = np.uint32)
-        else:
-            arguments = np.zeros([0,2], dtype = np.uint32)
+
+        local_args = []
+
+        global_args = []
+        local_nodes_to_ctx_i = { node : i for i,node in enumerate(local_context) }
+        for arg in proof_step.tactic_arguments:
+            arg_local = local_nodes_to_ctx_i.get(arg, -1)
+            if arg_local < 0: arg_global = self._def_node_to_i.get(arg, -1)
+            else: arg_global = -1
+            # node reindexing: "node label" -> "index to global_context"
+            if arg_global >= 0: arg_global -= self._base_node_label_num
+            if arg_global < 0 and arg_local < 0: has_none_argument = True
+            local_args.append(arg_local)
+            global_args.append(arg_global)
+
+        local_args = np.array(local_args, dtype = np.int64)
+        global_args = np.array(global_args, dtype = np.int64)
 
         if has_none_argument and self.exclude_none_arguments: return None
 
         action = LoaderAction(
             tactic_id=tactic_i,
-            args=arguments,
+            local_args=local_args,
+            global_args=global_args,
         )
         return proofstate, action, i
 

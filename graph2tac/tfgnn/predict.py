@@ -179,7 +179,9 @@ class PredictOutput:
 
         tactic_id = tf.cast(action.tactic_id, dtype=tf.int64)
         arguments_array = tf.cast(action.args, dtype=tf.int64)
-        local_args, global_args = DataServerDataset._split_action_arguments(arguments_array, local_context_length)
+        local_args = tf.cast(action.local_args, dtype=tf.int64)
+        global_args = tf.cast(action.global_args, dtype=tf.int64)
+
         return self._evaluate(tactic_id, local_args, global_args, search_expand_bound=search_expand_bound)
 
 
@@ -336,7 +338,11 @@ class TFGNNPredict(Predict):
 
     @tf.function(input_signature = (LoaderProofstateSpec,))
     def _make_proofstate_graph_tensor(self, state : LoaderProofstate):
-        action = LoaderAction(self._dummy_tactic_id, tf.zeros(shape=(0, 2), dtype=tf.int64))
+        action = LoaderAction(
+            self._dummy_tactic_id,
+            tf.zeros(shape=(0), dtype=tf.int64),
+            tf.zeros(shape=(0), dtype=tf.int64),
+        )
         graph_id = tf.constant(-1, dtype=tf.int64)
         x = DataServerDataset._loader_to_proofstate_graph_tensor(state, action, graph_id)
         return x

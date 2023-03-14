@@ -156,26 +156,6 @@ class DataServerDataset:
         return tfgnn.GraphTensor.from_pieces(node_sets={'node': node_set}, edge_sets={'edge': edge_set}, context = context)
 
     @staticmethod
-    def _split_action_arguments(arguments_array: tf.Tensor, local_context_length: tf.Tensor) -> Tuple[tf.Tensor, tf.Tensor]:
-        """
-        Convert an action's arguments from loader format into the corresponding TF-GNN format.
-
-        @param arguments_array: the argument array, as returned by the DataServer
-        @param local_context_length: the size of the local context in the proofstate
-        @return: a pair with a tf.Tensor for the local arguments and a tf.Tensor for the global arguments
-        """
-        is_global_argument, argument_ids = tf.unstack(arguments_array, axis=1)
-
-        # there can still be local arguments that are None
-        is_valid_local_argument = tf.where(is_global_argument == 0, argument_ids, int(1e9)) < local_context_length
-        local_arguments = tf.where(is_valid_local_argument, argument_ids, -1)
-
-        # global arguments go from 0 to node_label_num-base_node_label_num
-        global_arguments = tf.where(is_global_argument == 1, argument_ids, -1)
-
-        return local_arguments, global_arguments
-
-    @staticmethod
     def _loader_to_proofstate_graph_tensor(state: LoaderProofstate, action: LoaderAction, id: int) -> tfgnn.GraphTensor:
         """Convert loader proofstate and action format to graph tensor"""
 
@@ -184,8 +164,8 @@ class DataServerDataset:
 
         local_context_length = tf.shape(context_node_ids, out_type=tf.int64)[0]
 
-        tactic_args = tf.convert_to_tensor(action.args, dtype = tf.int64)
-        local_arguments, global_arguments = DataServerDataset._split_action_arguments(tactic_args, local_context_length)
+        local_arguments = tf.convert_to_tensor(action.local_args, dtype = tf.int64)
+        global_arguments = tf.convert_to_tensor(action.global_args, dtype = tf.int64)
 
         context = tfgnn.Context.from_fields(features={
             'tactic': tf.convert_to_tensor([action.tactic_id], tf.int64),

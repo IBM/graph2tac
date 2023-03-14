@@ -48,12 +48,13 @@ LoaderProofstate, LoaderProofstateSpec = namedtuple_with_spec(
 LoaderAction, LoaderActionSpec = namedtuple_with_spec(
     "LoaderAction",
     tactic_id = tf.TensorSpec([], tf.int64), # Base tactic id
-    args = tf.TensorSpec([None, 2], dtype=tf.int64),
+    local_args = tf.TensorSpec([None], dtype=tf.int64),
+    global_args = tf.TensorSpec([None], dtype=tf.int64),
     # Tactic arguments (local or global or none).  Using the indices in the `context` field of the proofstate.
     
-    # If `args[i] == [0, l] for l < local_cxt_size`, then the `i`th arg is a local context variable with index `l`.
-    # If `args[i] == [0, local_cxt_size]`, then the `i`th arg is a none argument (can't be represented).
-    # If `args[i] == [1, g]` for `g > 0`, then the `i`th arg is a global definition with index `g`.
+    # If `local_args[i] == l' for 'l >= 0', then the `i`th arg is a local context variable with index `l`.
+    # If `global_args[i] == g` for `g >= 0`, then the `i`th arg is a global definition with index `g`.
+    # Otherwise, the values are set to '-1'
     
     # The local argument is an index into `context.local_context` for the corresponding proofstate,
     # but the global argument is the index into the list of global definitions returned by the dataserver and kept
