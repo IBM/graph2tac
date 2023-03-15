@@ -210,7 +210,7 @@ class PredictServer(AbstractDataServer):
             logger.info(f"Prepared for update all {len(def_clusters_for_update)} definition clusters")
         elif self.config.update_new_definitions:
             def_clusters_for_update = [
-                cluster for cluster in definitions.clustered_definitions
+                cluster for cluster in definitions.clustered_definitions()
                 if self._def_node_to_i[cluster[0].node] >= self._num_train_nodes
             ]
             prev_defined_nodes = self._num_train_nodes
