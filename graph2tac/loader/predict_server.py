@@ -131,7 +131,7 @@ class LoggingCounters:
         )
 
 class DynamicDataServer(AbstractDataServer):
-    def __init__(self, graph_constants):
+    def __init__(self, graph_constants: GraphConstants):
         super().__init__(graph_constants.data_config)
 
         self._tactic_i_to_numargs = list(graph_constants.tactic_index_to_numargs)
