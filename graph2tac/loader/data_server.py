@@ -232,7 +232,7 @@ class SplitByHash(Splitter):
         self.random_seed = random_seed
     def lemma(self, d : Definition) -> int:
         # to make it identical to vasily's loader
-        ident_64 = np.array(d.node.identity, dtype = np.uint64).item()
+        ident_64 = np.uint64(d.node.identity)
         return get_split_label(ident_64, self.proportions, self.random_seed)
     def definition_cluster(self, d : list[Definition]) -> int:
         return TRAIN
@@ -332,7 +332,7 @@ class DataServer(AbstractDataServer):
             for d in cluster:
                 self.get_def_file_ctx(d)
                 max_def_name_len = max(len(d.name), max_def_name_len)
-        self._def_name_dtype = "S"+str(max_def_name_len)
+        self._def_name_dtype = "U"+str(max_def_name_len)
 
         self.split = split
         self.split.assign_data_server(self)
