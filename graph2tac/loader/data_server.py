@@ -50,6 +50,7 @@ class AbstractDataServer:
         self._edges_to_ignore = (graph_api_capnp.EdgeClassification.constOpaqueDef,)
         self._def_node_to_i = dict()
         self._tactic_to_i = dict()
+        self._tactic_count = dict()
         self._tactic_i_to_numargs = []
         self._tactic_i_to_string = []
         self._tactic_i_to_hash = []
@@ -103,15 +104,18 @@ class AbstractDataServer:
             return int(node.label.which)
 
     def _register_tactic(self, tactic_usage):
-        if tactic_usage.tactic.ident in self._tactic_to_i:
+        ident = tactic_usage.tactic.ident
+        if ident in self._tactic_to_i:
+            self._tactic_count[ident] += 1
             return
         if len(tactic_usage.outcomes) == 0:
             return
         index = len(self._tactic_to_i)
-        self._tactic_to_i[tactic_usage.tactic.ident] = index
+        self._tactic_to_i[ident] = index
+        self._tactic_count[ident] = 1
         self._tactic_i_to_numargs.append(len(tactic_usage.outcomes[0].tactic_arguments))
         self._tactic_i_to_string.append(tactic_usage.tactic.base_text)
-        self._tactic_i_to_hash.append(tactic_usage.tactic.ident)
+        self._tactic_i_to_hash.append(ident)
 
     # Obtaining data
 
@@ -380,10 +384,19 @@ class DataServer(AbstractDataServer):
         self._reader = data_reader(Path(self.data_dir))
         self._data = self._reader.__enter__()
 
+        # build the arrays of proofsteps, definition clusters, tactics, file dependencies
         fnames = self.topo_file_order()
         for name in fnames:
             file_data = self._data[name]
             self._load_file(file_data)
+
+        # exclude unique tactics if any
+        if self.dataset_config.exclude_unique_tactics:
+            self._proof_steps = [
+                proof_step
+                for proof_step in self._proof_steps
+                if self._tactic_count[proof_step[0].tactic.ident] > 1
+            ]
 
         # precalculate def_file_ctx in a forward order to prevent stack overflow,
         # calculate the maximum definition length

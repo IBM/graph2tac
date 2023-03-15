@@ -96,6 +96,7 @@ class DatasetConfig:
     restrict_to_spine : bool
     exclude_none_arguments : bool
     exclude_not_faithful : bool
+    exclude_unique_tactics : bool
     shuffle_random_seed : bool
 
 @dataclass
