@@ -22,7 +22,7 @@ from pytact.data_reader import (capnp_message_generator,
                                 GlobalContextMessage, CheckAlignmentMessage, CheckAlignmentResponse,
                                 ProofState, OnlineDefinitionsReader)
 from graph2tac.common import logger
-from graph2tac.loader.data_classes import LoaderProofstate, ProofstateContext, ProofstateMetadata
+from graph2tac.loader.data_classes import GraphConstants, LoaderProofstate, ProofstateContext, ProofstateMetadata
 from graph2tac.loader.data_server import AbstractDataServer
 from graph2tac.predict import Predict
 
