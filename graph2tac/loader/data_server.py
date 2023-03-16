@@ -50,7 +50,7 @@ class AbstractDataServer:
         self._edges_to_ignore = (graph_api_capnp.EdgeClassification.constOpaqueDef,)
         self._def_node_to_i = dict()
         self._tactic_to_i = dict()
-        self._tactic_count = dict()
+        self._tactic_i_count = []
         self._tactic_i_to_numargs = []
         self._tactic_i_to_string = []
         self._tactic_i_to_hash = []
@@ -106,13 +106,13 @@ class AbstractDataServer:
     def _register_tactic(self, tactic_usage):
         ident = tactic_usage.tactic.ident
         if ident in self._tactic_to_i:
-            self._tactic_count[ident] += 1
+            self._tactic_i_count[self._tactic_to_i[ident]] += 1
             return
         if len(tactic_usage.outcomes) == 0:
             return
         index = len(self._tactic_to_i)
         self._tactic_to_i[ident] = index
-        self._tactic_count[ident] = 1
+        self._tactic_i_count.append(1)
         self._tactic_i_to_numargs.append(len(tactic_usage.outcomes[0].tactic_arguments))
         self._tactic_i_to_string.append(tactic_usage.tactic.base_text)
         self._tactic_i_to_hash.append(ident)
@@ -390,13 +390,8 @@ class DataServer(AbstractDataServer):
             file_data = self._data[name]
             self._load_file(file_data)
 
-        # exclude unique tactics if any
         if self.dataset_config.exclude_unique_tactics:
-            self._proof_steps = [
-                proof_step
-                for proof_step in self._proof_steps
-                if self._tactic_count[proof_step[0].tactic.ident] > 1
-            ]
+            self._exclude_unique_tactics()
 
         # precalculate def_file_ctx in a forward order to prevent stack overflow,
         # calculate the maximum definition length
@@ -498,6 +493,43 @@ class DataServer(AbstractDataServer):
             r = file_data.representative
             self._repr_to_spine[r] = np.array(spine, dtype = np.uint32) - self._base_node_label_num
             self._repr_to_filedeps[r] = filedeps
+
+    def _exclude_unique_tactics(self):
+        new_to_ori = [
+            i for i,cnt in enumerate(self._tactic_i_count)
+            if cnt > 1
+        ]
+        ori_to_new = {
+            ori : new
+            for new, ori in enumerate(new_to_ori)
+        }
+
+        # update proofsteps
+        self._proof_steps = [
+            proof_step
+            for proof_step in self._proof_steps
+            if self._tactic_to_i[proof_step[0].tactic.ident] in ori_to_new
+        ]
+
+        # reindex tactics
+        self._tactic_to_i = {
+            ident : ori_to_new[ori]
+            for ident, ori in self._tactic_to_i.items()
+            if ori in ori_to_new
+        }
+        tactic_lists = (
+            self._tactic_i_count,
+            self._tactic_i_to_numargs,
+            self._tactic_i_to_string,
+            self._tactic_i_to_hash,
+        )
+        for tactic_list in tactic_lists:
+            tactic_list[:] = [tactic_list[ori] for ori in new_to_ori]
+
+        # sanity check
+        assert len(self._tactic_i_to_hash) == len(self._tactic_to_i)
+        for ident,i in self._tactic_to_i.items():
+            assert self._tactic_i_to_hash[i] == ident
 
     def get_recdeps(self, representative):
         res = self._repr_to_recdeps.get(representative, None)
