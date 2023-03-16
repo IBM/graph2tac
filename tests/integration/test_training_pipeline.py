@@ -8,6 +8,7 @@ import sys
 from unittest.mock import patch
 import tensorflow as tf
 import warnings
+import random
 
 import graph2tac.tfgnn.train
 
