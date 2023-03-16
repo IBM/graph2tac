@@ -28,7 +28,7 @@ The python `graph2tac` package can be installed with `pip install` in a standard
 
 Get started training a simple, small model with the following command:
 ```
-g2t-train-tfgnn --data-dir tests/mini_stdlib/dataset/  --dataset-config graph2tac/tfgnn/default_dataset_config.yml --prediction-task-config graph2tac/tfgnn/default_global_argument_prediction.yml --trainer-config graph2tac/tfgnn/default_trainer_config.yml --run-config graph2tac/tfgnn/default_run_config.yml --log model/
+g2t-train-tfgnn --data-dir tests/data/mini_stdlib/dataset/  --dataset-config graph2tac/tfgnn/default_dataset_config.yml --prediction-task-config graph2tac/tfgnn/default_global_argument_prediction.yml --trainer-config graph2tac/tfgnn/default_trainer_config.yml --run-config graph2tac/tfgnn/default_run_config.yml --definition-task-config graph2tac/tfgnn/default_definition_task.yml --log model/
 ```
 You can then start a prediction server that communicates with Coq as follows:
 ```

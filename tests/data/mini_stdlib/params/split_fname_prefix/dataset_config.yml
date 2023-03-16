@@ -11,6 +11,6 @@ shuffle_random_seed: 0
 restrict_to_spine: false
 split_method: file_prefix
 split:
-- - coq-tactician-stdlib.dev/plugins
-  - coq-tactician-stdlib.dev/theories/Compat
-  - coq-tactician-stdlib.dev/theories/Logic
+- - coq-tactician-stdlib.8.11.dev/plugins
+  - coq-tactician-stdlib.8.11.dev/theories/Compat
+  - coq-tactician-stdlib.8.11.dev/theories/Logic
