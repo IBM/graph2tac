@@ -1,0 +1,17 @@
+data_config:
+  symmetrization: bidirectional
+  add_self_edges: true
+  max_subgraph_size: 1024
+  stop_at_definitions: true
+  bfs_option: true
+exclude_none_arguments: true
+exclude_not_faithful: true
+exclude_unique_tactics: true
+shuffle_random_seed: 0
+restrict_to_spine: false
+split_method: hash
+split:
+  proportions:
+  - 9
+  - 1
+  random_seed: 0
