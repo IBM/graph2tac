@@ -360,9 +360,14 @@ class TFGNNPredict(Predict):
         if tactic_expand_bound not in self._inference_model_cache.keys():
             inference_model_bare = self.prediction_task.create_inference_model(tactic_expand_bound=tactic_expand_bound,
                                                                           graph_constants=self.graph_constants)
-            tactic_mask_spec = tf.TensorSpec(shape=(self.graph_constants.tactic_num,), dtype=bool)
-            @tf.function(input_signature = (LoaderProofstateSpec, tactic_mask_spec))
-            def inference_model(state, tactic_mask):
+            allowed_model_tactics_spec = tf.TensorSpec(shape=(None,), dtype=tf.int32)
+            @tf.function(input_signature = (LoaderProofstateSpec, allowed_model_tactics_spec))
+            def inference_model(state, allowed_model_tactics):
+                tactic_mask = tf.scatter_nd(
+                    indices = tf.expand_dims(allowed_model_tactics, axis = 1),
+                    updates = tf.ones_like(allowed_model_tactics, dtype=bool),
+                    shape = [self.graph_constants.tactic_num]
+                )
                 graph_tensor_single = self._make_proofstate_graph_tensor(state)
                 graph_tensor_stacked = stack_graph_tensors([graph_tensor_single])
                 inference_output = inference_model_bare({
@@ -372,14 +377,6 @@ class TFGNNPredict(Predict):
                 return inference_output
             self._inference_model_cache[tactic_expand_bound] = inference_model
         return self._inference_model_cache[tactic_expand_bound]
-
-    def _tactic_mask_from_allowed_model_tactics(self, allowed_model_tactics: Optional[Iterable[int]]) -> tf.Tensor:
-        tactic_num = self.graph_constants.tactic_num
-        if allowed_model_tactics is not None:
-            tactic_mask = tf.reduce_any(tf.cast(tf.one_hot(allowed_model_tactics, tactic_num), tf.bool), axis=0)
-        else:
-            tactic_mask = tf.ones(shape=(tactic_num,), dtype=tf.bool)
-        return tactic_mask & self.fixed_tactic_mask
 
     @predict_api_debugging
     def ranked_predictions(self,
@@ -395,11 +392,8 @@ class TFGNNPredict(Predict):
         if available_global is not None:
             raise NotImplementedError('available_global is not supported yet')
 
-        # create the tactic mask input
-        tactic_mask = self._tactic_mask_from_allowed_model_tactics(allowed_model_tactics)
-
         inference_model = self._inference_model(tactic_expand_bound)
-        inference_output = inference_model(state, tactic_mask)
+        inference_output = inference_model(state, allowed_model_tactics)
         predict_output = PredictOutput(state=None, predictions=[])
 
         # go over the tactic_expand_bound batches
