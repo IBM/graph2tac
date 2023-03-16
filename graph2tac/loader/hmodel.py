@@ -7,7 +7,7 @@ import pickle
 import numpy as np
 from pathlib import Path
 
-from graph2tac.loader.data_classes import LoaderAction, LoaderProofstate, LoaderDefinition
+from graph2tac.loader.data_classes import DataConfig, DatasetConfig, LoaderAction, LoaderProofstate, LoaderDefinition
 from graph2tac.loader.data_server import DataServer, SplitDisabled
 
 from graph2tac.predict import Predict, predict_api_debugging
@@ -28,7 +28,11 @@ def action_encode(action: LoaderAction,
                   local_context,
                   global_context):
     context = (local_context, global_context)
-    res = [(arg[0], context[arg[0]][arg[1]]) for arg in action.args]
+    res = []
+    for local_arg, global_arg in zip(action.local_args, action.global_args):
+        if local_arg >= 0: res.append((0, local_context[local_arg]))
+        elif global_arg >= 0: res.append((1, global_context[global_arg]))
+        else: res.append((len(local_context), local_arg))
 
     return action.tactic_id, res
 
@@ -59,11 +63,25 @@ def args_decode(args,
 class Train:
     def __init__(self, data_dir: Path, max_subgraph_size, with_context, shuffled, dry):
 
-        self._data_server = DataServer(data_dir=data_dir,
-                                       split=SplitDisabled(),
-                                       bfs_option=True,
-                                       restrict_to_spine=False,
-                                       max_subgraph_size=max_subgraph_size)
+        self._data_server = DataServer(
+            data_dir=data_dir,
+            dataset_config = DatasetConfig(
+                data_config = DataConfig(
+                    max_subgraph_size=max_subgraph_size,
+                    bfs_option = True,
+                    stop_at_definitions = True,
+                    symmetrization = "bidirectional",
+                    add_self_edges = True,
+                ),
+                split_method = "disabled",
+                split = None,
+                restrict_to_spine = False,
+                exclude_none_arguments = False,
+                exclude_not_faithful = False,
+                exclude_unique_tactics = False,
+                shuffle_random_seed = 0,
+            )
+        )
         self._data = {}
         self._global_context = self._data_server.graph_constants().global_context
         self._tactic_index_to_hash = self._data_server.graph_constants().tactic_index_to_hash
