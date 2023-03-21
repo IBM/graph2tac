@@ -17,7 +17,7 @@ import contextlib
 import yaml
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
-from pytact.data_reader import (capnp_message_generator,
+from pytact.data_reader import (capnp_message_generator, capnp_message_generator_from_file,
                                 TacticPredictionGraph, TacticPredictionsGraph,
                                 GlobalContextMessage, CheckAlignmentMessage, CheckAlignmentResponse,
                                 ProofState, OnlineDefinitionsReader)
@@ -433,12 +433,19 @@ def prediction_loop(predict_server: PredictServer, context: GlobalContextMessage
 def start_prediction_loop(predict_server: PredictServer, capnp_socket: socket.socket, record_file: Optional[BinaryIO]):
     prediction_loop(predict_server, capnp_message_generator(capnp_socket, record_file))
 
+def start_prediction_loop_with_replay(predict_server: PredictServer, replay_file: Path):
+    with open(replay_file, "rb") as f:
+        prediction_loop(predict_server, capnp_message_generator_from_file(f))
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description='graph2tac Predict python tensorflow server')
 
     parser.add_argument('--tcp', action='store_true',
                         help='start python server on tcp/ip socket')
+    
+    parser.add_argument('--replay', type=Path,
+                        help='previously recorded record file to replay')
 
     parser.add_argument('--port', type=int,
                         default=33333,
@@ -468,7 +475,7 @@ def parse_args() -> argparse.Namespace:
                         type = str,
                         default = None,
                         help='Record all exchanged messages to the specified file, so that they can later be ' +
-                        'replayed through "pytact-fake-coq"')
+                        'replayed through "pytact-fake-coq" or --replay')
 
     parser.add_argument('--with_meter',
                         default=False,
@@ -613,7 +620,11 @@ def main():
         record_context = contextlib.nullcontext()
 
     with record_context as record_file:
-        if not config.tcp:
+        if config.replay:
+            assert not config.tcp, "--replay not compatible with --tcp"
+            assert not config.tcp, "--replay not compatible with --record"
+            start_prediction_loop_with_replay(predict_server, config.replay)
+        elif not config.tcp:
             logger.info("starting stdin server")
             capnp_socket = socket.socket(fileno=sys.stdin.fileno())
             start_prediction_loop(predict_server, capnp_socket, record_file)
