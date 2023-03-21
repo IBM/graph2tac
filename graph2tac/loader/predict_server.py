@@ -1,6 +1,6 @@
 import argparse
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 import sys
 import socket
 from pathlib import Path
@@ -36,6 +36,25 @@ def apply_temperature(confidences: ArrayLike, temperature: float) -> NDArray[np.
     res = confidences**(1/temperature)
     res /= res.sum() + (1-confidences.sum())**(1/temperature)
     return res
+
+class ResponseHistory:
+    """Records response history for testing."""
+    data: dict
+    """JSON compatible dictionary which stores all the history."""
+    def __init__(self, recording_on: bool):
+        """
+        :param recording_on: Record results if True, otherwise do nothing.
+        """
+        self._recording_on = recording_on
+        self.data = {"responses": []}
+
+    def record_response(self, msg: CheckAlignmentResponse | TacticPredictionsGraph):
+        if not self._recording_on:
+            return
+        self.data["responses"].append({
+            "_type": str(type(msg)),
+            "contents": asdict(msg),
+        })
 
 @dataclass
 class LoggingCounters:
@@ -211,6 +230,7 @@ class PredictServer:
                  model: Predict,
                  config: argparse.Namespace,
                  log_cnts: LoggingCounters,
+                 response_history: ResponseHistory,
     ):
         self.data_server = DynamicDataServer(model.graph_constants)
         self.model = model
@@ -218,6 +238,7 @@ class PredictServer:
         self.log_cnts = log_cnts
         self.current_allowed_tactics = None
         self.inside_context = False
+        self.response_history = response_history
 
     def _enter_coq_context(self, definitions: OnlineDefinitionsReader, tactics):
 
@@ -411,6 +432,7 @@ def prediction_loop(predict_server: PredictServer, context: GlobalContextMessage
                         log_cnts.n_predict += 1
 
                         # important line -- sending prediction
+                        predict_server.response_history.record_response(response)
                         prediction_requests.send(response)
                         msg = next(message_iterator, None)
                     else:
@@ -422,6 +444,7 @@ def prediction_loop(predict_server: PredictServer, context: GlobalContextMessage
             logger.info("checkAlignment request")
             response = predict_server.check_alignment(context)
             logger.info("sending checkAlignment response to coq")
+            predict_server.response_history.record_response(response)
             prediction_requests.send(response)
             msg = next(message_iterator, None)
         elif isinstance(msg, GlobalContextMessage):
@@ -585,7 +608,7 @@ def load_model(config: argparse.Namespace, log_levels: dict) -> Predict:
     logger.info(f"initializing predict network from {Path(config.model).expanduser().absolute()}")
     return model
 
-def main():
+def main() -> ResponseHistory:
 
     config = parse_args()
 
@@ -612,7 +635,8 @@ def main():
 
     log_cnts = LoggingCounters(process_uuid=process_uuid)
     model = load_model(config, log_levels)
-    predict_server = PredictServer(model, config, log_cnts)
+    response_history = ResponseHistory(recording_on=config.replay)  # only record response history if replay is on
+    predict_server = PredictServer(model, config, log_cnts, response_history)
 
     if config.record is not None:
         record_context = open(config.record, 'wb')
@@ -653,6 +677,8 @@ def main():
             finally:
                 logger.info(f'closing the server on port {config.port}')
                 server_sock.close()
+    
+    return response_history  # return for testing purposes
 
 if __name__ == '__main__':
     main()
