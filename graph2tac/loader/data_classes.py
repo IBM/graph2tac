@@ -56,13 +56,7 @@ LoaderAction, LoaderActionSpec = namedtuple_with_spec(
     # If `global_args[i] == g` for `g >= 0`, then the `i`th arg is a global definition with index `g`.
     # Otherwise, the values are set to '-1'
     
-    # The local argument is an index into `context.local_context` for the corresponding proofstate,
-    # but the global argument is the index into the list of global definitions returned by the dataserver and kept
-    # in the model.  In particular, the global argument is neither an index into `context.global_context`
-    # for the proofstate nor the node label of a definition (which would instead be offset by the number of base node labels).
-
-    # Hence the smallest possible global argument index is 0 and it can be larger than
-    # `len(context.global_context)` for the corresponding proofstate.
+    # The local and global arguments are indices into `context.local_context` and `context.global_context` respectively.
 )
 
 LoaderDefinition, LoaderDefinitionSpec = namedtuple_with_spec(
