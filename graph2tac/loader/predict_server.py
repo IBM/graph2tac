@@ -52,7 +52,7 @@ class ResponseHistory:
         if not self._recording_on:
             return
         self.data["responses"].append({
-            "_type": str(type(msg)),
+            "_type": type(msg).__name__,
             "contents": asdict(msg),
         })
 
