@@ -13,9 +13,6 @@ import tensorflow as tf
 from typing import Any
 import warnings
 
-import graph2tac.tfgnn.train
-import graph2tac.loader.predict_server
-
 # this helps with determinism
 tf.config.experimental.enable_op_determinism()
 
@@ -42,6 +39,7 @@ def approximate(results: dict | list | float | Any, rel_error_tolerance: float) 
 
 def run_tfgnn_training(tmp_path: Path, data_dir: Path, params_dir: Path) -> dict:
     """Run training and return results for comparison"""
+    import graph2tac.tfgnn.train  # put import here so it doesn't break other tests if it crashes
 
     training_args = ["<program>",
         "--data-dir", data_dir,
@@ -60,8 +58,9 @@ def run_tfgnn_training(tmp_path: Path, data_dir: Path, params_dir: Path) -> dict
     results = {k:v for k,v in history.history.items() if k not in ["epoch_duration", "learning_rate"]}
     return results
 
-def run_benchmark(tmp_path: Path, record_file: Path) -> dict:
+def run_predict_server(tmp_path: Path, record_file: Path) -> dict:
     """Run training and return results for comparison"""
+    import graph2tac.loader.predict_server  # put import here so it doesn't break other tests if it crashes
 
     benchmark_args = ["<program>",
         "--arch", "tfgnn",

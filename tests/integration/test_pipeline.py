@@ -5,7 +5,7 @@ import pytest
 from pathlib import Path
 import tensorflow as tf
 
-from tests.integration.pipeline import run_tfgnn_training, run_benchmark, assert_results_match_expected
+from tests.integration.pipeline import run_tfgnn_training, run_predict_server, assert_results_match_expected
 
 # this helps with determinism
 tf.config.experimental.enable_op_determinism()
@@ -42,15 +42,15 @@ def test_pipeline(tmp_path: Path, dataset: str, params: str, overwrite: bool):
         overwrite=overwrite
     )
 
-    # benchmark model
+    # predict
     record_file = params_dir / "coq_messages_record"
     if not record_file.exists(): 
         return
-    benchmark_results = run_benchmark(tmp_path, record_file)
+    predict_server_results = run_predict_server(tmp_path, record_file)
     assert_results_match_expected(
-        results=benchmark_results,
-        expected_results_file = params_dir / "expected_benchmark.json",
-        results_type="Benchmark",
+        results=predict_server_results,
+        expected_results_file = params_dir / "expected_predict_server.json",
+        results_type="Predict Server",
         rel_error_tolerance=REL_ERROR_TOLERANCE,
         overwrite=overwrite
     )
