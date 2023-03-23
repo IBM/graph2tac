@@ -953,7 +953,6 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
                 tf.gather(available_global_context, tf.maximum(global_args, 0), batch_dims=1),
                 tf.constant(-1, dtype = tf.int64),
             )
-            tf.print("SHAPE AFTER:", tf.shape(global_args), global_args.dtype, global_args.row_lengths())
         else:
             # if the available_global_context is empty, then global_args contains no references to the global context
             # hence we can leave it the same
