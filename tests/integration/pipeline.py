@@ -12,6 +12,7 @@ from unittest.mock import patch
 import tensorflow as tf
 from typing import Any
 import warnings
+import yaml
 
 # this helps with determinism
 tf.config.experimental.enable_op_determinism()
@@ -57,6 +58,37 @@ def run_tfgnn_training(tmp_path: Path, data_dir: Path, params_dir: Path) -> dict
     # remove results which are not stable or not serializable
     results = {k:v for k,v in history.history.items() if k not in ["epoch_duration", "learning_rate"]}
     return results
+
+def run_hmodel_training(tmp_path: Path, data_dir: Path, params_dir: Path) -> dict:
+    """Run training and return results for comparison"""
+    import graph2tac.loader.hmodel
+
+    training_args = ["<program>",
+        data_dir,
+        "--output_dir", tmp_path / "log"
+    ]
+
+    # read additional arguments from the hmodel.yml file
+    with (params_dir / "hmodel.yml").open() as f:
+        hmodel_params = yaml.safe_load(f)
+    for key, value in hmodel_params.items():
+        training_args.append(f"--{key}")
+        if value is not None:
+            training_args.append(value)
+
+    # use context manager to pass command line arguments to our main method
+    with patch.object(sys, 'argv', [str(a) for a in training_args]):
+        model_results = graph2tac.loader.hmodel.main()
+    
+    # sample first 10 hashs (lexicographically) and format actions in JSON compatible format
+    hashes = sorted(model_results["data"].keys())[:10]
+    data = {}
+    for hsh in hashes:
+        data[hsh] = []
+        action = model_results["data"][hsh]
+        for tactic, args in action:
+            data[hsh].append({"tactic": tactic, "args": [{"arg_type": int(kind), "arg_index": int(index)} for kind, index in args]})
+    return data
 
 def run_predict_server(tmp_path: Path, record_file: Path) -> dict:
     """Run training and return results for comparison"""

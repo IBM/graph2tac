@@ -5,7 +5,7 @@ import pytest
 from pathlib import Path
 import tensorflow as tf
 
-from tests.integration.pipeline import run_tfgnn_training, run_predict_server, assert_results_match_expected
+from tests.integration.pipeline import run_tfgnn_training, run_hmodel_training, run_predict_server, assert_results_match_expected
 
 # this helps with determinism
 tf.config.experimental.enable_op_determinism()
@@ -33,7 +33,12 @@ def test_pipeline(tmp_path: Path, dataset: str, params: str, overwrite: bool):
     
     # train model and test results
     data_dir = TESTDATADIR / dataset / "dataset"
-    training_results = run_tfgnn_training(tmp_path, data_dir, params_dir)
+    if (params_dir / "hmodel.yml").exists():
+        # train hmodel
+        training_results = run_hmodel_training(tmp_path, data_dir, params_dir)
+    else:
+        # train tfgnn model
+        training_results = run_tfgnn_training(tmp_path, data_dir, params_dir)
     assert_results_match_expected(
         results=training_results,
         expected_results_file = params_dir / "expected.json",
