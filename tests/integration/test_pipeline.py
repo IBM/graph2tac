@@ -51,7 +51,7 @@ def test_pipeline(tmp_path: Path, dataset: str, params: str, overwrite: bool):
     record_file = params_dir / "coq_messages_record"
     if not record_file.exists(): 
         return
-    predict_server_results = run_predict_server(tmp_path, record_file)
+    predict_server_results = run_predict_server(tmp_path, record_file, params_dir)
     assert_results_match_expected(
         results=predict_server_results,
         expected_results_file = params_dir / "expected_predict_server.json",

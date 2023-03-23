@@ -90,23 +90,24 @@ def run_hmodel_training(tmp_path: Path, data_dir: Path, params_dir: Path) -> dic
             data[hsh].append({"tactic": tactic, "args": [{"arg_type": int(kind), "arg_index": int(index)} for kind, index in args]})
     return data
 
-def run_predict_server(tmp_path: Path, record_file: Path) -> dict:
+def run_predict_server(tmp_path: Path, record_file: Path, params_dir: Path) -> dict:
     """Run training and return results for comparison"""
     import graph2tac.loader.predict_server  # put import here so it doesn't break other tests if it crashes
 
-    benchmark_args = ["<program>",
-        "--arch", "tfgnn",
-        "--log_level", "info",
-        "--tf_log_level", "critical",
-        "--tactic_expand_bound", "8",
-        "--total_expand_bound", "10",
-        "--search_expand_bound", "4",
-        "--update_all_definitions",
+    server_args = ["<program>",
         "--model", tmp_path / "log",
         "--replay", record_file
     ]
+    # read additional arguments from the predict_server.yml file
+    with (params_dir / "predict_server.yml").open() as f:
+        predict_server_params = yaml.safe_load(f)
+    for key, value in predict_server_params.items():
+        server_args.append(f"--{key}")
+        if value is not None:
+            server_args.append(value)
+
     # use context manager to pass command line arguments to our main method
-    with patch.object(sys, 'argv', [str(a) for a in benchmark_args]):
+    with patch.object(sys, 'argv', [str(a) for a in server_args]):
         history = graph2tac.loader.predict_server.main()
     return history.data
 
