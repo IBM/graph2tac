@@ -626,7 +626,9 @@ class DataServer(AbstractDataServer):
             if arg_local < 0: arg_global = self._def_node_to_i.get(arg, -1)
             else: arg_global = -1
             # node reindexing: "node label" -> "index to global_context"
-            if arg_global >= 0: arg_global -= self._base_node_label_num
+            if arg_global >= 0:
+                arg_global -= self._base_node_label_num
+                [arg_global] = np.flatnonzero(available_global_context == arg_global)
             if arg_global < 0 and arg_local < 0: has_none_argument = True
             local_args.append(arg_local)
             global_args.append(arg_global)

@@ -944,9 +944,24 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
     @staticmethod
     def create_input_output(graph_tensor: tfgnn.GraphTensor) -> Tuple[
         tfgnn.GraphTensor, Dict[str, Union[tf.Tensor, tf.RaggedTensor]]]:
+
+        global_args = graph_tensor.context['global_arguments']
+        available_global_context = graph_tensor.context['global_context_ids']
+        if tf.size(available_global_context) > 0:
+            global_args = tf.where(
+                global_args >= 0,
+                tf.gather(available_global_context, tf.maximum(global_args, 0), batch_dims=1),
+                tf.constant(-1, dtype = tf.int64),
+            )
+            tf.print("SHAPE AFTER:", tf.shape(global_args), global_args.dtype, global_args.row_lengths())
+        else:
+            # if the available_global_context is empty, then global_args contains no references to the global context
+            # hence we can leave it the same
+            global_args = global_args
+
         outputs = {GlobalArgumentPrediction.TACTIC_LOGITS: graph_tensor.context['tactic'],
                    GlobalArgumentPrediction.LOCAL_ARGUMENTS_LOGITS: graph_tensor.context['local_arguments'],
-                   GlobalArgumentPrediction.GLOBAL_ARGUMENTS_LOGITS: graph_tensor.context['global_arguments']}
+                   GlobalArgumentPrediction.GLOBAL_ARGUMENTS_LOGITS: global_args}
         return graph_tensor, outputs
 
     def loss(self) -> Dict[str, tf.keras.losses.Loss]:
