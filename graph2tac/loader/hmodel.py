@@ -19,7 +19,7 @@ def my_hash(x: bytes):
     return m.hexdigest()
 
 
-def hash_nparray(array: np.array):
+def hash_nparray(array: np.ndarray):
     x = memoryview(array).tobytes()
     return my_hash(x)
 
@@ -27,7 +27,6 @@ def hash_nparray(array: np.array):
 def action_encode(action: LoaderAction,
                   local_context,
                   global_context):
-    context = (local_context, global_context)
     res = []
     for local_arg, global_arg in zip(action.local_args, action.global_args):
         if local_arg >= 0: res.append((0, local_context[local_arg]))
@@ -189,7 +188,7 @@ class HPredict(Predict):
             if args_decoded is not None:
                 args_decoded = np.array(args_decoded, dtype=np.uint32).reshape((len(args_decoded), 2))
             if debug:
-                print("HMODEL ", annotation, self._graph_constants.tactic_index_to_string[tactic_idx].decode(), "index into context:", args_decoded, end="")
+                print("HMODEL ", annotation, self.graph_constants.tactic_index_to_string[tactic_idx].decode(), "index into context:", args_decoded, end="")
             if tactic_idx in allowed_model_tactics:
                 if args_decoded is not None:
                     decoded_predictions.append(np.concatenate([np.array([(tactic_idx, tactic_idx)], dtype=np.uint32), args_decoded]))
