@@ -8,6 +8,7 @@ import tensorflow as tf
 from tests.integration.pipeline import run_tfgnn_training, run_hmodel_training, run_predict_server, assert_results_match_expected
 
 # this helps with determinism
+tf.keras.utils.set_random_seed(1)
 tf.config.experimental.enable_op_determinism()
 
 REL_ERROR_TOLERANCE = 1e-4
@@ -41,7 +42,7 @@ def test_pipeline(tmp_path: Path, dataset: str, params: str, overwrite: bool):
         training_results = run_tfgnn_training(tmp_path, data_dir, params_dir)
     assert_results_match_expected(
         results=training_results,
-        expected_results_file = params_dir / "expected.json",
+        expected_results_file = params_dir / "expected.yaml",
         results_type="Training",
         rel_error_tolerance=REL_ERROR_TOLERANCE,
         overwrite=overwrite
@@ -54,7 +55,7 @@ def test_pipeline(tmp_path: Path, dataset: str, params: str, overwrite: bool):
     predict_server_results = run_predict_server(tmp_path, record_file, params_dir)
     assert_results_match_expected(
         results=predict_server_results,
-        expected_results_file = params_dir / "expected_predict_server.json",
+        expected_results_file = params_dir / "expected_predict_server.yaml",
         results_type="Predict Server",
         rel_error_tolerance=REL_ERROR_TOLERANCE,
         overwrite=overwrite

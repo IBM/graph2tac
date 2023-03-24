@@ -4,7 +4,6 @@ Supporting code for testing the training and benchmarking pipeline
 import os
 os.environ["CUDA_VISIBLE_DEVICES"] = "-1"  # force tests to run on CPU
 
-import json
 from pathlib import Path
 import pytest
 import sys
@@ -20,11 +19,11 @@ tf.config.experimental.enable_op_determinism()
 def overwrite_expected_results(results: dict, path: Path):
     warnings.warn(f"Overwriting expected results in {path}")
     with path.open("w") as f:
-        json.dump(results, f)
+        yaml.safe_dump(results, f)
 
 def get_expected_results(path: Path):
     with path.open("r") as f:
-        expected_results = json.load(f)
+        expected_results = yaml.safe_load(f)
     return expected_results
 
 def approximate(results: dict | list | float | Any, rel_error_tolerance: float) -> dict | list | float | Any:
