@@ -773,7 +773,8 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
         self.global_arguments_logits = LogitsFromEmbeddings(
             embedding_matrix=self.graph_embedding.get_node_embeddings(),
             valid_indices=tf.constant(self._graph_constants.global_context, dtype=tf.int32),
-            cosine_similarity=self._global_cosine_similarity
+            cosine_similarity=self._global_cosine_similarity,
+            shift_valid = True,
         )
 
         # we use trivial lambda layers to appropriately rename outputs
@@ -804,7 +805,7 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
         @param global_context_size: the size of the full global context
         @return: a mask for logits of the global context, taking into account the definitions that are actually available
         """
-        global_context_ids = scalar_proofstate_graph.context['global_context_ids']
+        global_context_ids = scalar_proofstate_graph.context['global_context_ids'] - 26
 
         indices = tf.stack([
             tf.cast(global_context_ids.value_rowids(), tf.int64),
@@ -859,7 +860,7 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
         global_hidden_state_sequences = self.global_arguments_head(hidden_state_sequences)
         global_arguments_logits = self.global_arguments_logits(global_hidden_state_sequences.to_tensor())  # noqa
         if self._dynamic_global_context:
-            global_arguments_logits_mask = self._global_arguments_logits_mask(scalar_proofstate_graph=scalar_proofstate_graph, global_context_size=len(self._graph_constants.global_context))
+            global_arguments_logits_mask = self._global_arguments_logits_mask(scalar_proofstate_graph=scalar_proofstate_graph, global_context_size=len(self._graph_constants.global_context[26:]))
             global_arguments_logits += tf.expand_dims(global_arguments_logits_mask, axis=1)
 
         normalized_local_arguments_logits, normalized_global_arguments_logits = self._normalize_logits(local_arguments_logits=local_arguments_logits, global_arguments_logits=global_arguments_logits)
@@ -898,7 +899,7 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
         # [batch_size, ]
         no_local_context_proofstates = scalar_proofstate_graph.context['local_context_ids'].row_lengths() == 0
         no_global_context_proofstates = tf.fill(dims=(proofstate_graph.total_num_components,),
-                                                value=len(graph_constants.global_context) == 0)
+                                                value=len(graph_constants.global_context[26:]) == 0)
         no_context_proofstates = no_local_context_proofstates & no_global_context_proofstates
 
         # [batch_size, tactic_num]
@@ -946,7 +947,7 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
         tfgnn.GraphTensor, Dict[str, Union[tf.Tensor, tf.RaggedTensor]]]:
 
         global_args = graph_tensor.context['global_arguments']
-        available_global_context = graph_tensor.context['global_context_ids']
+        available_global_context = graph_tensor.context['global_context_ids'] - 26
         if tf.size(available_global_context) > 0:
             global_args = tf.where(
                 global_args >= 0,

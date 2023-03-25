@@ -64,6 +64,7 @@ class LogitsFromEmbeddings(tf.keras.layers.Layer):
                  embedding_matrix: tf.Variable,
                  valid_indices: tf.Tensor,
                  cosine_similarity: bool,
+                 shift_valid = False,
                  name: str = 'logits_from_embeddings',
                  **kwargs
                  ):
@@ -75,6 +76,7 @@ class LogitsFromEmbeddings(tf.keras.layers.Layer):
             self._temp = tf.Variable(initial_value=1.0, trainable=True)
         
         self._embedding_matrix = embedding_matrix
+        self.shift_valid = shift_valid
         self._valid_indices = valid_indices
         super().__init__(name=name, **kwargs)
 
@@ -92,8 +94,12 @@ class LogitsFromEmbeddings(tf.keras.layers.Layer):
             # those are not used for the loss, but NaN leads to bugs
             hidden_state_norm = tf.norm(hidden_state, axis=-1, keepdims=True)
             hidden_state = tf.math.divide_no_nan(hidden_state, hidden_state_norm)
-            
-        logits = tf.matmul(a=hidden_state, b=tf.gather(emb_matrix, self._valid_indices), transpose_b=True)
+
+        if self.shift_valid:
+            # logits = tf.matmul(a=hidden_state, b=tf.gather(emb_matrix, self._valid_indices)[26:], transpose_b=True)
+            logits = tf.matmul(a=hidden_state, b=tf.gather(emb_matrix, self._valid_indices), transpose_b=True)[:,:,26:]
+        else:
+            logits = tf.matmul(a=hidden_state, b=tf.gather(emb_matrix, self._valid_indices), transpose_b=True)
 
         if self._cosine_similarity:
             logits = logits / self._temp
