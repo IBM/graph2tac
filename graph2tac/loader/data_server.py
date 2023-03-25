@@ -425,7 +425,7 @@ class DataServer(AbstractDataServer):
             tactic_index_to_numargs = self._tactic_i_to_numargs,
             tactic_index_to_string = self._tactic_i_to_string,
             tactic_index_to_hash = self._tactic_i_to_hash,
-            global_context = list(range(self._base_node_label_num, total_node_label_num)),
+            global_context = list(range(total_node_label_num)),
             label_to_names = self._node_i_to_name,
             label_to_ident = self._node_i_to_ident,
             label_in_spine = self._node_i_in_spine,
@@ -491,7 +491,7 @@ class DataServer(AbstractDataServer):
                 filedeps.extend(d.external_previous)
 
             r = file_data.representative
-            self._repr_to_spine[r] = np.array(spine, dtype = np.uint32) - self._base_node_label_num
+            self._repr_to_spine[r] = np.array(spine, dtype = np.uint32)
             self._repr_to_filedeps[r] = filedeps
 
     def _exclude_unique_tactics(self):
@@ -585,7 +585,7 @@ class DataServer(AbstractDataServer):
         available_global_context = np.array([
             self._def_node_to_i[ctx_def.node]
             for ctx_def in definition.global_context(across_files = False)
-        ], dtype = np.uint32) - self._base_node_label_num
+        ], dtype = np.uint32)
         filedeps, filectx = self.get_def_file_ctx(definition)
         available_global_context = np.concatenate([
             filectx,
@@ -627,7 +627,6 @@ class DataServer(AbstractDataServer):
             else: arg_global = -1
             # node reindexing: "node label" -> "index to global_context"
             if arg_global >= 0:
-                arg_global -= self._base_node_label_num
                 [arg_global] = np.flatnonzero(available_global_context == arg_global)
             if arg_global < 0 and arg_local < 0: has_none_argument = True
             local_args.append(arg_local)
