@@ -96,8 +96,8 @@ class LogitsFromEmbeddings(tf.keras.layers.Layer):
             hidden_state = tf.math.divide_no_nan(hidden_state, hidden_state_norm)
 
         if self.shift_valid:
-            # logits = tf.matmul(a=hidden_state, b=tf.gather(emb_matrix, self._valid_indices)[26:], transpose_b=True)
-            logits = tf.matmul(a=hidden_state, b=tf.gather(emb_matrix, self._valid_indices), transpose_b=True)[:,:,26:]
+            logits = tf.matmul(a=hidden_state, b=tf.gather(emb_matrix, self._valid_indices)[26:], transpose_b=True) # 9 passed
+            # logits = tf.matmul(a=hidden_state, b=tf.gather(emb_matrix, self._valid_indices), transpose_b=True)[:,:,26:] # 2 failed, 7 passed
         else:
             logits = tf.matmul(a=hidden_state, b=tf.gather(emb_matrix, self._valid_indices), transpose_b=True)
 
