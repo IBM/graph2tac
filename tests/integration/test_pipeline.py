@@ -8,7 +8,6 @@ import tensorflow as tf
 from tests.integration.pipeline import run_tfgnn_training, run_hmodel_training, run_predict_server, assert_results_match_expected
 
 # this helps with determinism
-tf.keras.utils.set_random_seed(1)
 tf.config.experimental.enable_op_determinism()
 
 REL_ERROR_TOLERANCE = 1e-4
@@ -49,7 +48,7 @@ def test_pipeline(tmp_path: Path, dataset: str, params: str, overwrite: bool):
     )
 
     # predict
-    record_file = params_dir / "coq_messages_record"
+    record_file = params_dir / "record_file.bin"
     if not record_file.exists(): 
         return
     predict_server_results = run_predict_server(tmp_path, record_file, params_dir)

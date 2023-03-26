@@ -48,13 +48,32 @@ class ResponseHistory:
         self._recording_on = recording_on
         self.data = {"responses": []}
 
+    @staticmethod
+    def convert_msg_to_dict(msg: CheckAlignmentResponse | TacticPredictionsGraph) -> dict:
+        if isinstance(msg, TacticPredictionsGraph):
+            return {
+                "_type": type(msg).__name__,
+                "contents": {
+                    "predictions": [
+                        {"ident": p.ident, "arguments": [repr(a) for a in p.arguments], "confidence": p.confidence}
+                        for p in msg.predictions
+                    ]
+                },
+            }
+        elif isinstance(msg, CheckAlignmentResponse):
+            return {
+                "_type": type(msg).__name__,
+                "contents": {
+                    "unknown_definitions": [repr(d) for d in msg.unknown_definitions],
+                    "unknown_tactics": [t for t in msg.unknown_tactics]
+                },
+            }
+        else:
+            raise NotImplementedError(f"f{type(msg)} messages not yet supported")
+    
     def record_response(self, msg: CheckAlignmentResponse | TacticPredictionsGraph):
-        if not self._recording_on:
-            return
-        self.data["responses"].append({
-            "_type": type(msg).__name__,
-            "contents": asdict(msg),
-        })
+        if self._recording_on:
+            self.data["responses"].append(self.convert_msg_to_dict(msg))
 
 @dataclass
 class LoggingCounters:
