@@ -1,0 +1,70 @@
+responses:
+- _type: CheckAlignmentResponse
+  contents:
+    unknown_definitions:
+    - <pytact/graph_api.capnp:Definition reader (name = "Tactician.Ltac1.Record.private_constant_placeholder",
+      previous = 5, externalPrevious = [], status = (original = void), manualConstant
+      = void)>
+    unknown_tactics: []
+- _type: TacticPredictionsGraph
+  contents:
+    predictions:
+    - arguments: []
+      confidence: 1.0
+      ident: 2091839244048452363
+- _type: TacticPredictionsGraph
+  contents:
+    predictions:
+    - arguments: []
+      confidence: 1.0
+      ident: 2091839244048452363
+- _type: TacticPredictionsGraph
+  contents:
+    predictions:
+    - arguments: []
+      confidence: 1.0
+      ident: 2091839244048452363
+- _type: TacticPredictionsGraph
+  contents:
+    predictions:
+    - arguments:
+      - node-3-9
+      confidence: 1.0
+      ident: 3192827940261208899
+- _type: TacticPredictionsGraph
+  contents:
+    predictions:
+    - arguments: []
+      confidence: 1.0
+      ident: 2091839244048452363
+- _type: TacticPredictionsGraph
+  contents:
+    predictions:
+    - arguments: []
+      confidence: 1.0
+      ident: 2091839244048452363
+- _type: TacticPredictionsGraph
+  contents:
+    predictions:
+    - arguments:
+      - node-4-9
+      confidence: 1.0
+      ident: 3192827940261208899
+- _type: TacticPredictionsGraph
+  contents:
+    predictions: []
+- _type: TacticPredictionsGraph
+  contents:
+    predictions: []
+- _type: TacticPredictionsGraph
+  contents:
+    predictions: []
+- _type: TacticPredictionsGraph
+  contents:
+    predictions: []
+- _type: TacticPredictionsGraph
+  contents:
+    predictions: []
+- _type: TacticPredictionsGraph
+  contents:
+    predictions: []
