@@ -18,7 +18,6 @@ TESTDATADIR = TESTDIR / "data"
 DATASET_PARAMS_PAIRS = [(d.parent.parent.name, d.name) for d in TESTDATADIR.glob("*/params/*")]
 
 @pytest.mark.filterwarnings("ignore:Converting sparse IndexedSlices")  # have pytest ignore this warning
-@pytest.mark.filterwarnings("ignore:NumPy will stop allowing conversion of out-of-bound Python integers to integer arrays")  # have pytest ignore this warning
 @pytest.mark.parametrize("dataset,params", DATASET_PARAMS_PAIRS)
 def test_pipeline(tmp_path: Path, dataset: str, params: str, overwrite: bool):
     """
