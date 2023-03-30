@@ -78,7 +78,7 @@ class Train:
                 restrict_to_spine = False,
                 exclude_none_arguments = False,
                 exclude_not_faithful = False,
-                exclude_unique_tactics = False,
+                required_tactic_occurence = 1,
                 shuffle_random_seed = 0,
             )
         )
