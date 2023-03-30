@@ -390,8 +390,7 @@ class DataServer(AbstractDataServer):
             file_data = self._data[name]
             self._load_file(file_data)
 
-        if self.dataset_config.exclude_unique_tactics:
-            self._exclude_unique_tactics()
+        self._exclude_unique_tactics()
 
         # precalculate def_file_ctx in a forward order to prevent stack overflow,
         # calculate the maximum definition length
@@ -495,9 +494,11 @@ class DataServer(AbstractDataServer):
             self._repr_to_filedeps[r] = filedeps
 
     def _exclude_unique_tactics(self):
+        if self.dataset_config.required_tactic_occurrence <= 1: return
+
         new_to_ori = [
             i for i,cnt in enumerate(self._tactic_i_count)
-            if cnt > 1
+            if cnt >= self.dataset_config.required_tactic_occurrence
         ]
         ori_to_new = {
             ori : new
