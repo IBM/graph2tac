@@ -95,8 +95,7 @@ def run_predict_server(tmp_path: Path, record_file: Path, params_dir: Path) -> d
 
     server_args = ["<program>",
         "--model", tmp_path / "log",
-        "--replay", 
-        "--replay_file", record_file
+        "--replay", record_file
     ]
     # read additional arguments from the predict_server.yml file
     with (params_dir / "predict_server.yml").open() as f:
