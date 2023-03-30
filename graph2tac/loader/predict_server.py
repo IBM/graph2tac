@@ -286,11 +286,11 @@ class PredictServer:
         logger.info(f"Building network model completed in {self.log_cnts.build_network_time:.6f} seconds")
 
         # definition recalculation
-        if self.config.update_all_definitions:
+        if self.config.update == "all":
             def_clusters_for_update = list(definitions.clustered_definitions())
             prev_defined_nodes = self.data_server._base_node_label_num
             logger.info(f"Prepared for update all {len(def_clusters_for_update)} definition clusters")
-        elif self.config.update_new_definitions:
+        elif self.config.update == "new":
             def_clusters_for_update = [
                 cluster for cluster in definitions.clustered_definitions()
                 if self.data_server.is_new_definition(cluster[0].node)
@@ -298,6 +298,7 @@ class PredictServer:
             prev_defined_nodes = self.data_server._num_train_nodes
             logger.info(f"Prepared for update {len(def_clusters_for_update)} definition clusters containing unaligned definitions")
         else:
+            assert self.config.update is None
             def_clusters_for_update = []
             prev_defined_nodes = None
             logger.info(f"No update of the definition clusters requested")
@@ -483,18 +484,31 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description='graph2tac Predict python tensorflow server')
 
-    parser.add_argument('--tcp', action='store_true',
-                        help='start python server on tcp/ip socket')
+    comm_group = parser.add_mutually_exclusive_group()
+    comm_group.add_argument('--stdin', 
+        action='store_const', dest='comm_type', const='stdin', default='stdin',
+        help='communicate via stdin/stdout (default)'
+    )
+    comm_group.add_argument('--tcp',
+        action='store_const', dest='comm_type', const='tcp',
+        help='start python server on tcp/ip socket'
+    )
+    comm_group.add_argument(
+        '--replay',
+        action='store_const', dest='comm_type', const='replay',
+        help='replay previously recorded record file'
+    )
     
-    parser.add_argument('--replay', type=Path,
-                        help='previously recorded record file to replay')
-
     parser.add_argument('--port', type=int,
                         default=33333,
                         help='run python server on this port')
     parser.add_argument('--host', type=str,
                         default='',
                         help='run python server on this local ip')
+
+    parser.add_argument('--replay_file', '--replay-file', type=Path, 
+                        default=None, 
+                        help='file to be replayed')
 
     parser.add_argument('--model', type=str,
                         default=None,
@@ -539,21 +553,24 @@ def parse_args() -> argparse.Namespace:
                         default=8,
                         help="maximal number of predictions to be sent to search algorithm in coq evaluation client ")
 
-    parser.add_argument('--update_new_definitions',
-                        default=False,
-                        action='store_true',
-                        help="call network update embedding on clusters containing new definitions ")
-
-    parser.add_argument('--update_all_definitions',
-                        default=False,
-                        action='store_true',
-                        help="call network update embedding on cluster containing all definitions (overwrites update new definitions)")
+    update_group = parser.add_mutually_exclusive_group()
+    update_group.add_argument('--update_no_definitions', '--update-no-definitions', 
+        action='store_const', dest='update', const=None, default=None,
+        help='for new definitions (not learned during training) use default embeddings (default)'
+    )
+    update_group.add_argument('--update_new_definitions', '--update-new-definitions', 
+        action='store_const', dest='update', const='new',
+        help='for new definitions (not learned during training) use embeddings calculated from the model'
+    )
+    update_group.add_argument('--update_all_definitions', '--update-all-definitions', 
+        action='store_const', dest='update', const='all',
+        help='overwrite all definition embeddings with new embeddings calculated from the model'
+    )
 
     parser.add_argument('--progress_bar',
                         default=False,
                         action='store_true',
                         help="show the progress bar of update definition clusters")
-
 
     parser.add_argument('--tf_eager',
                         default=False,
@@ -580,6 +597,9 @@ def parse_args() -> argparse.Namespace:
                         default=None,
                         help="a list of tactic names to exclude from predictions")
 
+    args = parser.parse_args()
+    if args.comm_type == "replay" and args.replay_file is None :
+        parser.error("--replay requires --replay_file")
     return parser.parse_args()
 
 def load_model(config: argparse.Namespace, log_levels: dict) -> Predict:
@@ -654,7 +674,7 @@ def main() -> ResponseHistory:
 
     log_cnts = LoggingCounters(process_uuid=process_uuid)
     model = load_model(config, log_levels)
-    response_history = ResponseHistory(recording_on=config.replay)  # only record response history if replay is on
+    response_history = ResponseHistory(recording_on=(config.comm_type == "replay"))  # only record response history if replay is on
     predict_server = PredictServer(model, config, log_cnts, response_history)
 
     if config.record is not None:
@@ -663,15 +683,14 @@ def main() -> ResponseHistory:
         record_context = contextlib.nullcontext()
 
     with record_context as record_file:
-        if config.replay:
-            assert not config.tcp, "--replay not compatible with --tcp"
-            assert not config.tcp, "--replay not compatible with --record"
-            start_prediction_loop_with_replay(predict_server, config.replay, record_file)
-        elif not config.tcp:
+        if config.comm_type == "replay":
+            start_prediction_loop_with_replay(predict_server, config.replay_file, record_file)
+        elif config.comm_type == "stdin":
             logger.info("starting stdin server")
             capnp_socket = socket.socket(fileno=sys.stdin.fileno())
             start_prediction_loop(predict_server, capnp_socket, record_file)
         else:
+            assert config.comm_type == "tcp"
             logger.info(f"starting tcp/ip server on port {config.port}")
             addr = (config.host, config.port)
             if socket.has_dualstack_ipv6():
