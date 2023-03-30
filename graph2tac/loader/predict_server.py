@@ -237,7 +237,7 @@ class DynamicDataServer(AbstractDataServer):
         graph, node_to_i = self._downward_closure([root])
         root_i = 0
         local_context_i = [node_to_i[n] for n in local_context]
-        dynamic_global_context = np.arange(len(self.global_defs), dtype=np.uint32)
+        dynamic_global_context = np.arange(len(self.global_defs), dtype=np.uint32) + 10
 
         context = ProofstateContext(
             local_context=np.array(local_context_i, dtype = np.uint32),
