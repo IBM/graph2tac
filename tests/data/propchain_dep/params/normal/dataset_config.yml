@@ -6,7 +6,7 @@ data_config:
   bfs_option: true
 exclude_none_arguments: false
 exclude_not_faithful: false
-exclude_unique_tactics: false
+required_tactic_occurrence: 1
 shuffle_random_seed: 0
 restrict_to_spine: false
 split_method: hash
