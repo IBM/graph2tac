@@ -49,13 +49,21 @@ class ResponseHistory:
         self.data = {"responses": []}
 
     @staticmethod
+    def pred_arg_repr(a):
+        if d := a.definition:
+            str = f"{repr(a)}-{d.name}"
+        else:
+            str = repr(a)
+        return str
+
+    @staticmethod
     def convert_msg_to_dict(msg: CheckAlignmentResponse | TacticPredictionsGraph) -> dict:
         if isinstance(msg, TacticPredictionsGraph):
             return {
                 "_type": type(msg).__name__,
                 "contents": {
                     "predictions": [
-                        {"ident": p.ident, "arguments": [repr(a) for a in p.arguments], "confidence": p.confidence}
+                        {"ident": p.ident, "arguments": [ResponseHistory.pred_arg_repr(a) for a in p.arguments], "confidence": p.confidence}
                         for p in msg.predictions
                     ]
                 },
@@ -64,7 +72,7 @@ class ResponseHistory:
             return {
                 "_type": type(msg).__name__,
                 "contents": {
-                    "unknown_definitions": [repr(d) for d in msg.unknown_definitions],
+                    "unknown_definitions": [f"{repr(d.node)}-{d.name}" for d in msg.unknown_definitions],
                     "unknown_tactics": [t for t in msg.unknown_tactics]
                 },
             }
