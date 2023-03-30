@@ -1,6 +1,6 @@
 import argparse
 from contextlib import contextmanager
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass
 import sys
 import socket
 from pathlib import Path
