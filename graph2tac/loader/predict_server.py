@@ -493,33 +493,26 @@ def parse_args() -> argparse.Namespace:
         description='graph2tac Predict python tensorflow server')
 
     comm_group = parser.add_mutually_exclusive_group()
-    comm_group.add_argument('--stdin', 
-        action='store_const', dest='comm_type', const='stdin', default='stdin',
-        help='communicate via stdin/stdout (default)'
+    comm_group.add_argument('--stdin',
+                            action='store_true', default=False,
+                            help='communicate via stdin/stdout (default)'
     )
     comm_group.add_argument('--tcp',
-        action='store_const', dest='comm_type', const='tcp',
-        help='start python server on tcp/ip socket'
+                            action='store_true', default=False,
+                            help='start python server on tcp/ip socket'
     )
-    comm_group.add_argument(
-        '--replay',
-        action='store_const', dest='comm_type', const='replay',
-        help='replay previously recorded record file'
+    comm_group.add_argument('--replay',
+                            type = Path, dest='replay_file',
+                            help='replay previously recorded record file'
     )
-    
+
     parser.add_argument('--port', type=int,
                         default=33333,
                         help='run python server on this port')
     parser.add_argument('--host', type=str,
                         default='',
                         help='run python server on this local ip')
-
-    parser.add_argument('--replay_file', '--replay-file', type=Path, 
-                        default=None, 
-                        help='file to be replayed')
-
-    parser.add_argument('--model', type=str,
-                        default=None,
+    parser.add_argument('--model', type=str, required=True,
                         help='checkpoint directory of the model')
 
     parser.add_argument('--arch', type=str,
@@ -562,15 +555,15 @@ def parse_args() -> argparse.Namespace:
                         help="maximal number of predictions to be sent to search algorithm in coq evaluation client ")
 
     update_group = parser.add_mutually_exclusive_group()
-    update_group.add_argument('--update_no_definitions', '--update-no-definitions', 
+    update_group.add_argument('--update_no_definitions', '--update-no-definitions',
         action='store_const', dest='update', const=None, default=None,
         help='for new definitions (not learned during training) use default embeddings (default)'
     )
-    update_group.add_argument('--update_new_definitions', '--update-new-definitions', 
+    update_group.add_argument('--update_new_definitions', '--update-new-definitions',
         action='store_const', dest='update', const='new',
         help='for new definitions (not learned during training) use embeddings calculated from the model'
     )
-    update_group.add_argument('--update_all_definitions', '--update-all-definitions', 
+    update_group.add_argument('--update_all_definitions', '--update-all-definitions',
         action='store_const', dest='update', const='all',
         help='overwrite all definition embeddings with new embeddings calculated from the model'
     )
@@ -605,9 +598,6 @@ def parse_args() -> argparse.Namespace:
                         default=None,
                         help="a list of tactic names to exclude from predictions")
 
-    args = parser.parse_args()
-    if args.comm_type == "replay" and args.replay_file is None :
-        parser.error("--replay requires --replay_file")
     return parser.parse_args()
 
 def load_model(config: argparse.Namespace, log_levels: dict) -> Predict:
@@ -682,7 +672,7 @@ def main() -> ResponseHistory:
 
     log_cnts = LoggingCounters(process_uuid=process_uuid)
     model = load_model(config, log_levels)
-    response_history = ResponseHistory(recording_on=(config.comm_type == "replay"))  # only record response history if replay is on
+    response_history = ResponseHistory(recording_on=(config.replay_file is not None))  # only record response history if replay is on
     predict_server = PredictServer(model, config, log_cnts, response_history)
 
     if config.record is not None:
@@ -691,14 +681,9 @@ def main() -> ResponseHistory:
         record_context = contextlib.nullcontext()
 
     with record_context as record_file:
-        if config.comm_type == "replay":
+        if config.replay_file is not None:
             start_prediction_loop_with_replay(predict_server, config.replay_file, record_file)
-        elif config.comm_type == "stdin":
-            logger.info("starting stdin server")
-            capnp_socket = socket.socket(fileno=sys.stdin.fileno())
-            start_prediction_loop(predict_server, capnp_socket, record_file)
-        else:
-            assert config.comm_type == "tcp"
+        elif config.tcp:
             logger.info(f"starting tcp/ip server on port {config.port}")
             addr = (config.host, config.port)
             if socket.has_dualstack_ipv6():
@@ -723,6 +708,10 @@ def main() -> ResponseHistory:
             finally:
                 logger.info(f'closing the server on port {config.port}')
                 server_sock.close()
+        else:
+            logger.info("starting stdin server")
+            capnp_socket = socket.socket(fileno=sys.stdin.fileno())
+            start_prediction_loop(predict_server, capnp_socket, record_file)
     
     return response_history  # return for testing purposes
 
