@@ -638,6 +638,14 @@ class LocalArgumentPrediction(TacticPrediction):
         num_arguments = tf.shape(logits)[1]
         num_logits = tf.shape(logits)[2]
         return tf.reshape(logits, shape=(tactic_expand_bound, -1, num_arguments, num_logits))
+        #x = tf.shape(tf.reshape(logits, shape=(tactic_expand_bound, -1, num_arguments, num_logits)))
+        #x = tf.keras.backend.print_tensor(x, message="Logits")
+        #return x
+
+    @classmethod
+    def _reshape_global_inference_logits(cls, logits: tf.Tensor, tactic_expand_bound: int, dyn_global_context: tf.RaggedTensor) -> tf.Tensor:
+        global_logits = cls._reshape_inference_logits(logits, tactic_expand_bound)
+        return tf.gather(global_logits, dyn_global_context[0], axis=3)
 
     def create_train_model(self) -> tf.keras.Model:
         """
@@ -932,8 +940,11 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
 
         normalized_local_arguments_logits = self._reshape_inference_logits(logits=normalized_local_arguments_logits,
                                                                            tactic_expand_bound=tactic_expand_bound)
-        normalized_global_arguments_logits = self._reshape_inference_logits(logits=normalized_global_arguments_logits,
-                                                                            tactic_expand_bound=tactic_expand_bound)
+        normalized_global_arguments_logits = self._reshape_global_inference_logits(
+            logits=normalized_global_arguments_logits,
+            tactic_expand_bound=tactic_expand_bound,
+            dyn_global_context=scalar_proofstate_graph.context['global_context_ids'])
+                                                                            
 
         return tf.keras.Model(inputs={self.PROOFSTATE_GRAPH: proofstate_graph, self.TACTIC_MASK: tactic_mask},
                               outputs={self.TACTIC: tf.transpose(top_k_indices),
