@@ -1,0 +1,133 @@
+================= Hott ================
+   Theorems        Proofstates
+ 6669 =  2.50%    65106 =  1.40% -- coq-hott.8.11
+================= Training ================
+   Theorems        Proofstates
+43547 = 16.78%   569797 = 12.43% -- coq-tactician-stdlib.8.11.dev
+ 3745 =  1.44%    63050 =  1.38% -- coq-bignums.8.11.0
+ 7716 =  2.97%    16414 =  0.36% -- coq-mathcomp-ssreflect.1.14.0
+ 3515 =  1.35%     8536 =  0.19% -- coq-mathcomp-fingroup.1.14.0
+  347 =  0.13%     2595 =  0.06% -- coq-equations.1.2.4+8.11
+  468 =  0.18%     6519 =  0.14% -- coq-ext-lib.0.11.7
+ 1885 =  0.73%     3505 =  0.08% -- coq-mathcomp-finmap.1.5.1
+ 9840 =  3.79%    24810 =  0.54% -- coq-mathcomp-algebra.1.14.0
+ 6453 =  2.49%    81652 =  1.78% -- coq-metacoq-template.1.0~beta2+8.11
+    0 =  0.00%        0 =  0.00% -- coq-error-handlers.1.2.0
+    0 =  0.00%        0 =  0.00% -- coq-paramcoq.1.1.3+coq8.11
+ 4931 =  1.90%    58065 =  1.27% -- coq-gaia-theory-of-sets.1.15
+    0 =  0.00%        0 =  0.00% -- coq-list-plus.1.1.0
+    0 =  0.00%        0 =  0.00% -- coq-simple-io.1.8.0
+ 2675 =  1.03%    32475 =  0.71% -- coq-menhirlib.20190924
+  319 =  0.12%     3172 =  0.07% -- coq-ott.0.33
+ 5265 =  2.03%    38244 =  0.83% -- coq-stdpp.1.5.0
+    0 =  0.00%        0 =  0.00% -- coq-cunit.1.0.0
+ 6241 =  2.40%    59246 =  1.29% -- coq-coqprime.1.0.5
+    9 =  0.00%       89 =  0.00% -- coq-list-string.2.1.2
+ 9581 =  3.69%    52392 =  1.14% -- coq-iris.3.4.0
+  964 =  0.37%    11351 =  0.25% -- coq-quickchick.1.6.4
+    0 =  0.00%        0 =  0.00% -- coq-function-ninjas.1.0.0
+ 4276 =  1.65%   208674 =  4.55% -- coq-flocq.3.4.3
+    5 =  0.00%        7 =  0.00% -- coq-mathcomp-bigenough.1.0.1
+    0 =  0.00%        0 =  0.00% -- coq-iris-string-ident.0.1.0
+ 3753 =  1.45%   150047 =  3.27% -- coq-metacoq-pcuic.1.0~beta2+8.11
+    0 =  0.00%        0 =  0.00% -- coq-moment.1.2.1
+  242 =  0.09%     2643 =  0.06% -- coq-aac-tactics.8.11.0
+    8 =  0.00%      196 =  0.00% -- coq-flocq-quickchick.1.0.2
+  666 =  0.26%     5017 =  0.11% -- coq-gaia-schutte.1.15
+   92 =  0.04%      702 =  0.02% -- coq-deriving.0.1.0
+ 2914 =  1.12%    44453 =  0.97% -- coq-fourcolor.1.2.5
+  626 =  0.24%    10602 =  0.23% -- coq-generic-environments.8.11.0
+ 2146 =  0.83%     7839 =  0.17% -- coq-mathcomp-multinomials.1.5.5
+ 3004 =  1.16%    25130 =  0.55% -- coq-mathcomp-solvable.1.14.0
+ 1265 =  0.49%    28939 =  0.63% -- coq-metacoq-safechecker.1.0~beta2+8.11
+ 1394 =  0.54%    31159 =  0.68% -- coq-mi-cho-coq.1.0.0
+ 1713 =  0.66%    10537 =  0.23% -- coq-mathcomp-field.1.14.0
+    1 =  0.00%        1 =  0.00% -- coq-antivalence.1.0.1
+ 3924 =  1.51%    57568 =  1.26% -- coq-paco.4.1.1
+   22 =  0.01%      123 =  0.00% -- coq-hammer-tactics.1.3.2+8.11
+ 3118 =  1.20%    86309 =  1.88% -- coq-gaia-ordinals.1.15
+ 3944 =  1.52%    20681 =  0.45% -- coq-mathcomp-character.1.14.0
+  726 =  0.28%     3490 =  0.08% -- coq-extructures.0.3.1
+   22 =  0.01%      329 =  0.01% -- coq-io.4.0.0
+  633 =  0.24%     5033 =  0.11% -- coq-reglang.1.1.3
+ 2431 =  0.94%    49800 =  1.09% -- coq-coqtail.8.14
+ 1625 =  0.63%    12601 =  0.27% -- coq-mathcomp-real-closed.1.1.2
+  243 =  0.09%    12579 =  0.27% -- coq-metacoq-erasure.1.0~beta2+8.11
+   60 =  0.02%     1363 =  0.03% -- coq-hoare-tut.8.11.1
+ 3389 =  1.31%   151157 =  3.30% -- coq-chapar.8.13.0
+  258 =  0.10%     9417 =  0.21% -- coq-bertrand.8.12.0
+  620 =  0.24%    25274 =  0.55% -- coq-huffman.8.12.0
+ 1107 =  0.43%    20918 =  0.46% -- coq-itree.4.0.0
+  184 =  0.07%     1964 =  0.04% -- coq-type-infer.0.1.0
+ 5952 =  2.29%   136625 =  2.98% -- coq-compcert.3.7~coq-platform~open-source
+  265 =  0.10%     5843 =  0.13% -- coq-pocklington.8.12.0
+  172 =  0.07%      929 =  0.02% -- coq-coqutil.0.0.2
+ 2085 =  0.80%    40732 =  0.89% -- coq-coquelicot.3.2.0
+ 5349 =  2.06%   125963 =  2.75% -- coq-hydra-battles.0.4
+ 1638 =  0.63%    32775 =  0.71% -- coq-relation-algebra.1.7.4
+  419 =  0.16%    13586 =  0.30% -- coq-gappa.1.5.3
+    0 =  0.00%        0 =  0.00% -- coq-coqoban.8.13.0
+   18 =  0.01%       24 =  0.00% -- coq-io-system.2.4.1
+ 1504 =  0.58%    48838 =  1.07% -- coq-geometric-algebra.0.8.11
+    4 =  0.00%        9 =  0.00% -- coq-io-hello-world.1.2.0
+  740 =  0.29%    14008 =  0.31% -- coq-regexp-brzozowski.1.0
+  172 =  0.07%     5982 =  0.13% -- coq-almost-full.8.14.0
+    0 =  0.00%        0 =  0.00% -- coq-ltac-iter.1.1.2
+ 4305 =  1.66%    36490 =  0.80% -- coq-coqeal.1.1.0
+ 5464 =  2.10%    44391 =  0.97% -- coq-alea.8.11.0
+  347 =  0.13%     8597 =  0.19% -- coq-zorns-lemma.10.0.1
+ 5930 =  2.28%    72838 =  1.59% -- coq-atbr.8.11.0
+ 2775 =  1.07%    36433 =  0.79% -- coq-gaia-numbers.1.15
+    0 =  0.00%        0 =  0.00% -- coq-reduction-effects.0.1.4
+    0 =  0.00%        0 =  0.00% -- coq-jsast.2.0.0
+  669 =  0.26%     4526 =  0.10% -- coq-mathcomp-abel.1.2.1
+ 1135 =  0.44%    49870 =  1.09% -- coq-qarith-stern-brocot.8.12.0
+    0 =  0.00%        0 =  0.00% -- coq-dpdgraph.0.6.7
+10293 =  3.97%   585100 = 12.76% -- coq-vst.2.6
+  681 =  0.26%    37474 =  0.82% -- coq-semantics.8.14.0
+  182 =  0.07%    23312 =  0.51% -- coq-goedel.8.13.0
+    0 =  0.00%        0 =  0.00% -- coq-itree-io.0.1.0
+ 1153 =  0.44%    36932 =  0.81% -- coq-high-school-geometry.8.12.0
+    8 =  0.00%      132 =  0.00% -- coq-chick-blog.1.0.1
+  592 =  0.23%     3031 =  0.07% -- coq-metacoq-translations.1.0~beta2+8.11
+  849 =  0.33%    16791 =  0.37% -- coq-jmlcoq.8.15.0
+  144 =  0.06%     9383 =  0.20% -- coq-giskard.1.0
+  132 =  0.05%     3481 =  0.08% -- coq-rsa.8.8.0
+  179 =  0.07%      668 =  0.01% -- coq-autosubst.1.7
+    3 =  0.00%       11 =  0.00% -- coq-smpl.8.11
+ 1470 =  0.57%    54033 =  1.18% -- coq-buchberger.8.11.0
+    0 =  0.00%        0 =  0.00% -- coq-functional-algebra.1.0.2
+23031 =  8.87%   448625 =  9.78% -- coq-color.1.8.2
+ 4072 =  1.57%    46563 =  1.02% -- coq-math-classes.8.15.0
+  837 =  0.32%    45859 =  1.00% -- coq-stalmarck.8.11.0
+    0 =  0.00%        0 =  0.00% -- coq-record-update.0.3.1
+    0 =  0.00%        0 =  0.00% -- coq-iterable.1.0.0
+   12 =  0.00%      179 =  0.00% -- coq-dijkstra.0.1.0
+ 2656 =  1.02%    64998 =  1.42% -- coq-rewriter.0.0.2
+    1 =  0.00%        1 =  0.00% -- coq-libhyps.2.0.6
+================= Evaluation ================
+   Theorems        Proofstates
+  428 =  0.16%     3137 =  0.07% -- coq-bits.1.1.0
+ 4977 =  1.92%   156608 =  3.42% -- coq-qcert.2.2.0
+  105 =  0.04%     1572 =  0.03% -- coq-ceres.0.4.0
+ 3989 =  1.54%    69562 =  1.52% -- coq-corn.8.16.0
+   19 =  0.01%      205 =  0.00% -- coq-bytestring.0.9.0
+    0 =  0.00%        0 =  0.00% -- coq-hammer.1.3.2+8.11
+ 1200 =  0.46%    10782 =  0.24% -- coq-gaia-stern.1.15
+  784 =  0.30%     6698 =  0.15% -- coq-mathcomp-apery.1.0.1
+ 3640 =  1.40%    21902 =  0.48% -- coq-tlc.20200328
+  530 =  0.20%    11671 =  0.25% -- coq-iris-heap-lang.3.4.0
+   21 =  0.01%      146 =  0.00% -- coq-printf.2.0.0
+ 2374 =  0.91%   138774 =  3.03% -- coq-smtcoq.2.0+8.11
+  533 =  0.21%    14468 =  0.32% -- coq-topology.10.0.1
+  188 =  0.07%     1658 =  0.04% -- coq-haskell.1.0.0
+  658 =  0.25%     7820 =  0.17% -- coq-bbv.1.3
+  309 =  0.12%     2218 =  0.05% -- coq-poltac.0.8.11
+ 2685 =  1.03%    66187 =  1.44% -- coq-mathcomp-odd-order.1.14.0
+================= Statistics ================
+number of testing directories: 17 = 14.29%
+number of testing theorems: 22440 = 8.64%
+number of testing proofstates: 513408 = 11.20%
+number of training directories: 102 = 85.71%
+number of training theorems: 237150 = 91.36%
+number of training proofstates: 4071496 = 88.80%

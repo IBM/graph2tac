@@ -1,0 +1,732 @@
+dataset_to_deps:
+  coq-aac-tactics.8.11.0:
+  - coq-aac-tactics.8.11.0
+  - coq-tactician-stdlib.8.11.dev
+  coq-alea.8.11.0:
+  - coq-alea.8.11.0
+  - coq-tactician-stdlib.8.11.dev
+  coq-almost-full.8.14.0:
+  - coq-almost-full.8.14.0
+  - coq-tactician-stdlib.8.11.dev
+  coq-antivalence.1.0.1:
+  - coq-antivalence.1.0.1
+  - coq-tactician-stdlib.8.11.dev
+  coq-atbr.8.11.0:
+  - coq-atbr.8.11.0
+  - coq-tactician-stdlib.8.11.dev
+  coq-autosubst.1.7:
+  - coq-autosubst.1.7
+  - coq-tactician-stdlib.8.11.dev
+  coq-bbv.1.3:
+  - coq-bbv.1.3
+  - coq-tactician-stdlib.8.11.dev
+  coq-bertrand.8.12.0:
+  - coq-bertrand.8.12.0
+  - coq-tactician-stdlib.8.11.dev
+  coq-bignums.8.11.0:
+  - coq-bignums.8.11.0
+  - coq-tactician-stdlib.8.11.dev
+  coq-bits.1.1.0:
+  - coq-bits.1.1.0
+  - coq-mathcomp-algebra.1.14.0
+  - coq-mathcomp-fingroup.1.14.0
+  - coq-mathcomp-ssreflect.1.14.0
+  - coq-tactician-stdlib.8.11.dev
+  coq-buchberger.8.11.0:
+  - coq-buchberger.8.11.0
+  - coq-tactician-stdlib.8.11.dev
+  coq-bytestring.0.9.0:
+  - coq-tactician-stdlib.8.11.dev
+  coq-ceres.0.4.0:
+  - coq-ceres.0.4.0
+  - coq-tactician-stdlib.8.11.dev
+  coq-chapar.8.13.0:
+  - coq-chapar.8.13.0
+  - coq-tactician-stdlib.8.11.dev
+  coq-chick-blog.1.0.1:
+  - coq-chick-blog.1.0.1
+  - coq-error-handlers.1.2.0
+  - coq-function-ninjas.1.0.0
+  - coq-list-string.2.1.2
+  - coq-moment.1.2.1
+  - coq-tactician-stdlib.8.11.dev
+  coq-color.1.8.2:
+  - coq-bignums.8.11.0
+  - coq-color.1.8.2
+  - coq-tactician-stdlib.8.11.dev
+  coq-compcert.3.7~coq-platform~open-source:
+  - coq-compcert.3.7~coq-platform~open-source
+  - coq-flocq.3.4.3
+  - coq-menhirlib.20190924
+  - coq-tactician-stdlib.8.11.dev
+  coq-coqeal.1.1.0:
+  - coq-bignums.8.11.0
+  - coq-coqeal.1.1.0
+  - coq-mathcomp-algebra.1.14.0
+  - coq-mathcomp-field.1.14.0
+  - coq-mathcomp-fingroup.1.14.0
+  - coq-mathcomp-multinomials.1.5.5
+  - coq-mathcomp-real-closed.1.1.2
+  - coq-mathcomp-ssreflect.1.14.0
+  - coq-paramcoq.1.1.3+coq8.11
+  - coq-tactician-stdlib.8.11.dev
+  coq-coqoban.8.13.0:
+  - coq-coqoban.8.13.0
+  - coq-tactician-stdlib.8.11.dev
+  coq-coqprime.1.0.5:
+  - coq-bignums.8.11.0
+  - coq-coqprime.1.0.5
+  - coq-tactician-stdlib.8.11.dev
+  coq-coqtail.8.14:
+  - coq-coqtail.8.14
+  - coq-tactician-stdlib.8.11.dev
+  coq-coquelicot.3.2.0:
+  - coq-coquelicot.3.2.0
+  - coq-mathcomp-ssreflect.1.14.0
+  - coq-tactician-stdlib.8.11.dev
+  coq-coqutil.0.0.2:
+  - coq-coqutil.0.0.2
+  - coq-tactician-stdlib.8.11.dev
+  coq-corn.8.16.0:
+  - coq-corn.8.16.0
+  - coq-math-classes.8.15.0
+  - coq-tactician-stdlib.8.11.dev
+  coq-cunit.1.0.0:
+  - coq-tactician-stdlib.8.11.dev
+  coq-deriving.0.1.0:
+  - coq-deriving.0.1.0
+  - coq-mathcomp-ssreflect.1.14.0
+  - coq-tactician-stdlib.8.11.dev
+  coq-dijkstra.0.1.0:
+  - coq-mathcomp-ssreflect.1.14.0
+  - coq-tactician-stdlib.8.11.dev
+  coq-dpdgraph.0.6.7:
+  - coq-tactician-stdlib.8.11.dev
+  coq-equations.1.2.4+8.11:
+  - coq-equations.1.2.4+8.11
+  - coq-tactician-stdlib.8.11.dev
+  coq-error-handlers.1.2.0:
+  - coq-tactician-stdlib.8.11.dev
+  coq-ext-lib.0.11.7:
+  - coq-ext-lib.0.11.7
+  - coq-tactician-stdlib.8.11.dev
+  coq-extructures.0.3.1:
+  - coq-deriving.0.1.0
+  - coq-extructures.0.3.1
+  - coq-mathcomp-ssreflect.1.14.0
+  - coq-tactician-stdlib.8.11.dev
+  coq-flocq-quickchick.1.0.2:
+  - coq-flocq.3.4.3
+  - coq-quickchick.1.6.4
+  - coq-tactician-stdlib.8.11.dev
+  coq-flocq.3.4.3:
+  - coq-flocq.3.4.3
+  - coq-tactician-stdlib.8.11.dev
+  coq-fourcolor.1.2.5:
+  - coq-fourcolor.1.2.5
+  - coq-mathcomp-algebra.1.14.0
+  - coq-mathcomp-fingroup.1.14.0
+  - coq-mathcomp-ssreflect.1.14.0
+  - coq-tactician-stdlib.8.11.dev
+  coq-function-ninjas.1.0.0:
+  - coq-tactician-stdlib.8.11.dev
+  coq-functional-algebra.1.0.2:
+  - coq-functional-algebra.1.0.2
+  - coq-tactician-stdlib.8.11.dev
+  coq-gaia-numbers.1.15:
+  - coq-gaia-numbers.1.15
+  - coq-gaia-ordinals.1.15
+  - coq-gaia-theory-of-sets.1.15
+  - coq-mathcomp-algebra.1.14.0
+  - coq-mathcomp-fingroup.1.14.0
+  - coq-mathcomp-ssreflect.1.14.0
+  - coq-tactician-stdlib.8.11.dev
+  coq-gaia-ordinals.1.15:
+  - coq-gaia-ordinals.1.15
+  - coq-gaia-schutte.1.15
+  - coq-gaia-theory-of-sets.1.15
+  - coq-mathcomp-ssreflect.1.14.0
+  - coq-tactician-stdlib.8.11.dev
+  coq-gaia-schutte.1.15:
+  - coq-mathcomp-ssreflect.1.14.0
+  - coq-tactician-stdlib.8.11.dev
+  coq-gaia-stern.1.15:
+  - coq-gaia-stern.1.15
+  - coq-mathcomp-algebra.1.14.0
+  - coq-mathcomp-fingroup.1.14.0
+  - coq-mathcomp-ssreflect.1.14.0
+  - coq-tactician-stdlib.8.11.dev
+  coq-gaia-theory-of-sets.1.15:
+  - coq-gaia-theory-of-sets.1.15
+  - coq-mathcomp-ssreflect.1.14.0
+  - coq-tactician-stdlib.8.11.dev
+  coq-gappa.1.5.3:
+  - coq-flocq.3.4.3
+  - coq-gappa.1.5.3
+  - coq-tactician-stdlib.8.11.dev
+  coq-generic-environments.8.11.0:
+  - coq-generic-environments.8.11.0
+  - coq-tactician-stdlib.8.11.dev
+  coq-geometric-algebra.0.8.11:
+  - coq-geometric-algebra.0.8.11
+  - coq-tactician-stdlib.8.11.dev
+  coq-giskard.1.0:
+  - coq-giskard.1.0
+  - coq-tactician-stdlib.8.11.dev
+  coq-goedel.8.13.0:
+  - coq-goedel.8.13.0
+  - coq-hydra-battles.0.4
+  - coq-pocklington.8.12.0
+  - coq-tactician-stdlib.8.11.dev
+  coq-hammer-tactics.1.3.2+8.11:
+  - coq-hammer-tactics.1.3.2+8.11
+  - coq-tactician-stdlib.8.11.dev
+  coq-hammer.1.3.2+8.11:
+  - coq-hammer-tactics.1.3.2+8.11
+  coq-haskell.1.0.0:
+  - coq-haskell.1.0.0
+  - coq-tactician-stdlib.8.11.dev
+  coq-high-school-geometry.8.12.0:
+  - coq-high-school-geometry.8.12.0
+  - coq-tactician-stdlib.8.11.dev
+  coq-hoare-tut.8.11.1:
+  - coq-hoare-tut.8.11.1
+  - coq-tactician-stdlib.8.11.dev
+  coq-hott.8.11:
+  - coq-hott.8.11
+  coq-huffman.8.12.0:
+  - coq-huffman.8.12.0
+  - coq-tactician-stdlib.8.11.dev
+  coq-hydra-battles.0.4:
+  - coq-equations.1.2.4+8.11
+  - coq-hydra-battles.0.4
+  - coq-tactician-stdlib.8.11.dev
+  coq-io-hello-world.1.2.0:
+  - coq-io-system.2.4.1
+  - coq-io.4.0.0
+  - coq-list-string.2.1.2
+  - coq-tactician-stdlib.8.11.dev
+  coq-io-system.2.4.1:
+  - coq-error-handlers.1.2.0
+  - coq-function-ninjas.1.0.0
+  - coq-io-system.2.4.1
+  - coq-io.4.0.0
+  - coq-list-string.2.1.2
+  - coq-tactician-stdlib.8.11.dev
+  coq-io.4.0.0:
+  - coq-io.4.0.0
+  - coq-tactician-stdlib.8.11.dev
+  coq-iris-heap-lang.3.4.0:
+  - coq-iris-heap-lang.3.4.0
+  - coq-iris.3.4.0
+  - coq-stdpp.1.5.0
+  - coq-tactician-stdlib.8.11.dev
+  coq-iris-string-ident.0.1.0:
+  - coq-iris.3.4.0
+  - coq-tactician-stdlib.8.11.dev
+  coq-iris.3.4.0:
+  - coq-iris.3.4.0
+  - coq-stdpp.1.5.0
+  - coq-tactician-stdlib.8.11.dev
+  coq-iterable.1.0.0:
+  - coq-function-ninjas.1.0.0
+  - coq-tactician-stdlib.8.11.dev
+  coq-itree-io.0.1.0:
+  - coq-itree.4.0.0
+  - coq-simple-io.1.8.0
+  - coq-tactician-stdlib.8.11.dev
+  coq-itree.4.0.0:
+  - coq-ext-lib.0.11.7
+  - coq-itree.4.0.0
+  - coq-paco.4.1.1
+  - coq-tactician-stdlib.8.11.dev
+  coq-jmlcoq.8.15.0:
+  - coq-jmlcoq.8.15.0
+  - coq-tactician-stdlib.8.11.dev
+  coq-jsast.2.0.0:
+  - coq-jsast.2.0.0
+  - coq-tactician-stdlib.8.11.dev
+  coq-libhyps.2.0.6:
+  - coq-libhyps.2.0.6
+  - coq-tactician-stdlib.8.11.dev
+  coq-list-plus.1.1.0:
+  - coq-list-plus.1.1.0
+  - coq-tactician-stdlib.8.11.dev
+  coq-list-string.2.1.2:
+  - coq-cunit.1.0.0
+  - coq-error-handlers.1.2.0
+  - coq-list-plus.1.1.0
+  - coq-list-string.2.1.2
+  - coq-tactician-stdlib.8.11.dev
+  coq-ltac-iter.1.1.2:
+  - coq-tactician-stdlib.8.11.dev
+  coq-math-classes.8.15.0:
+  - coq-bignums.8.11.0
+  - coq-math-classes.8.15.0
+  - coq-tactician-stdlib.8.11.dev
+  coq-mathcomp-abel.1.2.1:
+  - coq-mathcomp-abel.1.2.1
+  - coq-mathcomp-algebra.1.14.0
+  - coq-mathcomp-field.1.14.0
+  - coq-mathcomp-fingroup.1.14.0
+  - coq-mathcomp-real-closed.1.1.2
+  - coq-mathcomp-solvable.1.14.0
+  - coq-mathcomp-ssreflect.1.14.0
+  - coq-tactician-stdlib.8.11.dev
+  coq-mathcomp-algebra.1.14.0:
+  - coq-mathcomp-algebra.1.14.0
+  - coq-mathcomp-fingroup.1.14.0
+  - coq-mathcomp-ssreflect.1.14.0
+  - coq-tactician-stdlib.8.11.dev
+  coq-mathcomp-apery.1.0.1:
+  - coq-coqeal.1.1.0
+  - coq-mathcomp-algebra.1.14.0
+  - coq-mathcomp-apery.1.0.1
+  - coq-mathcomp-bigenough.1.0.1
+  - coq-mathcomp-field.1.14.0
+  - coq-mathcomp-fingroup.1.14.0
+  - coq-mathcomp-real-closed.1.1.2
+  - coq-mathcomp-solvable.1.14.0
+  - coq-mathcomp-ssreflect.1.14.0
+  - coq-tactician-stdlib.8.11.dev
+  coq-mathcomp-bigenough.1.0.1:
+  - coq-mathcomp-ssreflect.1.14.0
+  - coq-tactician-stdlib.8.11.dev
+  coq-mathcomp-character.1.14.0:
+  - coq-mathcomp-algebra.1.14.0
+  - coq-mathcomp-character.1.14.0
+  - coq-mathcomp-field.1.14.0
+  - coq-mathcomp-fingroup.1.14.0
+  - coq-mathcomp-solvable.1.14.0
+  - coq-mathcomp-ssreflect.1.14.0
+  - coq-tactician-stdlib.8.11.dev
+  coq-mathcomp-field.1.14.0:
+  - coq-mathcomp-algebra.1.14.0
+  - coq-mathcomp-field.1.14.0
+  - coq-mathcomp-fingroup.1.14.0
+  - coq-mathcomp-solvable.1.14.0
+  - coq-mathcomp-ssreflect.1.14.0
+  - coq-tactician-stdlib.8.11.dev
+  coq-mathcomp-fingroup.1.14.0:
+  - coq-mathcomp-fingroup.1.14.0
+  - coq-mathcomp-ssreflect.1.14.0
+  - coq-tactician-stdlib.8.11.dev
+  coq-mathcomp-finmap.1.5.1:
+  - coq-mathcomp-finmap.1.5.1
+  - coq-mathcomp-ssreflect.1.14.0
+  - coq-tactician-stdlib.8.11.dev
+  coq-mathcomp-multinomials.1.5.5:
+  - coq-mathcomp-algebra.1.14.0
+  - coq-mathcomp-bigenough.1.0.1
+  - coq-mathcomp-fingroup.1.14.0
+  - coq-mathcomp-finmap.1.5.1
+  - coq-mathcomp-multinomials.1.5.5
+  - coq-mathcomp-ssreflect.1.14.0
+  - coq-tactician-stdlib.8.11.dev
+  coq-mathcomp-odd-order.1.14.0:
+  - coq-mathcomp-algebra.1.14.0
+  - coq-mathcomp-character.1.14.0
+  - coq-mathcomp-field.1.14.0
+  - coq-mathcomp-fingroup.1.14.0
+  - coq-mathcomp-odd-order.1.14.0
+  - coq-mathcomp-solvable.1.14.0
+  - coq-mathcomp-ssreflect.1.14.0
+  - coq-tactician-stdlib.8.11.dev
+  coq-mathcomp-real-closed.1.1.2:
+  - coq-mathcomp-algebra.1.14.0
+  - coq-mathcomp-bigenough.1.0.1
+  - coq-mathcomp-field.1.14.0
+  - coq-mathcomp-fingroup.1.14.0
+  - coq-mathcomp-real-closed.1.1.2
+  - coq-mathcomp-solvable.1.14.0
+  - coq-mathcomp-ssreflect.1.14.0
+  - coq-tactician-stdlib.8.11.dev
+  coq-mathcomp-solvable.1.14.0:
+  - coq-mathcomp-algebra.1.14.0
+  - coq-mathcomp-fingroup.1.14.0
+  - coq-mathcomp-solvable.1.14.0
+  - coq-mathcomp-ssreflect.1.14.0
+  - coq-tactician-stdlib.8.11.dev
+  coq-mathcomp-ssreflect.1.14.0:
+  - coq-mathcomp-ssreflect.1.14.0
+  - coq-tactician-stdlib.8.11.dev
+  coq-menhirlib.20190924:
+  - coq-menhirlib.20190924
+  - coq-tactician-stdlib.8.11.dev
+  coq-metacoq-erasure.1.0~beta2+8.11:
+  - coq-equations.1.2.4+8.11
+  - coq-metacoq-erasure.1.0~beta2+8.11
+  - coq-metacoq-pcuic.1.0~beta2+8.11
+  - coq-metacoq-safechecker.1.0~beta2+8.11
+  - coq-metacoq-template.1.0~beta2+8.11
+  - coq-tactician-stdlib.8.11.dev
+  coq-metacoq-pcuic.1.0~beta2+8.11:
+  - coq-equations.1.2.4+8.11
+  - coq-metacoq-pcuic.1.0~beta2+8.11
+  - coq-metacoq-template.1.0~beta2+8.11
+  - coq-tactician-stdlib.8.11.dev
+  coq-metacoq-safechecker.1.0~beta2+8.11:
+  - coq-equations.1.2.4+8.11
+  - coq-metacoq-pcuic.1.0~beta2+8.11
+  - coq-metacoq-safechecker.1.0~beta2+8.11
+  - coq-metacoq-template.1.0~beta2+8.11
+  - coq-tactician-stdlib.8.11.dev
+  coq-metacoq-template.1.0~beta2+8.11:
+  - coq-equations.1.2.4+8.11
+  - coq-metacoq-template.1.0~beta2+8.11
+  - coq-tactician-stdlib.8.11.dev
+  coq-metacoq-translations.1.0~beta2+8.11:
+  - coq-equations.1.2.4+8.11
+  - coq-metacoq-template.1.0~beta2+8.11
+  - coq-metacoq-translations.1.0~beta2+8.11
+  - coq-tactician-stdlib.8.11.dev
+  coq-mi-cho-coq.1.0.0:
+  - coq-list-string.2.1.2
+  - coq-menhirlib.20190924
+  - coq-mi-cho-coq.1.0.0
+  - coq-moment.1.2.1
+  - coq-ott.0.33
+  - coq-tactician-stdlib.8.11.dev
+  coq-moment.1.2.1:
+  - coq-error-handlers.1.2.0
+  - coq-function-ninjas.1.0.0
+  - coq-list-string.2.1.2
+  - coq-moment.1.2.1
+  - coq-tactician-stdlib.8.11.dev
+  coq-ott.0.33:
+  - coq-ott.0.33
+  - coq-tactician-stdlib.8.11.dev
+  coq-paco.4.1.1:
+  - coq-paco.4.1.1
+  - coq-tactician-stdlib.8.11.dev
+  coq-paramcoq.1.1.3+coq8.11:
+  - coq-tactician-stdlib.8.11.dev
+  coq-pocklington.8.12.0:
+  - coq-pocklington.8.12.0
+  - coq-tactician-stdlib.8.11.dev
+  coq-poltac.0.8.11:
+  - coq-poltac.0.8.11
+  - coq-tactician-stdlib.8.11.dev
+  coq-printf.2.0.0:
+  - coq-printf.2.0.0
+  - coq-tactician-stdlib.8.11.dev
+  coq-qarith-stern-brocot.8.12.0:
+  - coq-qarith-stern-brocot.8.12.0
+  - coq-tactician-stdlib.8.11.dev
+  coq-qcert.2.2.0:
+  - coq-jsast.2.0.0
+  - coq-qcert.2.2.0
+  - coq-tactician-stdlib.8.11.dev
+  coq-quickchick.1.6.4:
+  - coq-ext-lib.0.11.7
+  - coq-mathcomp-ssreflect.1.14.0
+  - coq-quickchick.1.6.4
+  - coq-simple-io.1.8.0
+  - coq-tactician-stdlib.8.11.dev
+  coq-record-update.0.3.1:
+  - coq-record-update.0.3.1
+  - coq-tactician-stdlib.8.11.dev
+  coq-reduction-effects.0.1.4:
+  - coq-tactician-stdlib.8.11.dev
+  coq-regexp-brzozowski.1.0:
+  - coq-mathcomp-ssreflect.1.14.0
+  - coq-regexp-brzozowski.1.0
+  - coq-reglang.1.1.3
+  - coq-tactician-stdlib.8.11.dev
+  coq-reglang.1.1.3:
+  - coq-mathcomp-ssreflect.1.14.0
+  - coq-reglang.1.1.3
+  - coq-tactician-stdlib.8.11.dev
+  coq-relation-algebra.1.7.4:
+  - coq-aac-tactics.8.11.0
+  - coq-mathcomp-ssreflect.1.14.0
+  - coq-relation-algebra.1.7.4
+  - coq-tactician-stdlib.8.11.dev
+  coq-rewriter.0.0.2:
+  - coq-rewriter.0.0.2
+  - coq-tactician-stdlib.8.11.dev
+  coq-rsa.8.8.0:
+  - coq-rsa.8.8.0
+  - coq-tactician-stdlib.8.11.dev
+  coq-semantics.8.14.0:
+  - coq-semantics.8.14.0
+  - coq-tactician-stdlib.8.11.dev
+  coq-simple-io.1.8.0:
+  - coq-ext-lib.0.11.7
+  - coq-simple-io.1.8.0
+  - coq-tactician-stdlib.8.11.dev
+  coq-smpl.8.11:
+  - coq-smpl.8.11
+  - coq-tactician-stdlib.8.11.dev
+  coq-smtcoq.2.0+8.11:
+  - coq-smtcoq.2.0+8.11
+  - coq-tactician-stdlib.8.11.dev
+  coq-stalmarck.8.11.0:
+  - coq-stalmarck.8.11.0
+  - coq-tactician-stdlib.8.11.dev
+  coq-stdpp.1.5.0:
+  - coq-stdpp.1.5.0
+  - coq-tactician-stdlib.8.11.dev
+  coq-tactician-stdlib.8.11.dev:
+  - coq-tactician-stdlib.8.11.dev
+  coq-tlc.20200328:
+  - coq-tactician-stdlib.8.11.dev
+  - coq-tlc.20200328
+  coq-topology.10.0.1:
+  - coq-tactician-stdlib.8.11.dev
+  - coq-topology.10.0.1
+  - coq-zorns-lemma.10.0.1
+  coq-type-infer.0.1.0:
+  - coq-mathcomp-ssreflect.1.14.0
+  - coq-tactician-stdlib.8.11.dev
+  - coq-type-infer.0.1.0
+  coq-vst.2.6:
+  - coq-compcert.3.7~coq-platform~open-source
+  - coq-flocq.3.4.3
+  - coq-tactician-stdlib.8.11.dev
+  - coq-vst.2.6
+  coq-zorns-lemma.10.0.1:
+  - coq-tactician-stdlib.8.11.dev
+  - coq-zorns-lemma.10.0.1
+dataset_to_num_proofstates:
+  coq-aac-tactics.8.11.0: 2643
+  coq-alea.8.11.0: 44391
+  coq-almost-full.8.14.0: 5982
+  coq-antivalence.1.0.1: 1
+  coq-atbr.8.11.0: 72838
+  coq-autosubst.1.7: 668
+  coq-bbv.1.3: 7820
+  coq-bertrand.8.12.0: 9417
+  coq-bignums.8.11.0: 63050
+  coq-bits.1.1.0: 3137
+  coq-buchberger.8.11.0: 54033
+  coq-bytestring.0.9.0: 205
+  coq-ceres.0.4.0: 1572
+  coq-chapar.8.13.0: 151157
+  coq-chick-blog.1.0.1: 132
+  coq-color.1.8.2: 448625
+  coq-compcert.3.7~coq-platform~open-source: 136625
+  coq-coqeal.1.1.0: 36490
+  coq-coqoban.8.13.0: 0
+  coq-coqprime.1.0.5: 59246
+  coq-coqtail.8.14: 49800
+  coq-coquelicot.3.2.0: 40732
+  coq-coqutil.0.0.2: 929
+  coq-corn.8.16.0: 69562
+  coq-cunit.1.0.0: 0
+  coq-deriving.0.1.0: 702
+  coq-dijkstra.0.1.0: 179
+  coq-dpdgraph.0.6.7: 0
+  coq-equations.1.2.4+8.11: 2595
+  coq-error-handlers.1.2.0: 0
+  coq-ext-lib.0.11.7: 6519
+  coq-extructures.0.3.1: 3490
+  coq-flocq-quickchick.1.0.2: 196
+  coq-flocq.3.4.3: 208674
+  coq-fourcolor.1.2.5: 44453
+  coq-function-ninjas.1.0.0: 0
+  coq-functional-algebra.1.0.2: 0
+  coq-gaia-numbers.1.15: 36433
+  coq-gaia-ordinals.1.15: 86309
+  coq-gaia-schutte.1.15: 5017
+  coq-gaia-stern.1.15: 10782
+  coq-gaia-theory-of-sets.1.15: 58065
+  coq-gappa.1.5.3: 13586
+  coq-generic-environments.8.11.0: 10602
+  coq-geometric-algebra.0.8.11: 48838
+  coq-giskard.1.0: 9383
+  coq-goedel.8.13.0: 23312
+  coq-hammer-tactics.1.3.2+8.11: 123
+  coq-hammer.1.3.2+8.11: 0
+  coq-haskell.1.0.0: 1658
+  coq-high-school-geometry.8.12.0: 36932
+  coq-hoare-tut.8.11.1: 1363
+  coq-hott.8.11: 65106
+  coq-huffman.8.12.0: 25274
+  coq-hydra-battles.0.4: 125963
+  coq-io-hello-world.1.2.0: 9
+  coq-io-system.2.4.1: 24
+  coq-io.4.0.0: 329
+  coq-iris-heap-lang.3.4.0: 11671
+  coq-iris-string-ident.0.1.0: 0
+  coq-iris.3.4.0: 52392
+  coq-iterable.1.0.0: 0
+  coq-itree-io.0.1.0: 0
+  coq-itree.4.0.0: 20918
+  coq-jmlcoq.8.15.0: 16791
+  coq-jsast.2.0.0: 0
+  coq-libhyps.2.0.6: 1
+  coq-list-plus.1.1.0: 0
+  coq-list-string.2.1.2: 89
+  coq-ltac-iter.1.1.2: 0
+  coq-math-classes.8.15.0: 46563
+  coq-mathcomp-abel.1.2.1: 4526
+  coq-mathcomp-algebra.1.14.0: 24810
+  coq-mathcomp-apery.1.0.1: 6698
+  coq-mathcomp-bigenough.1.0.1: 7
+  coq-mathcomp-character.1.14.0: 20681
+  coq-mathcomp-field.1.14.0: 10537
+  coq-mathcomp-fingroup.1.14.0: 8536
+  coq-mathcomp-finmap.1.5.1: 3505
+  coq-mathcomp-multinomials.1.5.5: 7839
+  coq-mathcomp-odd-order.1.14.0: 66187
+  coq-mathcomp-real-closed.1.1.2: 12601
+  coq-mathcomp-solvable.1.14.0: 25130
+  coq-mathcomp-ssreflect.1.14.0: 16414
+  coq-menhirlib.20190924: 32475
+  coq-metacoq-erasure.1.0~beta2+8.11: 12579
+  coq-metacoq-pcuic.1.0~beta2+8.11: 150047
+  coq-metacoq-safechecker.1.0~beta2+8.11: 28939
+  coq-metacoq-template.1.0~beta2+8.11: 81652
+  coq-metacoq-translations.1.0~beta2+8.11: 3031
+  coq-mi-cho-coq.1.0.0: 31159
+  coq-moment.1.2.1: 0
+  coq-ott.0.33: 3172
+  coq-paco.4.1.1: 57568
+  coq-paramcoq.1.1.3+coq8.11: 0
+  coq-pocklington.8.12.0: 5843
+  coq-poltac.0.8.11: 2218
+  coq-printf.2.0.0: 146
+  coq-qarith-stern-brocot.8.12.0: 49870
+  coq-qcert.2.2.0: 156608
+  coq-quickchick.1.6.4: 11351
+  coq-record-update.0.3.1: 0
+  coq-reduction-effects.0.1.4: 0
+  coq-regexp-brzozowski.1.0: 14008
+  coq-reglang.1.1.3: 5033
+  coq-relation-algebra.1.7.4: 32775
+  coq-rewriter.0.0.2: 64998
+  coq-rsa.8.8.0: 3481
+  coq-semantics.8.14.0: 37474
+  coq-simple-io.1.8.0: 0
+  coq-smpl.8.11: 11
+  coq-smtcoq.2.0+8.11: 138774
+  coq-stalmarck.8.11.0: 45859
+  coq-stdpp.1.5.0: 38244
+  coq-tactician-stdlib.8.11.dev: 569797
+  coq-tlc.20200328: 21902
+  coq-topology.10.0.1: 14468
+  coq-type-infer.0.1.0: 1964
+  coq-vst.2.6: 585100
+  coq-zorns-lemma.10.0.1: 8597
+dataset_to_num_thms:
+  coq-aac-tactics.8.11.0: 242
+  coq-alea.8.11.0: 5464
+  coq-almost-full.8.14.0: 172
+  coq-antivalence.1.0.1: 1
+  coq-atbr.8.11.0: 5930
+  coq-autosubst.1.7: 179
+  coq-bbv.1.3: 658
+  coq-bertrand.8.12.0: 258
+  coq-bignums.8.11.0: 3745
+  coq-bits.1.1.0: 428
+  coq-buchberger.8.11.0: 1470
+  coq-bytestring.0.9.0: 19
+  coq-ceres.0.4.0: 105
+  coq-chapar.8.13.0: 3389
+  coq-chick-blog.1.0.1: 8
+  coq-color.1.8.2: 23031
+  coq-compcert.3.7~coq-platform~open-source: 5952
+  coq-coqeal.1.1.0: 4305
+  coq-coqoban.8.13.0: 0
+  coq-coqprime.1.0.5: 6241
+  coq-coqtail.8.14: 2431
+  coq-coquelicot.3.2.0: 2085
+  coq-coqutil.0.0.2: 172
+  coq-corn.8.16.0: 3989
+  coq-cunit.1.0.0: 0
+  coq-deriving.0.1.0: 92
+  coq-dijkstra.0.1.0: 12
+  coq-dpdgraph.0.6.7: 0
+  coq-equations.1.2.4+8.11: 347
+  coq-error-handlers.1.2.0: 0
+  coq-ext-lib.0.11.7: 468
+  coq-extructures.0.3.1: 726
+  coq-flocq-quickchick.1.0.2: 8
+  coq-flocq.3.4.3: 4276
+  coq-fourcolor.1.2.5: 2914
+  coq-function-ninjas.1.0.0: 0
+  coq-functional-algebra.1.0.2: 0
+  coq-gaia-numbers.1.15: 2775
+  coq-gaia-ordinals.1.15: 3118
+  coq-gaia-schutte.1.15: 666
+  coq-gaia-stern.1.15: 1200
+  coq-gaia-theory-of-sets.1.15: 4931
+  coq-gappa.1.5.3: 419
+  coq-generic-environments.8.11.0: 626
+  coq-geometric-algebra.0.8.11: 1504
+  coq-giskard.1.0: 144
+  coq-goedel.8.13.0: 182
+  coq-hammer-tactics.1.3.2+8.11: 22
+  coq-hammer.1.3.2+8.11: 0
+  coq-haskell.1.0.0: 188
+  coq-high-school-geometry.8.12.0: 1153
+  coq-hoare-tut.8.11.1: 60
+  coq-hott.8.11: 6669
+  coq-huffman.8.12.0: 620
+  coq-hydra-battles.0.4: 5349
+  coq-io-hello-world.1.2.0: 4
+  coq-io-system.2.4.1: 18
+  coq-io.4.0.0: 22
+  coq-iris-heap-lang.3.4.0: 530
+  coq-iris-string-ident.0.1.0: 0
+  coq-iris.3.4.0: 9581
+  coq-iterable.1.0.0: 0
+  coq-itree-io.0.1.0: 0
+  coq-itree.4.0.0: 1107
+  coq-jmlcoq.8.15.0: 849
+  coq-jsast.2.0.0: 0
+  coq-libhyps.2.0.6: 1
+  coq-list-plus.1.1.0: 0
+  coq-list-string.2.1.2: 9
+  coq-ltac-iter.1.1.2: 0
+  coq-math-classes.8.15.0: 4072
+  coq-mathcomp-abel.1.2.1: 669
+  coq-mathcomp-algebra.1.14.0: 9840
+  coq-mathcomp-apery.1.0.1: 784
+  coq-mathcomp-bigenough.1.0.1: 5
+  coq-mathcomp-character.1.14.0: 3944
+  coq-mathcomp-field.1.14.0: 1713
+  coq-mathcomp-fingroup.1.14.0: 3515
+  coq-mathcomp-finmap.1.5.1: 1885
+  coq-mathcomp-multinomials.1.5.5: 2146
+  coq-mathcomp-odd-order.1.14.0: 2685
+  coq-mathcomp-real-closed.1.1.2: 1625
+  coq-mathcomp-solvable.1.14.0: 3004
+  coq-mathcomp-ssreflect.1.14.0: 7716
+  coq-menhirlib.20190924: 2675
+  coq-metacoq-erasure.1.0~beta2+8.11: 243
+  coq-metacoq-pcuic.1.0~beta2+8.11: 3753
+  coq-metacoq-safechecker.1.0~beta2+8.11: 1265
+  coq-metacoq-template.1.0~beta2+8.11: 6453
+  coq-metacoq-translations.1.0~beta2+8.11: 592
+  coq-mi-cho-coq.1.0.0: 1394
+  coq-moment.1.2.1: 0
+  coq-ott.0.33: 319
+  coq-paco.4.1.1: 3924
+  coq-paramcoq.1.1.3+coq8.11: 0
+  coq-pocklington.8.12.0: 265
+  coq-poltac.0.8.11: 309
+  coq-printf.2.0.0: 21
+  coq-qarith-stern-brocot.8.12.0: 1135
+  coq-qcert.2.2.0: 4977
+  coq-quickchick.1.6.4: 964
+  coq-record-update.0.3.1: 0
+  coq-reduction-effects.0.1.4: 0
+  coq-regexp-brzozowski.1.0: 740
+  coq-reglang.1.1.3: 633
+  coq-relation-algebra.1.7.4: 1638
+  coq-rewriter.0.0.2: 2656
+  coq-rsa.8.8.0: 132
+  coq-semantics.8.14.0: 681
+  coq-simple-io.1.8.0: 0
+  coq-smpl.8.11: 3
+  coq-smtcoq.2.0+8.11: 2374
+  coq-stalmarck.8.11.0: 837
+  coq-stdpp.1.5.0: 5265
+  coq-tactician-stdlib.8.11.dev: 43547
+  coq-tlc.20200328: 3640
+  coq-topology.10.0.1: 533
+  coq-type-infer.0.1.0: 184
+  coq-vst.2.6: 10293
+  coq-zorns-lemma.10.0.1: 347
