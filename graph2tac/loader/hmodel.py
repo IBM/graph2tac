@@ -19,7 +19,7 @@ def my_hash(x: bytes):
     return m.hexdigest()
 
 
-def hash_nparray(array: np.array):
+def hash_nparray(array: np.ndarray):
     x = memoryview(array).tobytes()
     return my_hash(x)
 
@@ -27,7 +27,6 @@ def hash_nparray(array: np.array):
 def action_encode(action: LoaderAction,
                   local_context,
                   global_context):
-    context = (local_context, global_context)
     res = []
     for local_arg, global_arg in zip(action.local_args, action.global_args):
         if local_arg >= 0: res.append((0, local_context[local_arg]))
@@ -61,7 +60,7 @@ def args_decode(args,
 
 
 class Train:
-    def __init__(self, data_dir: Path, max_subgraph_size, with_context, shuffled, dry):
+    def __init__(self, data_dir: Path, output_dir: Path, max_subgraph_size, with_context, shuffled, dry):
 
         self._data_server = DataServer(
             data_dir=data_dir,
@@ -83,6 +82,7 @@ class Train:
             )
         )
         self._data = {}
+        self.output_dir = output_dir
         self._global_context = self._data_server.graph_constants().global_context
         self._tactic_index_to_hash = self._data_server.graph_constants().tactic_index_to_hash
         self._max_subgraph_size = max_subgraph_size
@@ -123,9 +123,11 @@ class Train:
                        'with_context': self._with_context,
                        'max_subgraph_size': self._max_subgraph_size}
 
-        pickle.dump(saved_model, open('hmodel.sav', 'wb'))
-        print(f"model saved in hmodel.sav")
+        self.output_dir.mkdir(exist_ok=True, parents=True)
+        pickle.dump(saved_model, open(self.output_dir / "hmodel.sav", 'wb'))
+        print(f"model saved in {self.output_dir / 'hmodel.sav'}")
 
+        return saved_model # return all data for testing purposes
 
 
 class HPredict(Predict):
@@ -186,7 +188,7 @@ class HPredict(Predict):
             if args_decoded is not None:
                 args_decoded = np.array(args_decoded, dtype=np.uint32).reshape((len(args_decoded), 2))
             if debug:
-                print("HMODEL ", annotation, self._graph_constants.tactic_index_to_string[tactic_idx].decode(), "index into context:", args_decoded, end="")
+                print("HMODEL ", annotation, self.graph_constants.tactic_index_to_string[tactic_idx].decode(), "index into context:", args_decoded, end="")
             if tactic_idx in allowed_model_tactics:
                 if args_decoded is not None:
                     decoded_predictions.append(np.concatenate([np.array([(tactic_idx, tactic_idx)], dtype=np.uint32), args_decoded]))
@@ -223,12 +225,17 @@ class HPredict(Predict):
 def main():
     parser = argparse.ArgumentParser()
 
-    parser.add_argument('data_dir', type=str,
-                        help='data_dir to the model')
+    parser.add_argument('data_dir', type=Path,
+                        help='location of the training data')
+
+    parser.add_argument('--output_dir', type=Path,
+                        help='location to save results (default: working directory)',
+                        default=Path("."))
 
     parser.add_argument('--max_subgraph_size', type=int,
-                        help='max subgraph size limit',
+                        help='max subgraph size limit (default: 1024)',
                         default=1024)
+
     parser.add_argument('--with_context',
                         action='store_true',
                         help='use state.context as a part of hashed state')
@@ -239,15 +246,21 @@ def main():
 
     parser.add_argument('--dry',
                         action='store_true',
-                        help='shuffle the training dataset')
+                        help='pass through data without training model')
 
 
     args = parser.parse_args()
 
-    trainer = Train(Path(args.data_dir).expanduser().absolute(),
-                    args.max_subgraph_size, args.with_context, args.shuffled, args.dry)
+    trainer = Train(
+        data_dir=args.data_dir.expanduser().absolute(),
+        output_dir=args.output_dir,
+        max_subgraph_size=args.max_subgraph_size,
+        with_context=args.with_context,
+        shuffled=args.shuffled,
+        dry=args.dry
+    )
 
-    trainer.train()
+    return trainer.train()
 
 
 if __name__ == '__main__':

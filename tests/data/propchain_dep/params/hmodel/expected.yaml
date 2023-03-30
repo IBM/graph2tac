@@ -1,0 +1,52 @@
+03354b7448f4ba5a0e9cd81fc6c9ee5943f9787e35ed5ed688d3090235fb7e18:
+- args:
+  - arg_index: 3
+    arg_type: 0
+  tactic: 1
+0d6aaa51d935ef8d1e60ce90b585e42c350de13c2ea2edd947eff6c23befea7c:
+- args:
+  - arg_index: 2
+    arg_type: 0
+  tactic: 1
+5b2c77b3c197b266bd4cf694bf6a0cec10036f29befc406522a5dfbe5cd45425:
+- args: []
+  tactic: 0
+5f6dbd10cb296444ab778171686f71c4c70f9ea4a50379fe191af4478a351288:
+- args:
+  - arg_index: 1
+    arg_type: 0
+  tactic: 1
+701223bdb2307f28abc580f29a6a4e927d8c80c38329d41ac7aa6bc04a27a4a0:
+- args:
+  - arg_index: 26
+    arg_type: 1
+  tactic: 2
+- args:
+  - arg_index: 28
+    arg_type: 1
+  tactic: 2
+8269b301a383cbe6a839c550eafb75e608461e34bf8b6094cf558d3dbf27b537:
+- args:
+  - arg_index: 3
+    arg_type: 0
+  tactic: 1
+9e30eb001214b7de06962f240b7631264874842486adc48a7984103ad00d450d:
+- args: []
+  tactic: 0
+a239888179b3956b1c897a6894f78733dc941371bf9e1dd35b390a7e8be5b5d9:
+- args:
+  - arg_index: 1
+    arg_type: 0
+  tactic: 1
+beb6fedb45d387571e60baab3bead0bf64566563f00298c849b1e7e735b2ff3c:
+- args:
+  - arg_index: 27
+    arg_type: 1
+  tactic: 2
+c8f4809182ec54d10b1729a0697c4cd0cba00bf449790804f6f8145c06b1c6e9:
+- args: []
+  tactic: 0
+- args:
+  - arg_index: 26
+    arg_type: 1
+  tactic: 2

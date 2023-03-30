@@ -1,0 +1,20 @@
+arguments_seq_accuracy:
+- 0.6375219821929932
+definition_embedding_loss:
+- 1.7726715803146362
+global_arguments_logits_accuracy:
+- 0.3711180090904236
+global_arguments_logits_loss:
+- 2.446582078933716
+local_arguments_logits_accuracy:
+- 0.4553571343421936
+local_arguments_logits_loss:
+- 0.7749609351158142
+loss:
+- 892.4483642578125
+strict_accuracy:
+- 0.10720562189817429
+tactic_logits_accuracy:
+- 0.25351494550704956
+tactic_logits_loss:
+- 2.877603054046631

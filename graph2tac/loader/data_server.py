@@ -307,7 +307,7 @@ class SplitByHash(Splitter):
         self.random_seed = random_seed
     def lemma(self, d : Definition) -> int:
         # to make it identical to vasily's loader
-        ident_64 = np.uint64(d.node.identity)
+        ident_64 = np.array(int(d.node.identity)).astype("uint64").item()  # casts to uint64 (w/ overflow) w/o deprication warning
         return get_split_label(ident_64, self.proportions, self.random_seed)
     def definition_cluster(self, d : list[Definition]) -> int:
         return TRAIN
