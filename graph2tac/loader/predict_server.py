@@ -475,9 +475,9 @@ def prediction_loop(predict_server: PredictServer, context: GlobalContextMessage
 def start_prediction_loop(predict_server: PredictServer, capnp_socket: socket.socket, record_file: Optional[BinaryIO]):
     prediction_loop(predict_server, capnp_message_generator(capnp_socket, record_file))
 
-def start_prediction_loop_with_replay(predict_server: PredictServer, replay_file: Path):
+def start_prediction_loop_with_replay(predict_server: PredictServer, replay_file: Path, record_file: Optional[BinaryIO]):
     with open(replay_file, "rb") as f:
-        prediction_loop(predict_server, capnp_message_generator_from_file(f))
+        prediction_loop(predict_server, capnp_message_generator_from_file(f, record=record_file))
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -666,7 +666,7 @@ def main() -> ResponseHistory:
         if config.replay:
             assert not config.tcp, "--replay not compatible with --tcp"
             assert not config.tcp, "--replay not compatible with --record"
-            start_prediction_loop_with_replay(predict_server, config.replay)
+            start_prediction_loop_with_replay(predict_server, config.replay, record_file)
         elif not config.tcp:
             logger.info("starting stdin server")
             capnp_socket = socket.socket(fileno=sys.stdin.fileno())
