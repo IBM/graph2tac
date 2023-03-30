@@ -638,9 +638,6 @@ class LocalArgumentPrediction(TacticPrediction):
         num_arguments = tf.shape(logits)[1]
         num_logits = tf.shape(logits)[2]
         return tf.reshape(logits, shape=(tactic_expand_bound, -1, num_arguments, num_logits))
-        #x = tf.shape(tf.reshape(logits, shape=(tactic_expand_bound, -1, num_arguments, num_logits)))
-        #x = tf.keras.backend.print_tensor(x, message="Logits")
-        #return x
 
     @classmethod
     def _reshape_global_inference_logits(cls, logits: tf.Tensor, tactic_expand_bound: int, dyn_global_context: tf.RaggedTensor) -> tf.Tensor:
