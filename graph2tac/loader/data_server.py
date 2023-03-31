@@ -307,7 +307,7 @@ class SplitByHash(Splitter):
         self.random_seed = random_seed
     def lemma(self, d : Definition) -> int:
         # to make it identical to vasily's loader
-        ident_64 = np.uint64(d.node.identity)
+        ident_64 = np.array(int(d.node.identity)).astype("uint64").item()  # casts to uint64 (w/ overflow) w/o deprication warning
         return get_split_label(ident_64, self.proportions, self.random_seed)
     def definition_cluster(self, d : list[Definition]) -> int:
         return TRAIN
@@ -390,8 +390,7 @@ class DataServer(AbstractDataServer):
             file_data = self._data[name]
             self._load_file(file_data)
 
-        if self.dataset_config.exclude_unique_tactics:
-            self._exclude_unique_tactics()
+        self._exclude_unique_tactics()
 
         # precalculate def_file_ctx in a forward order to prevent stack overflow,
         # calculate the maximum definition length
@@ -495,9 +494,11 @@ class DataServer(AbstractDataServer):
             self._repr_to_filedeps[r] = filedeps
 
     def _exclude_unique_tactics(self):
+        if self.dataset_config.required_tactic_occurrence <= 1: return
+
         new_to_ori = [
             i for i,cnt in enumerate(self._tactic_i_count)
-            if cnt > 1
+            if cnt >= self.dataset_config.required_tactic_occurrence
         ]
         ori_to_new = {
             ori : new
