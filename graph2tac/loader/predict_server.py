@@ -237,11 +237,10 @@ class DynamicDataServer(AbstractDataServer):
         graph, node_to_i = self._downward_closure([root])
         root_i = 0
         local_context_i = [node_to_i[n] for n in local_context]
-        dynamic_global_context = np.arange(len(self.global_defs), dtype=np.uint32)
 
         context = ProofstateContext(
             local_context=np.array(local_context_i, dtype = np.uint32),
-            global_context=np.array(dynamic_global_context, dtype = np.uint32),
+            global_context=np.array(self.global_defs, dtype = np.uint32),
         )
         dummy_proofstate_info = ProofstateMetadata(b'dummy_proofstate_name', -1, True)
 
@@ -285,10 +284,14 @@ class PredictServer:
 
         self.data_server.align_definitions(definitions.definitions())
 
-        logger.info(f"initializing network with {len(self.data_server.global_defs)} defs in global context")
+        if len(self.data_server.global_defs) > 0:
+            static_global_context = np.arange(max(self.data_server.global_defs)+1, dtype=np.uint32)
+        else:
+            static_global_context = np.arange(1, dtype=np.uint32)
+        logger.info(f"initializing network with {static_global_context} defs in global context")
         t0 = time.time()
 
-        self.model.initialize(self.data_server.global_defs)
+        self.model.initialize(static_global_context)
         t1 = time.time()
         self.log_cnts.build_network_time = t1-t0
         logger.info(f"Building network model completed in {self.log_cnts.build_network_time:.6f} seconds")
