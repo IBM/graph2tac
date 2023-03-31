@@ -1,0 +1,60 @@
+arguments_seq_accuracy:
+- 0.8369175791740417
+- 0.8440860509872437
+definition_embedding_loss:
+- 1.8213000297546387
+- 1.743248462677002
+global_arguments_logits_accuracy:
+- 0.0
+- 0.0
+global_arguments_logits_loss:
+- 0.0
+- 0.0
+local_arguments_logits_accuracy:
+- 0.04301075264811516
+- 0.06451612710952759
+local_arguments_logits_loss:
+- 1.1042314767837524
+- 0.6990383863449097
+loss:
+- 912.3772583007812
+- 872.7618408203125
+strict_accuracy:
+- 0.7508960366249084
+- 0.8333333134651184
+tactic_logits_accuracy:
+- 0.7688171863555908
+- 0.8333333134651184
+tactic_logits_loss:
+- 0.6190337538719177
+- 0.4344906806945801
+val_arguments_seq_accuracy:
+- 1.0
+- 1.0
+val_definition_embedding_loss:
+- 1.5189999341964722
+- 1.6248975992202759
+val_global_arguments_logits_accuracy:
+- 0.0
+- 0.0
+val_global_arguments_logits_loss:
+- 0.0
+- 0.0
+val_local_arguments_logits_accuracy:
+- 1.0
+- 1.0
+val_local_arguments_logits_loss:
+- 0.6128338575363159
+- 0.5353964567184448
+val_loss:
+- 760.61474609375
+- 813.3880004882812
+val_strict_accuracy:
+- 0.8333333134651184
+- 0.8333333134651184
+val_tactic_logits_accuracy:
+- 0.8333333134651184
+- 0.8333333134651184
+val_tactic_logits_loss:
+- 0.4980652630329132
+- 0.3999907970428467

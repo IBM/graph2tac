@@ -91,7 +91,7 @@ class DatasetConfig:
     exclude_none_arguments : bool
     exclude_not_faithful : bool
     required_tactic_occurrence : int
-    shuffle_random_seed : bool
+    shuffle_random_seed : int
 
 @dataclass
 class GraphConstants:
