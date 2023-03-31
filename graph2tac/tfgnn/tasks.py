@@ -115,7 +115,7 @@ class ArgumentSparseCategoricalCrossentropy(tf.keras.losses.Loss):
         arguments_tensor = tf.squeeze(y_true.to_tensor(default_value=-1), axis=1)
 
         # we want to compute only over the positions that are not None
-        nrows = y_true.shape[0]
+        nrows = tf.shape(y_true, out_type=tf.int64)[0]
         positions = tf.where(arguments_tensor != -1)
         row_ids = positions[:, 0]
 
