@@ -190,7 +190,8 @@ class DynamicDataServer(AbstractDataServer):
         self._node_i_to_name = graph_constants.label_to_names
         self._node_i_to_ident = graph_constants.label_to_ident
         self._node_i_in_spine = graph_constants.label_in_spine
-        self._num_train_nodes = len(self._node_i_to_name)
+        self._last_num_nodes = None
+        self._context_stack = []
 
         # extra data
         
@@ -202,10 +203,18 @@ class DynamicDataServer(AbstractDataServer):
 
         self._def_node_to_i = None
         self._globarg_i_to_node = None
-        self.global_context = None
+        self.global_defs = None
 
     def align_definitions(self, definitions):
-        
+
+        self._context_stack.append((
+            self.global_defs,
+            self._globarg_i_to_node,
+            self._def_node_to_i,
+            self._last_num_nodes
+        ))
+        self._last_num_nodes = len(self._node_i_to_name)
+
         self._globarg_i_to_node = []
         global_defs = []
         self._def_node_to_i = dict()
@@ -216,27 +225,32 @@ class DynamicDataServer(AbstractDataServer):
             else:
                 self._def_node_to_i[d.node] = i
             self._globarg_i_to_node.append(d.node)
+            #self._globarg_i_to_node[i] = d.node
             global_defs.append(i)
 
         global_defs = np.array(global_defs, dtype = np.int32)
         self.global_defs = global_defs
 
     def is_new_definition(self, node):
-        return self._def_node_to_i[node] >= self._num_train_nodes
+        return self._def_node_to_i[node] >= self._last_num_nodes
 
-    def reset(self):
-        self.global_defs = None
-        self._globarg_i_to_node = None
-        self._def_node_to_i = None
+    def pop(self):
+        del self._node_i_to_name[self._last_num_nodes:]
+        del self._node_i_to_ident[self._last_num_nodes:]
+        del self._node_i_in_spine[self._last_num_nodes:]
 
-        del self._node_i_to_name[self._num_train_nodes:]
-        del self._node_i_to_ident[self._num_train_nodes:]
-        del self._node_i_in_spine[self._num_train_nodes:]
+        (
+            self.global_defs,
+            self._globarg_i_to_node,
+            self._def_node_to_i,
+            self._last_num_nodes
+        ) = self._context_stack.pop()
 
     def proofstate(self, root, local_context):
         graph, node_to_i = self._downward_closure([root])
         root_i = 0
         local_context_i = [node_to_i[n] for n in local_context]
+        # dynamic_global_context = np.arange(len(self.global_defs), dtype=np.uint32)
 
         context = ProofstateContext(
             local_context=np.array(local_context_i, dtype = np.uint32),
@@ -306,7 +320,7 @@ class PredictServer:
                 cluster for cluster in definitions.clustered_definitions()
                 if self.data_server.is_new_definition(cluster[0].node)
             ]
-            prev_defined_nodes = self.data_server._num_train_nodes
+            prev_defined_nodes = self.data_server._last_num_nodes
             logger.info(f"Prepared for update {len(def_clusters_for_update)} definition clusters containing unaligned definitions")
         else:
             assert self.config.update is None
@@ -355,9 +369,13 @@ class PredictServer:
 
     def _exit_coq_context(self):
 
-        self.inside_context = False
-        self.current_allowed_tactics = None
-        self.data_server.reset()
+        self.current_allowed_tactics = self.allowed_tactics_stack.pop()
+        self.data_server.pop()
+        if len(self.data_server.global_defs) > 0:
+            static_global_context = np.arange(max(self.data_server.global_defs)+1, dtype=np.uint32)
+        else:
+            static_global_context = np.arange(1, dtype=np.uint32)
+        self.model.initialize(static_global_context)
 
     @contextmanager
     def coq_context(self, msg: GlobalContextMessage):
@@ -381,7 +399,7 @@ class PredictServer:
         )
 
     def predict(self, proof_state: ProofState) -> TacticPredictionsGraph:
-        if not self.inside_context:
+        if self.current_allowed_tactics is None:
             raise Exception("Cannot predict outside 'with predict_server.coq_context()'")
 
         actions, confidences = self.model.ranked_predictions(
@@ -426,63 +444,41 @@ def prediction_loop(predict_server: PredictServer, context: GlobalContextMessage
     log_cnts.session_idx += 1
     log_cnts.thm_idx = -1
 
-    msg = next(message_iterator, None)
-    while msg is not None:
-        if isinstance(msg, ProofState):
-            log_cnts.thm_idx += 1
-            log_cnts.thm_annotation = context.log_annotation
+    with predict_server.coq_context(context):
 
-            # FIXME: Implement incremental updating of the context
-            with predict_server.coq_context(context):
+        for msg in message_iterator:
 
-                log_cnts.msg_idx = -1
-                log_cnts.t_predict = 0.0
-                log_cnts.n_predict = 0
-                log_cnts.max_t_predict = 0.0
-                log_cnts.argmax_t_predict = -1
-                log_cnts.t_coq = 0.0
-                log_cnts.n_coq = 0
-                t0_coq = time.time()
-                while msg is not None:
-                    if isinstance(msg, ProofState):
-                        log_cnts.t_coq += (time.time() - t0_coq)
-                        log_cnts.n_coq += 1
-                        log_cnts.msg_idx += 1
+            if isinstance(msg, ProofState):
+                log_cnts.n_coq += 1
+                log_cnts.msg_idx += 1
 
-                        t0 = time.time()
+                t0 = time.time()
 
-                        # important line -- getting prediction
-                        response = predict_server.predict(msg)
+                # important line -- getting prediction
+                response = predict_server.predict(msg)
 
-                        t1 = time.time()
-                        if t1-t0 > log_cnts.max_t_predict:
-                            log_cnts.max_t_predict = t1-t0
-                            log_cnts.argmax_t_predict = log_cnts.msg_idx
+                t1 = time.time()
+                if t1-t0 > log_cnts.max_t_predict:
+                    log_cnts.max_t_predict = t1-t0
+                    log_cnts.argmax_t_predict = log_cnts.msg_idx
 
-                        log_cnts.t_predict += (t1 - t0)
-                        log_cnts.n_predict += 1
+                log_cnts.t_predict += (t1 - t0)
+                log_cnts.n_predict += 1
 
-                        # important line -- sending prediction
-                        predict_server.response_history.record_response(response)
-                        prediction_requests.send(response)
-                        msg = next(message_iterator, None)
-                    else:
-                        break
+                # important line -- sending prediction
+                prediction_requests.send(response)
 
-            log_cnts.update_process_stats()
-            logger.summary(log_cnts.summary_log_message())
-        elif isinstance(msg, CheckAlignmentMessage):
-            logger.info("checkAlignment request")
-            response = predict_server.check_alignment(context)
-            logger.info("sending checkAlignment response to coq")
-            predict_server.response_history.record_response(response)
-            prediction_requests.send(response)
-            msg = next(message_iterator, None)
-        elif isinstance(msg, GlobalContextMessage):
-            prediction_loop(predict_server, msg)
-            msg = next(message_iterator, None)
-        else:
-            raise Exception("Capnp protocol error")
+            elif isinstance(msg, CheckAlignmentMessage):
+                logger.info("checkAlignment request")
+                response = predict_server.check_alignment(context)
+                logger.info("sending checkAlignment response to coq")
+                prediction_requests.send(response)
+
+            elif isinstance(msg, GlobalContextMessage):
+                prediction_loop(predict_server, msg)
+
+            else:
+                raise Exception("Capnp protocol error")
 
 def start_prediction_loop(predict_server: PredictServer, capnp_socket: socket.socket, record_file: Optional[BinaryIO]):
     prediction_loop(predict_server, capnp_message_generator(capnp_socket, record_file))
