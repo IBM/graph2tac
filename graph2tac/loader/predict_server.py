@@ -277,17 +277,14 @@ class PredictServer:
         self.config = config
         self.log_cnts = log_cnts
         self.current_allowed_tactics = None
-        self.inside_context = False
         self.response_history = response_history
+        self.allowed_tactics_stack = []
 
     def _enter_coq_context(self, definitions: OnlineDefinitionsReader, tactics):
 
-        if self.inside_context:
-            raise Exception("Cannot nest coq contexts")
-        self.inside_context = True
-
         # tactics
 
+        self.allowed_tactics_stack.append(self.current_allowed_tactics)
         self.current_allowed_tactics = []
         for t in tactics:
             i = self.data_server._tactic_to_i.get(t.ident, None)
@@ -371,11 +368,12 @@ class PredictServer:
 
         self.current_allowed_tactics = self.allowed_tactics_stack.pop()
         self.data_server.pop()
-        if len(self.data_server.global_defs) > 0:
-            static_global_context = np.arange(max(self.data_server.global_defs)+1, dtype=np.uint32)
-        else:
-            static_global_context = np.arange(1, dtype=np.uint32)
-        self.model.initialize(static_global_context)
+        if self.data_server.global_defs is not None:
+            if len(self.data_server.global_defs) > 0:
+                static_global_context = np.arange(max(self.data_server.global_defs)+1, dtype=np.uint32)
+            else:
+                static_global_context = np.arange(1, dtype=np.uint32)
+            self.model.initialize(static_global_context)
 
     @contextmanager
     def coq_context(self, msg: GlobalContextMessage):
