@@ -119,7 +119,7 @@ class ArgumentSparseCategoricalCrossentropy(tf.keras.losses.Loss):
         super().__init__(**kwargs)
         self.sum_loss_over_tactic = sum_loss_over_tactic
 
-    def arguments_filter(y_true: tf.RaggedTensor, y_pred: tf.Tensor) -> Tuple[tf.RaggedTensor, tf.RaggedTensor]:
+    def arguments_filter(self, y_true: tf.RaggedTensor, y_pred: tf.Tensor) -> Tuple[tf.RaggedTensor, tf.RaggedTensor]:
         """
         Extracts the local arguments which are not None from the ground truth and predictions.
         
