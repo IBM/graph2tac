@@ -315,7 +315,7 @@ class GlobalArgumentModel(tf.keras.Model):
         # local arguments
         local_arguments = y[GlobalArgumentPrediction.LOCAL_ARGUMENTS_LOGITS]  # [batch, None(args)]
         local_arguments_logits = y_pred[GlobalArgumentPrediction.LOCAL_ARGUMENTS_LOGITS]  # [batch, None(args), None(context]
-        local_arguments_logits = local_arguments_logits.to_tensor(default_value=-np.inf, shape=[None, None, 5000])  # [batch, max(args), context] # FIXME(jrute) 
+        local_arguments_logits = local_arguments_logits.to_tensor(default_value=-np.inf)  # [batch, max(args), context] # FIXME(jrute) 
         local_true = tf.squeeze(local_arguments, 1)  # [batch, None(args)]
         local_logits = ragged_logits(local_arguments, local_arguments_logits)  # [batch, None(args), context]
         local_best_logit = tf.ragged.map_flat_values(tf.reduce_max, local_logits, axis=-1)  # [batch, None(args)]
@@ -325,7 +325,7 @@ class GlobalArgumentModel(tf.keras.Model):
         # global arguments
         global_arguments = y[GlobalArgumentPrediction.GLOBAL_ARGUMENTS_LOGITS]  # [batch, None(args)]
         global_arguments_logits = y_pred[GlobalArgumentPrediction.GLOBAL_ARGUMENTS_LOGITS]  # [batch, None(args), None(context]
-        global_arguments_logits = global_arguments_logits.to_tensor(default_value=-np.inf, shape=[None, None, 5000])  # [batch, max(args), context] # FIXME(jrute) 
+        global_arguments_logits = global_arguments_logits.to_tensor(default_value=-np.inf)  # [batch, max(args), context] # FIXME(jrute) 
         global_true = tf.squeeze(global_arguments, 1)  # [batch, None(args)]
         global_logits = ragged_logits(global_arguments, global_arguments_logits)
         global_best_logit = tf.ragged.map_flat_values(tf.reduce_max, global_logits, axis=-1)  # [batch, None(args)]
