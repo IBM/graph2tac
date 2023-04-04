@@ -299,7 +299,7 @@ class PredictServer:
             static_global_context = np.arange(max(self.data_server.global_defs)+1, dtype=np.uint32)
         else:
             static_global_context = np.arange(1, dtype=np.uint32)
-        logger.info(f"initializing network with {static_global_context} defs in global context")
+        logger.info(f"initializing network with {len(static_global_context)} defs in global context")
         t0 = time.time()
 
         self.model.initialize(static_global_context)
