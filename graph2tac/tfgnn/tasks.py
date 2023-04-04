@@ -4,6 +4,7 @@ import yaml
 import tensorflow as tf
 import tensorflow_gnn as tfgnn
 from pathlib import Path
+import numpy as np
 
 from graph2tac.loader.data_classes import GraphConstants
 from graph2tac.tfgnn.graph_schema import proofstate_graph_spec, batch_graph_spec, strip_graph
@@ -119,15 +120,16 @@ class ArgumentSparseCategoricalCrossentropy(tf.keras.losses.Loss):
         super().__init__(**kwargs)
         self.sum_loss_over_tactic = sum_loss_over_tactic
 
-    def arguments_filter(self, y_true: tf.RaggedTensor, y_pred: tf.Tensor) -> Tuple[tf.RaggedTensor, tf.RaggedTensor]:
+    @staticmethod
+    def arguments_filter(y_true: tf.RaggedTensor, y_pred: tf.RaggedTensor) -> Tuple[tf.RaggedTensor, tf.RaggedTensor]:
         """
         Extracts the local arguments which are not None from the ground truth and predictions.
         
         Returns a pair of ragged tensors with shapes:
         - [batch_size, None(num_nonempty_args)]
-        - [batch_size, None(num_nonempty_args), context_size]
+        - [batch_size, None(num_nonempty_args), None(context)]
         @param y_true: the labels for the arguments, with shape [batch_size, 1, None(num_arguments)]
-        @param y_pred: the logits for the arguments, with shape [batch_size, max(num_arguments), context_size]
+        @param y_pred: the logits for the arguments, with shape [batch_size, None(num_arguments),  None(context)]
         @return: a tuple whose first element contains the non-None arguments, the second element being the logits corresponding to each non-None argument
         """
         # convert y_true to a dense tensor padding with -1 values (also used for None arguments);
@@ -154,26 +156,57 @@ class ArgumentSparseCategoricalCrossentropy(tf.keras.losses.Loss):
         # output shape: [batch, None(args)], [batch, None(args), globals]
         return arguments_true, arguments_pred
 
+    @staticmethod
+    def convert_to_ragged(y_true, y_pred):
+
+        # y_true: # [batch_size, 1, None(args)]
+        # y_pred: # [batch_size, max(num_arguments), context_size]
+
+        # remove spurious dimension (y_true was created from a non-scalar graph)
+        # find lengths
+        # shape: [batch]
+        y_true_lengths = tf.squeeze(y_true, 1).row_lengths()
+
+        # use y_true_lenghts to set outer ragged shape
+        # shape: [batch, None(args), context_size]
+        y_pred = tf.RaggedTensor.from_tensor(y_pred, lengths=y_true_lengths)
+
+        def tensor_to_ragged_filter(x, value_to_filter):
+            # x shape: # [nrows, ncols]
+            nrows = tf.shape(y_true, out_type=tf.int64)[0]
+            positions = tf.where(x != value_to_filter)  # [nrows, 2]
+            row_ids = positions[:, 0]  # [nrows]
+
+            # return shape: [nrows, None(cols)]
+            return tf.RaggedTensor.from_value_rowids(
+                values=tf.gather_nd(x, positions),
+                value_rowids=row_ids,
+                nrows=nrows
+            )
+
+        # filter out -inf
+        # shape: [batch, None(args), None(context)]
+        y_pred = tf.ragged.map_flat_values(lambda x: tensor_to_ragged_filter(x, -np.inf), y_pred)
+
+        return y_pred
+
+
     def call(self, y_true, y_pred):
         """
         @param y_true: ids for the arguments, with shape [ batch_size, 1, None(num_arguments) ]
         @param y_pred: logits for each argument position, with shape [ batch_size, None(num_arguments), num_categories ]
         @return: a vector of length equal to either the size of the batch or the number of arguments of the given type
         """
-        # filter out any arguments which have index -1, i.e. are None or of a different kind (global vs local)
-        # keep track of which batch element the argument came from
-        # shape: [batch, None(args)], [batch, None(args), globals]
-        arguments_true, arguments_pred = self.arguments_filter(y_true, y_pred)
+        # y_true shape: [batch, None(args)]
+        # y_pred shape: [batch, None(args), None(context)]
 
+        # filter out any arguments which have index -1, i.e. are None or of a different kind (global vs local)
+        # shape: [batch, None(args)], [batch, None(args), None(context)]
+        arguments_true, arguments_pred = self.arguments_filter(y_true, y_pred)
+        
         # compute the cross entropy loss by using gather to find the corresponding logit
-        # (and flip the sign)
-        # shape: [batch, None(args)]
-        if tf.size(arguments_pred) == 0:
-            # deal with the edge case where there is no global context or no global arguments to predict in the batch
-            arg_losses = tf.zeros_like(arguments_true, dtype=tf.float32)
-        else:
-            # the context is non-empty and we have at least one argument, so the following doesn't fail
-            arg_losses = -tf.gather(arguments_pred, arguments_true, batch_dims=2)
+        # (and flip the sign to get cross entropy)
+        arg_losses = -tf.gather(arguments_pred, arguments_true, batch_dims=2)
 
         # return the losses as a list of losses (it will be reduced automatically by keras to a single number)
         if self.sum_loss_over_tactic:
@@ -191,7 +224,17 @@ class ArgumentSparseCategoricalAccuracy(tf.keras.metrics.SparseCategoricalAccura
     Per-argument sparse categorical accuracy, excluding None arguments.
     """
     def update_state(self, y_true, y_pred, sample_weight=None):
-        arguments_true, arguments_pred = arguments_filter(y_true, y_pred)
+        # y_true shape: [batch, None(args)]
+        # y_pred shape: [batch, None(args), None(context)]
+
+        # filter out any arguments which have index -1, i.e. are None or of a different kind (global vs local)
+        # shape: [batch, None(args)], [batch, None(args), None(context)]
+        arguments_true, arguments_pred = ArgumentSparseCategoricalCrossentropy.arguments_filter(y_true, y_pred)
+        
+        # TODO(jrute): Is this the best way?  I'm increasing the context size again to be non-ragged.
+        # shape: [batch, None(args), context_size]
+        arguments_pred = arguments_pred.with_values(arguments_pred.values.to_tensor(default_value=-np.inf))
+
         if tf.shape(arguments_pred)[-1] > 0:
             super().update_state(arguments_true, arguments_pred, sample_weight)
 
@@ -271,7 +314,8 @@ class GlobalArgumentModel(tf.keras.Model):
 
         # local arguments
         local_arguments = y[GlobalArgumentPrediction.LOCAL_ARGUMENTS_LOGITS]  # [batch, None(args)]
-        local_arguments_logits = y_pred[GlobalArgumentPrediction.LOCAL_ARGUMENTS_LOGITS]  # [batch, max(args), context]
+        local_arguments_logits = y_pred[GlobalArgumentPrediction.LOCAL_ARGUMENTS_LOGITS]  # [batch, None(args), None(context]
+        local_arguments_logits = local_arguments_logits.to_tensor(default_value=-np.inf, shape=[None, None, 5000])  # [batch, max(args), context] # FIXME(jrute) 
         local_true = tf.squeeze(local_arguments, 1)  # [batch, None(args)]
         local_logits = ragged_logits(local_arguments, local_arguments_logits)  # [batch, None(args), context]
         local_best_logit = tf.ragged.map_flat_values(tf.reduce_max, local_logits, axis=-1)  # [batch, None(args)]
@@ -280,7 +324,8 @@ class GlobalArgumentModel(tf.keras.Model):
         
         # global arguments
         global_arguments = y[GlobalArgumentPrediction.GLOBAL_ARGUMENTS_LOGITS]  # [batch, None(args)]
-        global_arguments_logits = y_pred[GlobalArgumentPrediction.GLOBAL_ARGUMENTS_LOGITS]  # [batch, max(args), context]
+        global_arguments_logits = y_pred[GlobalArgumentPrediction.GLOBAL_ARGUMENTS_LOGITS]  # [batch, None(args), None(context]
+        global_arguments_logits = global_arguments_logits.to_tensor(default_value=-np.inf, shape=[None, None, 5000])  # [batch, max(args), context] # FIXME(jrute) 
         global_true = tf.squeeze(global_arguments, 1)  # [batch, None(args)]
         global_logits = ragged_logits(global_arguments, global_arguments_logits)
         global_best_logit = tf.ragged.map_flat_values(tf.reduce_max, global_logits, axis=-1)  # [batch, None(args)]
@@ -872,6 +917,38 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
         norm = -tf.math.log(local_arguments_logits_norm + global_arguments_logits_norm)
         return local_arguments_logits + norm, global_arguments_logits + norm
 
+    def convert_logits_to_ragged(self, pair) -> tf.RaggedTensor:
+        # logits: [batch_size, max(args), context]
+        #   - context is the full context (expanded to max size in case of local args)
+        # context_ids: [batch_size, None(context)]
+        #   - None(context) is the available context
+        # arg_cnt: [batch_size]
+        logits, context_ids, arg_cnts, label = pair
+        
+        # make arg dimension ragged in global_logits
+        # shape: [batch_size, None(args), context]
+        logits_ = tf.RaggedTensor.from_tensor(logits, lengths=tf.cast(arg_cnts, tf.int64))
+
+        # duplicate context list for every arg position
+        # shape: [batch_size, None(args), None(context)]
+        context_ids_ = logits_.with_values(
+            tf.gather(context_ids, logits_.value_rowids()).with_row_splits_dtype(tf.int64)
+        )
+
+        # make cxt dimension ragged
+        # shape: [batch_size, None(args), None(context)]
+        if label == "global":
+            # for global_logits, must select available args (in given order)
+            logits_ragged = tf.gather(logits_, context_ids_, batch_dims=2)
+        else:
+            # local logits are already in the correct order.  Just filter extra -inf values at the end of each row.
+            logits_ragged = context_ids_.with_values(
+                tf.RaggedTensor.from_tensor(logits_.values, lengths=context_ids_.values.row_lengths())
+            )
+
+        
+        return logits_ragged
+
     def create_train_model(self) -> tf.keras.Model:
         """
         Combines a GNN component with a tactic head and an arguments head to produce an end-to-end model for the
@@ -888,6 +965,7 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
 
         hidden_state_sequences = self._hidden_state_sequences(hidden_graph=hidden_graph,
                                                               tactic=scalar_proofstate_graph.context['tactic'])
+        arg_cnts = hidden_state_sequences.row_lengths()
         local_hidden_state_sequences = self.local_arguments_head(hidden_state_sequences)
         local_arguments_logits = self._local_arguments_logits(
             scalar_proofstate_graph,
@@ -903,9 +981,21 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
 
         normalized_local_arguments_logits, normalized_global_arguments_logits = self._normalize_logits(local_arguments_logits=local_arguments_logits, global_arguments_logits=global_arguments_logits)
 
-        local_arguments_logits_output = self.local_arguments_logits_output(normalized_local_arguments_logits)
-        global_arguments_logits_output = self.global_arguments_logits_output(normalized_global_arguments_logits)
+        # TODO(jrute): These are temporary conversions from non-ragged to ragged tensors.
+        new_local_arguments_logits = tf.keras.layers.Lambda(self.convert_logits_to_ragged)((
+            normalized_local_arguments_logits, 
+            scalar_proofstate_graph.context['local_context_ids'], 
+            arg_cnts,
+            "local"))
+        new_global_arguments_logits = tf.keras.layers.Lambda(self.convert_logits_to_ragged)((
+            normalized_global_arguments_logits, 
+            scalar_proofstate_graph.context['global_context_ids'], 
+            arg_cnts,
+            "global"))
 
+        local_arguments_logits_output = self.local_arguments_logits_output(new_local_arguments_logits)
+        global_arguments_logits_output = self.global_arguments_logits_output(new_global_arguments_logits)
+        
         return GlobalArgumentModel(inputs=proofstate_graph,
                                    outputs={self.TACTIC_LOGITS: tactic_logits,
                                             self.LOCAL_ARGUMENTS_LOGITS: local_arguments_logits_output,
@@ -986,23 +1076,9 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
     @staticmethod
     def create_input_output(graph_tensor: tfgnn.GraphTensor) -> Tuple[
         tfgnn.GraphTensor, Dict[str, Union[tf.Tensor, tf.RaggedTensor]]]:
-
-        global_args = graph_tensor.context['global_arguments']
-        available_global_context = graph_tensor.context['global_context_ids']
-        if tf.size(available_global_context) > 0:
-            global_args = tf.where(
-                global_args >= 0,
-                tf.gather(available_global_context, tf.maximum(global_args, 0), batch_dims=1),
-                tf.constant(-1, dtype = tf.int64),
-            )
-        else:
-            # if the available_global_context is empty, then global_args contains no references to the global context
-            # hence we can leave it the same
-            global_args = global_args
-
         outputs = {GlobalArgumentPrediction.TACTIC_LOGITS: graph_tensor.context['tactic'],
                    GlobalArgumentPrediction.LOCAL_ARGUMENTS_LOGITS: graph_tensor.context['local_arguments'],
-                   GlobalArgumentPrediction.GLOBAL_ARGUMENTS_LOGITS: global_args}
+                   GlobalArgumentPrediction.GLOBAL_ARGUMENTS_LOGITS: graph_tensor.context['global_arguments']}
         return graph_tensor, outputs
 
     def loss(self) -> Dict[str, tf.keras.losses.Loss]:
