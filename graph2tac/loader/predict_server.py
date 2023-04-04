@@ -464,12 +464,14 @@ def prediction_loop(predict_server: PredictServer, context: GlobalContextMessage
                 log_cnts.n_predict += 1
 
                 # important line -- sending prediction
+                predict_server.response_history.record_response(response)
                 prediction_requests.send(response)
 
             elif isinstance(msg, CheckAlignmentMessage):
                 logger.info("checkAlignment request")
                 response = predict_server.check_alignment(context)
                 logger.info("sending checkAlignment response to coq")
+                predict_server.response_history.record_response(response)
                 prediction_requests.send(response)
 
             elif isinstance(msg, GlobalContextMessage):
