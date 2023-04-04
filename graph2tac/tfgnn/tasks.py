@@ -42,6 +42,27 @@ def arguments_filter(y_true: tf.RaggedTensor, y_pred: tf.Tensor) -> Tuple[tf.Ten
     arguments_pred = tf.gather_nd(y_pred, positions)
     return arguments_true, arguments_pred
 
+@tf.function
+def ragged_logits(y_true: tf.RaggedTensor, y_pred: tf.Tensor) -> Tuple[tf.RaggedTensor]:
+    """
+    Extracts the logits for valid argument positions using the shape of y_true
+
+    @param y_true: the labels for the arguments, with shape [batch_size, 1, None(num_arguments)]
+    @param y_pred: the logits for the arguments, with shape [batch_size, max(num_arguments), context_size]
+    @return: a ragged tensor of logits, with shape [batch_size, None(num_arguments), context_size]
+    """
+    y_true = tf.squeeze(y_true, 1).with_row_splits_dtype(tf.int64) # [batch_size, None(num_arguments)]
+
+    if tf.shape(y_pred)[-1] == 0:
+        # no context
+        # return new tensor with a dummy context of 1
+        # shape: [batch_size, None(num_arguments), 1]
+        logits = tf.expand_dims(tf.math.log(tf.zeros_like(y_true, tf.float32)), axis=-1)
+    else:
+        #shape: [batch_size, None(num_arguments), context_size]
+        logits = tf.RaggedTensor.from_tensor(y_pred, lengths=y_true.row_lengths())
+    return logits
+
 
 @tf.function
 def _local_arguments_pred(y_true: tf.Tensor, y_pred: tf.Tensor) -> tf.Tensor:
@@ -115,7 +136,7 @@ class ArgumentSparseCategoricalCrossentropy(tf.keras.losses.Loss):
         arguments_tensor = tf.squeeze(y_true.to_tensor(default_value=-1), axis=1)
 
         # we want to compute only over the positions that are not None
-        nrows = y_true.shape[0]
+        nrows = tf.shape(y_true, out_type=tf.int64)[0]
         positions = tf.where(arguments_tensor != -1)
         row_ids = positions[:, 0]
 
@@ -243,34 +264,47 @@ class GlobalArgumentModel(tf.keras.Model):
     def compute_metrics(self, x, y, y_pred, sample_weight):
         metric_results = super().compute_metrics(x, y, y_pred, sample_weight)
 
+        # tactic accuracy
         tactic = y[LocalArgumentPrediction.TACTIC_LOGITS]
         tactic_logits = y_pred[LocalArgumentPrediction.TACTIC_LOGITS]
         tactic_accuracy = tf.keras.metrics.sparse_categorical_accuracy(tactic, tactic_logits)
 
-        local_arguments = y[GlobalArgumentPrediction.LOCAL_ARGUMENTS_LOGITS]
-        local_arguments_logits = y_pred[GlobalArgumentPrediction.LOCAL_ARGUMENTS_LOGITS]
-        local_arguments_best_logit = tf.reduce_max(local_arguments_logits, axis=-1)
-        local_arguments_pred = _local_arguments_pred(y_true=tf.squeeze(local_arguments.to_tensor(-1), axis=1),
-                                                     y_pred=local_arguments_logits)
+        # local arguments
+        local_arguments = y[GlobalArgumentPrediction.LOCAL_ARGUMENTS_LOGITS]  # [batch, None(args)]
+        local_arguments_logits = y_pred[GlobalArgumentPrediction.LOCAL_ARGUMENTS_LOGITS]  # [batch, max(args), context]
+        local_true = tf.squeeze(local_arguments, 1)  # [batch, None(args)]
+        local_logits = ragged_logits(local_arguments, local_arguments_logits)  # [batch, None(args), context]
+        local_best_logit = tf.ragged.map_flat_values(tf.reduce_max, local_logits, axis=-1)  # [batch, None(args)]
+        local_pred = tf.ragged.map_flat_values(tf.argmax, local_logits, axis=-1, output_type=tf.int64)  # [batch, None(args)]
+        
+        
+        # global arguments
+        global_arguments = y[GlobalArgumentPrediction.GLOBAL_ARGUMENTS_LOGITS]  # [batch, None(args)]
+        global_arguments_logits = y_pred[GlobalArgumentPrediction.GLOBAL_ARGUMENTS_LOGITS]  # [batch, max(args), context]
+        global_true = tf.squeeze(global_arguments, 1)  # [batch, None(args)]
+        global_logits = ragged_logits(global_arguments, global_arguments_logits)
+        global_best_logit = tf.ragged.map_flat_values(tf.reduce_max, global_logits, axis=-1)  # [batch, None(args)]
+        global_pred = tf.ragged.map_flat_values(tf.argmax, global_logits, axis=-1, output_type=tf.int64)  # [batch, None(args)]
 
-        global_arguments = y[GlobalArgumentPrediction.GLOBAL_ARGUMENTS_LOGITS]
-        global_arguments_logits = y_pred[GlobalArgumentPrediction.GLOBAL_ARGUMENTS_LOGITS]
-        global_arguments_best_logit = tf.reduce_max(global_arguments_logits, axis=-1)
-        global_arguments_pred = tf.argmax(global_arguments_logits, axis=-1)
+        # all arguments
+        # for ground truth, we can take which ever argument is higher since the other is -1
+        # for the ground true, local and global can both be -1 which means the true argument is None
+        arg_true_is_local = (local_true >= global_true)  # [batch, None(args)]
+        arg_true_ix = tf.where(local_true >= global_true, local_true, global_true)  # [batch, None(args)]
 
-        arguments_logits = tf.stack([local_arguments_best_logit, global_arguments_best_logit])
-        arguments_pred = tf.where(tf.argmax(arguments_logits) == 0, local_arguments_pred, global_arguments_pred)
+        arg_pred_is_local = (local_best_logit >= global_best_logit)  # [batch, None(args)]
+        arg_pred_ix = tf.where(local_best_logit >= global_best_logit, local_pred, global_pred)  # [batch, None(args)]
+        
+        # strict accuracies
+        # check that every argument in the sequence is correct
+        # if any are None (i.e. ground truth local and global is -1) then it is marked as incorrect (since model can't produce None by design)
+        seq_arg_accuracy_is_local =  tf.reduce_all(tf.equal(arg_true_is_local.with_row_splits_dtype(tf.int64), arg_pred_is_local), axis=-1)  # [batch]
+        seq_arg_accuracy_ix =  tf.reduce_all(tf.equal(arg_true_ix.with_row_splits_dtype(tf.int64), arg_pred_ix), axis=-1)  # [batch]
+        seq_arg_accuracy = tf.cast(seq_arg_accuracy_is_local & seq_arg_accuracy_ix, dtype=tf.float32)  # [batch]
+        strict_accuracy = tactic_accuracy * seq_arg_accuracy  # [batch]
 
-        arguments_true = tf.reduce_max(tf.stack([local_arguments, global_arguments], axis=-1), axis=-1)
-        arguments_true = tf.squeeze(arguments_true.to_tensor(default_value=0), axis=1)
-
-        arguments_seq_accuracy = tf.cast(tf.reduce_all(arguments_pred == arguments_true, axis=-1), tf.float32)
-        arguments_seq_mask = tf.cast(tf.reduce_min(arguments_true, axis=-1) > -1, dtype=tf.float32)
-
-        self.arguments_seq_accuracy.update_state(arguments_seq_mask * arguments_seq_accuracy,
-                                                 sample_weight=sample_weight)
-        self.strict_accuracy.update_state(arguments_seq_mask * arguments_seq_accuracy * tactic_accuracy,
-                                          sample_weight=sample_weight)
+        self.arguments_seq_accuracy.update_state(seq_arg_accuracy, sample_weight=sample_weight)
+        self.strict_accuracy.update_state(strict_accuracy, sample_weight=sample_weight)
 
         metric_results[GlobalArgumentPrediction.ARGUMENTS_SEQ_ACCURACY] = self.arguments_seq_accuracy.result()
         metric_results[GlobalArgumentPrediction.STRICT_ACCURACY] = self.strict_accuracy.result()
