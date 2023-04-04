@@ -64,6 +64,18 @@ def ragged_logits(y_true: tf.RaggedTensor, y_pred: tf.Tensor) -> Tuple[tf.Ragged
         logits = tf.RaggedTensor.from_tensor(y_pred, lengths=y_true.row_lengths())
     return logits
 
+def convert_ragged_logits_to_dense(logits: tf.RaggedTensor) -> tf.Tensor:
+    # logits shape: [batch, None(args), None(context)]
+
+    # expand context (replacing unused context element logits with -inf)
+    # shape: [batch, None(args), max(context)]
+    logits = logits.with_values(logits.values.to_tensor(default_value=-np.inf))
+
+    # expand args (replacing unused arg position logits with 0.0)
+    # shape: [batch, max(args), max(context)]
+    logits = logits.to_tensor(default_value=0.0)
+
+    return logits
 
 @tf.function
 def _local_arguments_pred(y_true: tf.Tensor, y_pred: tf.Tensor) -> tf.Tensor:
@@ -616,6 +628,32 @@ class TacticPrediction(PredictionTask):
         return {TacticPrediction.TACTIC_LOGITS: [tf.keras.metrics.SparseCategoricalAccuracy(name="accuracy")]}
 
 
+class QueryKeyMul(tf.keras.layers.Layer):
+    def __init__(
+        self,
+        name="query_key_mul",
+        **kwargs
+    ):
+        super().__init__(name=name, **kwargs)
+
+    def call(
+        self, 
+        queries: tf.RaggedTensor, # [batch, None(args), hdim]
+        keys: tf.RaggedTensor, # [batch, None(context), hdim]
+        training=False
+    ) -> tf.RaggedTensor: # [batch, None(args), None(context)]
+        @tf.function
+        def linear_op(qk):
+            x = tf.einsum("ij, kj -> ik", qk[0], qk[1])
+            x = tf.RaggedTensor.from_tensor(x)
+            return x
+        return tf.map_fn(
+            linear_op,
+            elems=[queries, keys],
+            fn_output_signature=tf.RaggedTensorSpec(shape=[None, None])
+        )
+
+
 class LocalArgumentPrediction(TacticPrediction):
     """
     Wrapper for the base tactic plus local argument prediction tasks.
@@ -669,10 +707,10 @@ class LocalArgumentPrediction(TacticPrediction):
         return config
 
     @staticmethod
-    def _local_arguments_logits(scalar_proofstate_graph: tfgnn.GraphTensor,
-                                hidden_graph: tfgnn.GraphTensor,
-                                hidden_state_sequences: tf.Tensor
-                                ) -> tf.Tensor:
+    def _local_context_hidden(
+        scalar_proofstate_graph: tfgnn.GraphTensor,
+        hidden_graph: tfgnn.GraphTensor,
+    ) -> tf.RaggedTensor:  # [batch_size, None(local_context), hidden_size]
         """
         Computes logits for local arguments from the hidden states and the local context node ids.
         """
@@ -690,23 +728,8 @@ class LocalArgumentPrediction(TacticPrediction):
 
         # the hidden states for the nodes in the local context
         # [ batch_size, None(num_context_nodes), hidden_size ]
-        context_node_hidden_states = tf.gather(hidden_graph.node_sets['node']['hidden_state'],
+        return tf.gather(hidden_graph.node_sets['node']['hidden_state'],
                                                local_context_ids).with_row_splits_dtype(tf.int64)
-
-        # the logits for each local context node to be each local argument
-        # [ batch_size, max(num_arguments), max(num_context_nodes) ]
-        arguments_logits = tf.matmul(hidden_state_sequences,
-                                     context_node_hidden_states.to_tensor(),
-                                     transpose_b=True)
-
-        # a mask for the local context nodes that actually exist
-        # [ batch_size,  max(num_context_nodes) ]
-        context_mask = tf.cast(tf.zeros_like(scalar_proofstate_graph.context['local_context_ids']),
-                               dtype=tf.float32).to_tensor(-float('inf'))
-
-        # the masked logits
-        # [ batch_size, max(num_arguments), max(num_context_nodes) ]
-        return arguments_logits + tf.expand_dims(context_mask, axis=1)
 
     def _hidden_state_sequences(self, hidden_graph: tfgnn.GraphTensor, tactic: tf.Tensor) -> tf.RaggedTensor:
         num_arguments = tf.gather(tf.constant(self._graph_constants.tactic_index_to_numargs, dtype=tf.int64), tactic)
@@ -966,14 +989,21 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
         hidden_state_sequences = self._hidden_state_sequences(hidden_graph=hidden_graph,
                                                               tactic=scalar_proofstate_graph.context['tactic'])
         arg_cnts = hidden_state_sequences.row_lengths()
+        # [batch, None(args), hdim]
         local_hidden_state_sequences = self.local_arguments_head(hidden_state_sequences)
-        local_arguments_logits = self._local_arguments_logits(
+        # [batch, None(context), hdim]
+        local_context_hidden = self._local_context_hidden(
             scalar_proofstate_graph,
             hidden_graph,
-            local_hidden_state_sequences.to_tensor()
         )
+        # [batch_size, None(args), None(context)]
+        local_arguments_logits = QueryKeyMul()(local_hidden_state_sequences, local_context_hidden)
+        # [batch, max(args), max(context)]
+        local_arguments_logits = convert_ragged_logits_to_dense(local_arguments_logits)
         
+        # [batch, None(args), hdim]
         global_hidden_state_sequences = self.global_arguments_head(hidden_state_sequences)
+        # [batch, max(args), context]
         global_arguments_logits = self.global_arguments_logits(global_hidden_state_sequences.to_tensor())  # noqa
         if self._dynamic_global_context:
             global_arguments_logits_mask = self._global_arguments_logits_mask(scalar_proofstate_graph=scalar_proofstate_graph, global_context_size=len(self._graph_constants.global_context))
@@ -1046,13 +1076,21 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
         hidden_graph = repeat_scalar_graph(hidden_graph)  # noqa [ PyCallingNonCallable ]
 
         hidden_state_sequences = self._hidden_state_sequences(hidden_graph=hidden_graph, tactic=tactic)
+        # [batch, None(args), hdim]
         local_hidden_state_sequences = self.local_arguments_head(hidden_state_sequences)
-        local_arguments_logits = self._local_arguments_logits(
+        # [batch, None(context), hdim]
+        local_context_hidden = self._local_context_hidden(
             scalar_proofstate_graph,
             hidden_graph,
-            local_hidden_state_sequences.to_tensor()
         )
+        # [batch_size, None(args), None(context)]
+        local_arguments_logits = QueryKeyMul()(local_hidden_state_sequences, local_context_hidden)
+        # [batch, max(args), max(context)]
+        local_arguments_logits = convert_ragged_logits_to_dense(local_arguments_logits)
+        
+        # [batch, None(args), hdim]
         global_hidden_state_sequences = self.global_arguments_head(hidden_state_sequences)
+        # [batch, max(args), context]
         global_arguments_logits = self.global_arguments_logits(global_hidden_state_sequences.to_tensor())  # noqa
 
         normalized_local_arguments_logits, normalized_global_arguments_logits = self._normalize_logits(
