@@ -289,11 +289,18 @@ class GlobalArgumentModel(tf.keras.Model):
         # all arguments
         # for ground truth, we can take which ever argument is higher since the other is -1
         # for the ground true, local and global can both be -1 which means the true argument is None
-        arg_true = tf.where(local_true >= global_true, local_true, global_true)  # [batch, None(args)]
-        arg_pred = tf.where(local_best_logit >= global_best_logit, local_pred, global_pred)  # [batch, None(args)]
+        arg_true_is_local = (local_true >= global_true)  # [batch, None(args)]
+        arg_true_ix = tf.where(local_true >= global_true, local_true, global_true)  # [batch, None(args)]
+
+        arg_pred_is_local = (local_best_logit >= global_best_logit)  # [batch, None(args)]
+        arg_pred_ix = tf.where(local_best_logit >= global_best_logit, local_pred, global_pred)  # [batch, None(args)]
         
         # strict accuracies
-        seq_arg_accuracy =  tf.cast(tf.reduce_all(tf.equal(arg_true.with_row_splits_dtype(tf.int64), arg_pred), axis=-1), tf.float32)  # [batch]
+        # check that every argument in the sequence is correct
+        # if any are None (i.e. ground truth local and global is -1) then it is marked as incorrect (since model can't produce None by design)
+        seq_arg_accuracy_is_local =  tf.reduce_all(tf.equal(arg_true_is_local.with_row_splits_dtype(tf.int64), arg_pred_is_local), axis=-1)  # [batch]
+        seq_arg_accuracy_ix =  tf.reduce_all(tf.equal(arg_true_ix.with_row_splits_dtype(tf.int64), arg_pred_ix), axis=-1)  # [batch]
+        seq_arg_accuracy = tf.cast(seq_arg_accuracy_is_local & seq_arg_accuracy_ix, dtype=tf.float32)  # [batch]
         strict_accuracy = tactic_accuracy * seq_arg_accuracy  # [batch]
 
         self.arguments_seq_accuracy.update_state(seq_arg_accuracy, sample_weight=sample_weight)
