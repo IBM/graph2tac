@@ -408,7 +408,7 @@ class TFGNNPredict(Predict):
             predictions = self._expand_arguments_logits(total_expand_bound=total_expand_bound,
                                                         num_arguments=num_arguments,
                                                         local_context_size=len(state.context.local_context),
-                                                        global_context_size=len(self.graph_constants.global_context),
+                                                        global_context_size=len(state.context.global_context),
                                                         **inference_data)
             predict_output.predictions.extend(filter(lambda inference: inference.value > -float('inf'), predictions))
 
