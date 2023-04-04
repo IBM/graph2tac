@@ -190,6 +190,7 @@ class DynamicDataServer(AbstractDataServer):
         self._node_i_to_name = graph_constants.label_to_names
         self._node_i_to_ident = graph_constants.label_to_ident
         self._node_i_in_spine = graph_constants.label_in_spine
+        self._train_num_nodes = len(self._node_i_to_name)
         self._last_num_nodes = None
         self._context_stack = []
 
@@ -231,8 +232,8 @@ class DynamicDataServer(AbstractDataServer):
         global_defs = np.array(global_defs, dtype = np.int32)
         self.global_defs = global_defs
 
-    def is_new_definition(self, node):
-        return self._def_node_to_i[node] >= self._last_num_nodes
+    def is_trained_definition(self, node):
+        return self._def_node_to_i[node] >= self._train_num_nodes
 
     def pop(self):
         del self._node_i_to_name[self._last_num_nodes:]
@@ -315,7 +316,7 @@ class PredictServer:
         elif self.config.update == "new":
             def_clusters_for_update = [
                 cluster for cluster in definitions.clustered_definitions()
-                if self.data_server.is_new_definition(cluster[0].node)
+                if not self.data_server.is_trained_definition(cluster[0].node)
             ]
             prev_defined_nodes = self.data_server._last_num_nodes
             logger.info(f"Prepared for update {len(def_clusters_for_update)} definition clusters containing unaligned definitions")
