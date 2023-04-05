@@ -232,7 +232,7 @@ class DynamicDataServer(AbstractDataServer):
         global_defs = np.array(global_defs, dtype = np.int32)
         self.global_defs = global_defs
 
-    def is_trained_definition(self, node):
+    def is_untrained_definition(self, node):
         return self._def_node_to_i[node] >= self._train_num_nodes
 
     def pop(self):
@@ -316,7 +316,7 @@ class PredictServer:
         elif self.config.update == "new":
             def_clusters_for_update = [
                 cluster for cluster in definitions.clustered_definitions()
-                if not self.data_server.is_trained_definition(cluster[0].node)
+                if self.data_server.is_untrained_definition(cluster[0].node)
             ]
             prev_defined_nodes = self.data_server._last_num_nodes
             logger.info(f"Prepared for update {len(def_clusters_for_update)} definition clusters containing unaligned definitions")
@@ -369,12 +369,6 @@ class PredictServer:
 
         self.current_allowed_tactics = self.allowed_tactics_stack.pop()
         self.data_server.pop()
-        if self.data_server.global_defs is not None:
-            if len(self.data_server.global_defs) > 0:
-                static_global_context = np.arange(max(self.data_server.global_defs)+1, dtype=np.uint32)
-            else:
-                static_global_context = np.arange(1, dtype=np.uint32)
-            self.model.initialize(static_global_context)
 
     @contextmanager
     def coq_context(self, msg: GlobalContextMessage):
