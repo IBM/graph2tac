@@ -628,6 +628,24 @@ class TacticPrediction(PredictionTask):
         return {TacticPrediction.TACTIC_LOGITS: [tf.keras.metrics.SparseCategoricalAccuracy(name="accuracy")]}
 
 
+class GlobalEmbeddings(tf.keras.layers.Layer):
+    def __init__(
+        self,
+        global_embeddings_layer,
+        name="global_embeddings",
+        **kwargs
+    ):
+        super().__init__(name=name, **kwargs)
+        self.global_embeddings_layer = global_embeddings_layer
+
+    def call(
+        self, 
+        dummy: tf.Tensor,
+        training=False
+    ) -> tf.Tensor: # [batch, context]
+        return self.global_embeddings_layer.get_keys_embeddings()
+
+
 class QueryKeyMul(tf.keras.layers.Layer):
     def __init__(
         self,
@@ -687,6 +705,44 @@ class QueryKeyMul(tf.keras.layers.Layer):
             return self._mul_ragged_to_dense_to_ragged(queries, keys)
         else:
             raise Exception(f"Unsupported multiplication method: {self.method}")
+
+class QueryKeyMulGlobal(tf.keras.layers.Layer):
+    def __init__(
+        self,
+        name="query_key_mul_global",
+        cosine_similarity: bool = True,
+        **kwargs
+    ):
+        super().__init__(name=name, **kwargs)
+        self._cosine_similarity = cosine_similarity
+        if self._cosine_similarity:
+            # since cosine similarity is between -1.0 and 1.0
+            # we add a learned temperature parameter
+            # so logits can be in a wider or narrower range -1/temp to 1/temp
+            self._temp = tf.Variable(initial_value=1.0, trainable=True)
+
+    def call(
+        self, 
+        queries: tf.RaggedTensor, # [batch, None(args), hdim]
+        keys: tf.RaggedTensor, # [batch, context, hdim]
+        training=False
+    ) -> tf.Tensor: # [batch, max(args), context]
+        queries = queries.to_tensor()
+        
+        if self._cosine_similarity:
+            # normalize embeddings before taking inner product
+            keys = keys / tf.norm(keys, axis=-1, keepdims=True)
+            # some hidden states will be constant zero.
+            # those are not used for the loss, but NaN leads to bugs
+            queries_norm = tf.norm(queries, axis=-1, keepdims=True)
+            queries = tf.math.divide_no_nan(queries, queries_norm)
+            
+        logits = tf.matmul(a=queries, b=keys, transpose_b=True)
+
+        if self._cosine_similarity:
+            logits = logits / self._temp
+        
+        return logits
 
 
 class LocalArgumentPrediction(TacticPrediction):
@@ -917,6 +973,8 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
             valid_indices=tf.constant(self._graph_constants.global_context, dtype=tf.int32),
             cosine_similarity=self._global_cosine_similarity
         )
+        self.global_embeddings = GlobalEmbeddings(self.global_arguments_logits)
+        self.global_logits = QueryKeyMulGlobal()
 
         # we use trivial lambda layers to appropriately rename outputs
         self.local_arguments_logits_output = tf.keras.layers.Lambda(lambda x: x, name=self.LOCAL_ARGUMENTS_LOGITS)
@@ -1038,8 +1096,10 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
         
         # [batch, None(args), hdim]
         global_hidden_state_sequences = self.global_arguments_head(hidden_state_sequences)
+        # [batch, context, hdim]
+        global_embeddings = self.global_embeddings(scalar_proofstate_graph)
         # [batch, max(args), context]
-        global_arguments_logits = self.global_arguments_logits(global_hidden_state_sequences.to_tensor())  # noqa
+        global_arguments_logits = self.global_logits(queries=global_hidden_state_sequences, keys=global_embeddings)
         if self._dynamic_global_context:
             global_arguments_logits_mask = self._global_arguments_logits_mask(scalar_proofstate_graph=scalar_proofstate_graph, global_context_size=len(self._graph_constants.global_context))
             global_arguments_logits += tf.expand_dims(global_arguments_logits_mask, axis=1)
@@ -1125,8 +1185,10 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
         
         # [batch, None(args), hdim]
         global_hidden_state_sequences = self.global_arguments_head(hidden_state_sequences)
+        # [batch, context, hdim]
+        global_embeddings = self.global_embeddings(scalar_proofstate_graph)
         # [batch, max(args), context]
-        global_arguments_logits = self.global_arguments_logits(global_hidden_state_sequences.to_tensor())  # noqa
+        global_arguments_logits = self.global_logits(queries=global_hidden_state_sequences, keys=global_embeddings)
 
         normalized_local_arguments_logits, normalized_global_arguments_logits = self._normalize_logits(
             local_arguments_logits=local_arguments_logits,

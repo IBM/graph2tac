@@ -82,6 +82,9 @@ class LogitsFromEmbeddings(tf.keras.layers.Layer):
         self._embedding_matrix = embedding_matrix
         self._valid_indices = valid_indices
 
+    def get_keys_embeddings(self):
+        return tf.gather(self._embedding_matrix, self._valid_indices)
+
     def call(self, hidden_state, training=False):
         emb_matrix = self._embedding_matrix
 
