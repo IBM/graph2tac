@@ -640,10 +640,18 @@ class GlobalEmbeddings(tf.keras.layers.Layer):
 
     def call(
         self, 
-        dummy: tf.Tensor,
+        global_context: tf.RaggedTensor,
         training=False
-    ) -> tf.Tensor: # [batch, context]
-        return self.global_embeddings_layer.get_keys_embeddings()
+    ) -> tf.Tensor: # [batch, None(context), hdim]
+        # [valid_context, hdim]
+        all_embeddings = self.global_embeddings_layer.get_keys_embeddings()
+        # repeat the global context for each batch
+        # [batch, valid_context, hdim]
+        batch_size = tf.shape(global_context)[0]
+        global_embeddings = tf.tile(tf.expand_dims(all_embeddings, axis=0), multiples=[batch_size, 1, 1])
+        # [batch, None(context), hdim]
+        return tf.RaggedTensor.from_tensor(global_embeddings, ragged_rank=1)
+
 
 
 class QueryKeyMul(tf.keras.layers.Layer):
@@ -720,24 +728,27 @@ class QueryKeyMulGlobal(tf.keras.layers.Layer):
             # we add a learned temperature parameter
             # so logits can be in a wider or narrower range -1/temp to 1/temp
             self._temp = tf.Variable(initial_value=1.0, trainable=True)
+        self.query_key_mul = QueryKeyMul()
+
+    def normalize_tensor(self, x: tf.Tensor) ->  tf.Tensor:
+        x_norm = tf.norm(x, axis=-1, keepdims=True)
+        return tf.math.divide_no_nan(x, x_norm)
+
+    def normalize_ragged(self, rt: tf.RaggedTensor) -> tf.RaggedTensor:
+        return tf.ragged.map_flat_values(self.normalize_tensor, rt)
 
     def call(
         self, 
         queries: tf.RaggedTensor, # [batch, None(args), hdim]
         keys: tf.RaggedTensor, # [batch, context, hdim]
         training=False
-    ) -> tf.Tensor: # [batch, max(args), context]
-        queries = queries.to_tensor()
-        
+    ) -> tf.Tensor: # [batch, max(args), context]        
         if self._cosine_similarity:
             # normalize embeddings before taking inner product
-            keys = keys / tf.norm(keys, axis=-1, keepdims=True)
-            # some hidden states will be constant zero.
-            # those are not used for the loss, but NaN leads to bugs
-            queries_norm = tf.norm(queries, axis=-1, keepdims=True)
-            queries = tf.math.divide_no_nan(queries, queries_norm)
+            keys = self.normalize_ragged(keys)
+            queries = self.normalize_ragged(queries)
             
-        logits = tf.matmul(a=queries, b=keys, transpose_b=True)
+        logits = self.query_key_mul(queries, keys)
 
         if self._cosine_similarity:
             logits = logits / self._temp
@@ -1097,9 +1108,11 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
         # [batch, None(args), hdim]
         global_hidden_state_sequences = self.global_arguments_head(hidden_state_sequences)
         # [batch, context, hdim]
-        global_embeddings = self.global_embeddings(scalar_proofstate_graph)
-        # [batch, max(args), context]
+        global_embeddings = self.global_embeddings(scalar_proofstate_graph.context['global_context_ids'])
+        # [batch, None(args), None(context)]
         global_arguments_logits = self.global_logits(queries=global_hidden_state_sequences, keys=global_embeddings)
+        # [batch, max(args), max(context)]
+        global_arguments_logits = convert_ragged_logits_to_dense(global_arguments_logits)
         if self._dynamic_global_context:
             global_arguments_logits_mask = self._global_arguments_logits_mask(scalar_proofstate_graph=scalar_proofstate_graph, global_context_size=len(self._graph_constants.global_context))
             global_arguments_logits += tf.expand_dims(global_arguments_logits_mask, axis=1)
@@ -1186,9 +1199,11 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
         # [batch, None(args), hdim]
         global_hidden_state_sequences = self.global_arguments_head(hidden_state_sequences)
         # [batch, context, hdim]
-        global_embeddings = self.global_embeddings(scalar_proofstate_graph)
-        # [batch, max(args), context]
+        global_embeddings = self.global_embeddings(scalar_proofstate_graph.context['global_context_ids'])
+        # [batch, None(args), None(context)]
         global_arguments_logits = self.global_logits(queries=global_hidden_state_sequences, keys=global_embeddings)
+        # [batch, max(args), max(context)]
+        global_arguments_logits = convert_ragged_logits_to_dense(global_arguments_logits)
 
         normalized_local_arguments_logits, normalized_global_arguments_logits = self._normalize_logits(
             local_arguments_logits=local_arguments_logits,
