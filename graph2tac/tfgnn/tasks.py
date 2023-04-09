@@ -730,12 +730,12 @@ class QueryKeyMulGlobal(tf.keras.layers.Layer):
             self._temp = tf.Variable(initial_value=1.0, trainable=True)
         self.query_key_mul = QueryKeyMul()
 
-    def normalize_tensor(self, x: tf.Tensor) ->  tf.Tensor:
+    def unit_normalize_tensor(self, x: tf.Tensor) ->  tf.Tensor:
         x_norm = tf.norm(x, axis=-1, keepdims=True)
         return tf.math.divide_no_nan(x, x_norm)
 
-    def normalize_ragged(self, rt: tf.RaggedTensor) -> tf.RaggedTensor:
-        return tf.ragged.map_flat_values(self.normalize_tensor, rt)
+    def unit_normalize_ragged(self, rt: tf.RaggedTensor) -> tf.RaggedTensor:
+        return tf.ragged.map_flat_values(self.unit_normalize_tensor, rt)
 
     def call(
         self, 
@@ -745,8 +745,8 @@ class QueryKeyMulGlobal(tf.keras.layers.Layer):
     ) -> tf.Tensor: # [batch, max(args), context]        
         if self._cosine_similarity:
             # normalize embeddings before taking inner product
-            keys = self.normalize_ragged(keys)
-            queries = self.normalize_ragged(queries)
+            keys = self.unit_normalize_ragged(keys)
+            queries = self.unit_normalize_ragged(queries)
             
         logits = self.query_key_mul(queries, keys)
 
@@ -1043,6 +1043,7 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
         global_arguments_logits_norm = tf.reduce_sum(tf.exp(global_arguments_logits), axis=-1, keepdims=True)
         norm = -tf.math.log(local_arguments_logits_norm + global_arguments_logits_norm)
         return local_arguments_logits + norm, global_arguments_logits + norm
+
 
     def convert_logits_to_ragged(self, pair) -> tf.RaggedTensor:
         # logits: [batch_size, max(args), context]
