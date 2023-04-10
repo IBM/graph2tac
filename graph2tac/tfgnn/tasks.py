@@ -630,27 +630,38 @@ class TacticPrediction(PredictionTask):
 class GlobalEmbeddings(tf.keras.layers.Layer):
     def __init__(
         self,
-        global_embeddings_layer,
+        global_embeddings_layer: LogitsFromEmbeddings,
+        dynamic_global_context: bool,
         name="global_embeddings",
         **kwargs
     ):
         super().__init__(name=name, **kwargs)
         self.global_embeddings_layer = global_embeddings_layer
+        self.dynamic_global_context = dynamic_global_context
 
     def call(
         self, 
-        global_context: tf.RaggedTensor,
+        global_context: tf.RaggedTensor,  # [batch, None(context)]
+        inference: bool = False,
         training=False
     ) -> tf.Tensor: # [batch, None(context), hdim]
         # [valid_context, hdim]
         all_embeddings = self.global_embeddings_layer.get_keys_embeddings()
-        # repeat the global context for each batch
-        # [batch, valid_context, hdim]
-        batch_size = tf.shape(global_context)[0]
-        global_embeddings = tf.tile(tf.expand_dims(all_embeddings, axis=0), multiples=[batch_size, 1, 1])
-        # [batch, None(context), hdim]
-        return tf.RaggedTensor.from_tensor(global_embeddings, ragged_rank=1)
 
+        # note: inference model always uses dynamic global context
+        if self.dynamic_global_context or inference:
+            # select the global context for each batch
+            # [batch, None(context), hdim]
+            return tf.gather(all_embeddings, global_context)
+        else:
+            # currently this would mess up later indexing
+            raise NotImplementedError("dynamical_global_context must be set to true")
+            # repeat all the embeddings for each batch element
+            # [batch, valid_context, hdim]
+            batch_size = tf.shape(global_context)[0]
+            global_embeddings = tf.tile(tf.expand_dims(all_embeddings, axis=0), multiples=[batch_size, 1, 1])
+            # [batch, None(context), hdim]
+            return tf.RaggedTensor.from_tensor(global_embeddings, ragged_rank=1)
 
 
 class QueryKeyMul(tf.keras.layers.Layer):
@@ -845,11 +856,6 @@ class LocalArgumentPrediction(TacticPrediction):
         num_logits = tf.shape(logits)[2]
         return tf.reshape(logits, shape=(tactic_expand_bound, -1, num_arguments, num_logits))
 
-    @classmethod
-    def _reshape_global_inference_logits(cls, logits: tf.Tensor, tactic_expand_bound: int, dyn_global_context: tf.RaggedTensor) -> tf.Tensor:
-        global_logits = cls._reshape_inference_logits(logits, tactic_expand_bound)
-        return tf.gather(global_logits, dyn_global_context[0], axis=3)
-
     def create_train_model(self) -> tf.keras.Model:
         """
         Combines a GNN component with a tactic head and an arguments head to produce an end-to-end model for the
@@ -985,7 +991,10 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
             embedding_matrix=self.graph_embedding.get_node_embeddings(),
             cosine_similarity=self._global_cosine_similarity
         )
-        self.global_embeddings = GlobalEmbeddings(self.global_arguments_logits)
+        self.global_embeddings = GlobalEmbeddings(
+            global_embeddings_layer=self.global_arguments_logits,
+            dynamic_global_context=self._dynamic_global_context
+        )
         self.global_logits = QueryKeyMulGlobal(
             cosine_similarity=self._global_cosine_similarity,
             temp=self.global_arguments_logits._temp if self._global_cosine_similarity else None
@@ -1093,38 +1102,6 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
 
         return local_logits, global_logits
 
-    def convert_logits_to_ragged(self, pair) -> tf.RaggedTensor:
-        # logits: [batch_size, max(args), context]
-        #   - context is the full context (expanded to max size in case of local args)
-        # context_ids: [batch_size, None(context)]
-        #   - None(context) is the available context
-        # arg_cnt: [batch_size]
-        logits, context_ids, arg_cnts, label = pair
-        
-        # make arg dimension ragged in global_logits
-        # shape: [batch_size, None(args), context]
-        logits_ = tf.RaggedTensor.from_tensor(logits, lengths=tf.cast(arg_cnts, tf.int64))
-
-        # duplicate context list for every arg position
-        # shape: [batch_size, None(args), None(context)]
-        context_ids_ = logits_.with_values(
-            tf.gather(context_ids, logits_.value_rowids()).with_row_splits_dtype(tf.int64)
-        )
-
-        # make cxt dimension ragged
-        # shape: [batch_size, None(args), None(context)]
-        if label == "global":
-            # for global_logits, must select available args (in given order)
-            logits_ragged = tf.gather(logits_, context_ids_, batch_dims=2)
-        else:
-            # local logits are already in the correct order.  Just filter extra -inf values at the end of each row.
-            logits_ragged = context_ids_.with_values(
-                tf.RaggedTensor.from_tensor(logits_.values, lengths=context_ids_.values.row_lengths())
-            )
-
-        
-        return logits_ragged
-
     def create_train_model(self) -> tf.keras.Model:
         """
         Combines a GNN component with a tactic head and an arguments head to produce an end-to-end model for the
@@ -1141,7 +1118,6 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
 
         hidden_state_sequences = self._hidden_state_sequences(hidden_graph=hidden_graph,
                                                               tactic=scalar_proofstate_graph.context['tactic'])
-        arg_cnts = hidden_state_sequences.row_lengths()
         # [batch, None(args), hdim]
         local_hidden_state_sequences = self.local_arguments_head(hidden_state_sequences)
         # [batch, None(context), hdim]
@@ -1158,22 +1134,7 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
         global_embeddings = self.global_embeddings(scalar_proofstate_graph.context['global_context_ids'])
         # [batch, None(args), None(context)]
         global_arguments_logits = self.global_logits(queries=global_hidden_state_sequences, keys=global_embeddings)
-        # [batch, max(args), max(context)]
-        max_context = tf.reduce_max(scalar_proofstate_graph.context['global_context_ids'].row_lengths())
-        global_arguments_logits = convert_ragged_logits_to_dense(global_arguments_logits, context_size=len(self._graph_constants.global_context))
-        if self._dynamic_global_context:
-            global_arguments_logits_mask = self._global_arguments_logits_mask(scalar_proofstate_graph=scalar_proofstate_graph, global_context_size=len(self._graph_constants.global_context))
-            _, global_arguments_logits_mask = tf.keras.backend.print_tensor((tf.shape(global_arguments_logits_mask), global_arguments_logits_mask), message="global_arguments_logits_mask")
-            _, global_arguments_logits = tf.keras.backend.print_tensor((tf.shape(global_arguments_logits), global_arguments_logits), message="global_arguments_logits")
-            global_arguments_logits += tf.expand_dims(global_arguments_logits_mask, axis=1)
-
-        # TODO(jrute): These are temporary conversions from non-ragged to ragged tensors.
-        global_arguments_logits = tf.keras.layers.Lambda(self.convert_logits_to_ragged)((
-            global_arguments_logits, 
-            scalar_proofstate_graph.context['global_context_ids'], 
-            arg_cnts,
-            "global"))
-
+        
         normalized_local_arguments_logits, normalized_global_arguments_logits = self._log_softmax_logits(local_arguments_logits=local_arguments_logits, global_arguments_logits=global_arguments_logits)
 
         local_arguments_logits_output = self.local_arguments_logits_output(normalized_local_arguments_logits)
@@ -1242,7 +1203,10 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
         # [batch, None(args), hdim]
         global_hidden_state_sequences = self.global_arguments_head(hidden_state_sequences)
         # [batch, context, hdim]
-        global_embeddings = self.global_embeddings(scalar_proofstate_graph.context['global_context_ids'])
+        global_embeddings = self.global_embeddings(
+            scalar_proofstate_graph.context['global_context_ids'],
+            inference=True
+        )
         # [batch, None(args), None(context)]
         global_arguments_logits = self.global_logits(queries=global_hidden_state_sequences, keys=global_embeddings)
         
@@ -1260,10 +1224,8 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
         normalized_local_arguments_logits = self._reshape_inference_logits(logits=normalized_local_arguments_logits,
                                                                            tactic_expand_bound=tactic_expand_bound)
         # [tactic_expand_bound, batch, max(args), dynamic_global_context]
-        normalized_global_arguments_logits = self._reshape_global_inference_logits(
-            logits=normalized_global_arguments_logits,
-            tactic_expand_bound=tactic_expand_bound,
-            dyn_global_context=scalar_proofstate_graph.context['global_context_ids'])
+        normalized_global_arguments_logits = self._reshape_inference_logits(logits=normalized_global_arguments_logits,
+                                                                           tactic_expand_bound=tactic_expand_bound)
 
         return tf.keras.Model(inputs={self.PROOFSTATE_GRAPH: proofstate_graph, self.TACTIC_MASK: tactic_mask},
                               outputs={self.TACTIC: tf.transpose(top_k_indices),
