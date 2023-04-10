@@ -64,12 +64,12 @@ def ragged_logits(y_true: tf.RaggedTensor, y_pred: tf.Tensor) -> Tuple[tf.Ragged
         logits = tf.RaggedTensor.from_tensor(y_pred, lengths=y_true.row_lengths())
     return logits
 
-def convert_ragged_logits_to_dense(logits: tf.RaggedTensor) -> tf.Tensor:
+def convert_ragged_logits_to_dense(logits: tf.RaggedTensor, context_size=None) -> tf.Tensor:
     # logits shape: [batch, None(args), None(context)]
 
     # expand context (replacing unused context element logits with -inf)
     # shape: [batch, None(args), max(context)]
-    logits = logits.with_values(logits.values.to_tensor(default_value=-np.inf))
+    logits = logits.with_values(logits.values.to_tensor(default_value=-np.inf, shape=[None, context_size]))
 
     # expand args (replacing unused arg position logits with 0.0)
     # shape: [batch, max(args), max(context)]
@@ -1116,9 +1116,12 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
         # [batch, None(args), None(context)]
         global_arguments_logits = self.global_logits(queries=global_hidden_state_sequences, keys=global_embeddings)
         # [batch, max(args), max(context)]
-        global_arguments_logits = convert_ragged_logits_to_dense(global_arguments_logits)
+        max_context = tf.reduce_max(scalar_proofstate_graph.context['global_context_ids'].row_lengths())
+        global_arguments_logits = convert_ragged_logits_to_dense(global_arguments_logits, context_size=len(self._graph_constants.global_context))
         if self._dynamic_global_context:
             global_arguments_logits_mask = self._global_arguments_logits_mask(scalar_proofstate_graph=scalar_proofstate_graph, global_context_size=len(self._graph_constants.global_context))
+            _, global_arguments_logits_mask = tf.keras.backend.print_tensor((tf.shape(global_arguments_logits_mask), global_arguments_logits_mask), message="global_arguments_logits_mask")
+            _, global_arguments_logits = tf.keras.backend.print_tensor((tf.shape(global_arguments_logits), global_arguments_logits), message="global_arguments_logits")
             global_arguments_logits += tf.expand_dims(global_arguments_logits_mask, axis=1)
 
         normalized_local_arguments_logits, normalized_global_arguments_logits = self._normalize_logits(local_arguments_logits=local_arguments_logits, global_arguments_logits=global_arguments_logits)
