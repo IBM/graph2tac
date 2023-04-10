@@ -1232,10 +1232,8 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
             scalar_proofstate_graph,
             hidden_graph,
         )
-        # [batch_size, None(args), None(context)]
+        # [batch, None(args), None(context)]
         local_arguments_logits = QueryKeyMul()(local_hidden_state_sequences, local_context_hidden)
-        # [batch, max(args), max(context)]
-        local_arguments_logits = convert_ragged_logits_to_dense(local_arguments_logits)
         
         # [batch, None(args), hdim]
         global_hidden_state_sequences = self.global_arguments_head(hidden_state_sequences)
@@ -1243,20 +1241,25 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
         global_embeddings = self.global_embeddings(scalar_proofstate_graph.context['global_context_ids'])
         # [batch, None(args), None(context)]
         global_arguments_logits = self.global_logits(queries=global_hidden_state_sequences, keys=global_embeddings)
-        # [batch, max(args), max(context)]
-        global_arguments_logits = convert_ragged_logits_to_dense(global_arguments_logits)
-
-        normalized_local_arguments_logits, normalized_global_arguments_logits = self._normalize_logits(
+        
+        # [batch, None(args), None(context)], [batch, None(args), None(context)]
+        normalized_local_arguments_logits, normalized_global_arguments_logits = self._log_softmax_logits(
             local_arguments_logits=local_arguments_logits,
             global_arguments_logits=global_arguments_logits)
+        
+        # TODO: Temporary
+        # [batch, max(args), max(context)]
+        normalized_local_arguments_logits = convert_ragged_logits_to_dense(normalized_local_arguments_logits)
+        normalized_global_arguments_logits = convert_ragged_logits_to_dense(normalized_global_arguments_logits)
 
+        # [tactic_expand_bound, batch, max(args), max(local_context)]
         normalized_local_arguments_logits = self._reshape_inference_logits(logits=normalized_local_arguments_logits,
                                                                            tactic_expand_bound=tactic_expand_bound)
+        # [tactic_expand_bound, batch, max(args), dynamic_global_context]
         normalized_global_arguments_logits = self._reshape_global_inference_logits(
             logits=normalized_global_arguments_logits,
             tactic_expand_bound=tactic_expand_bound,
             dyn_global_context=scalar_proofstate_graph.context['global_context_ids'])
-                                                                            
 
         return tf.keras.Model(inputs={self.PROOFSTATE_GRAPH: proofstate_graph, self.TACTIC_MASK: tactic_mask},
                               outputs={self.TACTIC: tf.transpose(top_k_indices),
