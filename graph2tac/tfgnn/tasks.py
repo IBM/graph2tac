@@ -1044,6 +1044,50 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
         norm = -tf.math.log(local_arguments_logits_norm + global_arguments_logits_norm)
         return local_arguments_logits + norm, global_arguments_logits + norm
 
+    def _ragged_log_softmax_double(
+        self,
+        logits0: tf.RaggedTensor,  # [batch_dim, (ragged_dim)]
+        logits1: tf.RaggedTensor,  # [batch_dim, (ragged_dim)]
+    ) -> tuple[tf.RaggedTensor, tf.RaggedTensor]:  # [batch_dim, (ragged_dim)]
+
+        # subtract off max value to make stable 
+        max_logits0 = tf.expand_dims(tf.reduce_max(logits0, axis=-1), -1)  # [total(args), 1]
+        max_logits1 = tf.expand_dims(tf.reduce_max(logits1, axis=-1), -1)  # [total(args), 1]
+        max_logits = tf.maximum(max_logits0, max_logits1)
+        logits0 = logits0 - max_logits  # [batch_dim, (ragged_dim)]
+        logits1 = logits1 - max_logits  # [batch_dim, (ragged_dim)]
+
+        # elementwise exp
+        exp_logits0 = tf.math.exp(logits0)  # [batch_dim, (ragged_dim)]
+        exp_logits1 = tf.math.exp(logits1)  # [batch_dim, (ragged_dim)]
+        sum_exp0 = tf.expand_dims(tf.reduce_sum(exp_logits0, axis=-1), -1)  # [batch_dim, 1]
+        sum_exp1 = tf.expand_dims(tf.reduce_sum(exp_logits1, axis=-1), -1)  # [batch_dim, 1]
+        sum_exp = sum_exp0 + sum_exp1  # [batch_dim, 1]
+
+        # divide in log space to get log probability
+        log_sum = tf.math.log(sum_exp)  # [batch_dim, 1]
+        return (logits0 - log_sum, logits1 - log_sum) # [batch_dim, (ragged_dim)]
+
+    def _log_softmax_logits(
+        self,
+        local_arguments_logits: tf.RaggedTensor,  # [batch, None(args), None(context)]
+        global_arguments_logits: tf.RaggedTensor,  # [batch, None(args), None(context)]
+    ) -> Tuple[tf.RaggedTensor, tf.RaggedTensor]:  # ([batch, None(args), None(context)], [batch, None(args), None(context)])
+        """
+        Normalize local and global arguments logits making sure the log_softmax is numerically stable.
+        """
+        # perform softmax on inner ragged logits
+        # [total(args), None(local_context)], # [total(args), None(global_context)]
+        local_logits_values, global_logits_values = \
+            self._ragged_log_softmax_double(local_arguments_logits.values, global_arguments_logits.values)
+        
+        # shape back into double ragged tensors
+        # [total(args), None(local_context)]
+        local_logits = local_arguments_logits.with_values(local_logits_values)
+        # [total(args), None(global_context)]
+        global_logits = global_arguments_logits.with_values(global_logits_values)
+
+        return local_logits, global_logits
 
     def convert_logits_to_ragged(self, pair) -> tf.RaggedTensor:
         # logits: [batch_size, max(args), context]
@@ -1103,8 +1147,6 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
         )
         # [batch_size, None(args), None(context)]
         local_arguments_logits = QueryKeyMul()(local_hidden_state_sequences, local_context_hidden)
-        # [batch, max(args), max(context)]
-        local_arguments_logits = convert_ragged_logits_to_dense(local_arguments_logits)
         
         # [batch, None(args), hdim]
         global_hidden_state_sequences = self.global_arguments_head(hidden_state_sequences)
@@ -1121,22 +1163,17 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
             _, global_arguments_logits = tf.keras.backend.print_tensor((tf.shape(global_arguments_logits), global_arguments_logits), message="global_arguments_logits")
             global_arguments_logits += tf.expand_dims(global_arguments_logits_mask, axis=1)
 
-        normalized_local_arguments_logits, normalized_global_arguments_logits = self._normalize_logits(local_arguments_logits=local_arguments_logits, global_arguments_logits=global_arguments_logits)
-
         # TODO(jrute): These are temporary conversions from non-ragged to ragged tensors.
-        new_local_arguments_logits = tf.keras.layers.Lambda(self.convert_logits_to_ragged)((
-            normalized_local_arguments_logits, 
-            scalar_proofstate_graph.context['local_context_ids'], 
-            arg_cnts,
-            "local"))
-        new_global_arguments_logits = tf.keras.layers.Lambda(self.convert_logits_to_ragged)((
-            normalized_global_arguments_logits, 
+        global_arguments_logits = tf.keras.layers.Lambda(self.convert_logits_to_ragged)((
+            global_arguments_logits, 
             scalar_proofstate_graph.context['global_context_ids'], 
             arg_cnts,
             "global"))
 
-        local_arguments_logits_output = self.local_arguments_logits_output(new_local_arguments_logits)
-        global_arguments_logits_output = self.global_arguments_logits_output(new_global_arguments_logits)
+        normalized_local_arguments_logits, normalized_global_arguments_logits = self._log_softmax_logits(local_arguments_logits=local_arguments_logits, global_arguments_logits=global_arguments_logits)
+
+        local_arguments_logits_output = self.local_arguments_logits_output(normalized_local_arguments_logits)
+        global_arguments_logits_output = self.global_arguments_logits_output(normalized_global_arguments_logits)
         
         return GlobalArgumentModel(inputs=proofstate_graph,
                                    outputs={self.TACTIC_LOGITS: tactic_logits,
