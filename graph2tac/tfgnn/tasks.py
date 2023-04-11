@@ -664,7 +664,7 @@ class QueryKeyMul(tf.keras.layers.Layer):
     def _mul_ragged_to_dense_to_ragged(queries, keys):
         queries_dense = queries.to_tensor()    # [batch, max(args), hdim]
         keys_dense = keys.to_tensor()         # [batch, max(context), hdim]
-        logits_dense = tf.einsum("ijl,ikl->ijk", keys_dense, queries_dense)  # [batch, max(args), max(context)]
+        logits_dense = tf.einsum("ijl,ikl->ijk", queries_dense, keys_dense)  # [batch, max(args), max(context)]
         logits_part_ragged = tf.RaggedTensor.from_tensor(logits_dense, lengths=queries.row_lengths())  # [batch, None(args), max(context)]
         lengths = queries.with_values(tf.gather(keys.row_lengths(), queries.value_rowids()))  # [batch, None(args)]
         logits_values = tf.RaggedTensor.from_tensor(logits_part_ragged.values, lengths=lengths.values)
@@ -677,6 +677,8 @@ class QueryKeyMul(tf.keras.layers.Layer):
         keys: tf.RaggedTensor, # [batch, None(context), hdim]
         training=False
     ) -> tf.RaggedTensor: # [batch, None(args), None(context)]
+        queries = queries.with_row_splits_dtype(tf.int64)
+        keys = keys.with_row_splits_dtype(tf.int64)
         if self.method == "map_fn":
             return self._mul_map_fn(queries, keys)
         elif self.method == "broadcast_ragged":
