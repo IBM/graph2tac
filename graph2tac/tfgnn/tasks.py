@@ -630,17 +630,15 @@ class TacticPrediction(PredictionTask):
 class QueryKeyMul(tf.keras.layers.Layer):
     def __init__(
         self,
+        method="broadcast_ragged",
         name="query_key_mul",
         **kwargs
     ):
         super().__init__(name=name, **kwargs)
+        self.method = method
 
-    def call(
-        self, 
-        queries: tf.RaggedTensor, # [batch, None(args), hdim]
-        keys: tf.RaggedTensor, # [batch, None(context), hdim]
-        training=False
-    ) -> tf.RaggedTensor: # [batch, None(args), None(context)]
+    @staticmethod
+    def _mul_map_fn(queries, keys):
         @tf.function
         def linear_op(qk):
             x = tf.einsum("ij, kj -> ik", qk[0], qk[1])
@@ -651,6 +649,41 @@ class QueryKeyMul(tf.keras.layers.Layer):
             elems=[queries, keys],
             fn_output_signature=tf.RaggedTensorSpec(shape=[None, None])
         )
+    
+    @staticmethod
+    def _mul_broadcast_ragged(queries, keys):
+        keys_values = tf.gather(keys, queries.value_rowids())  # [batch-args, None(context), hdim]
+        queries_values_values = tf.gather(queries.values, keys_values.value_rowids())  # [batch-args-context, hdim]
+        logits_values_values = tf.einsum("ij,ij->i", keys_values.values, queries_values_values)  # [batch-args-context]
+        logits_values = keys_values.with_values(logits_values_values)  # [batch-args, None(context)]
+        logits = queries.with_values(logits_values)  # [batch, None(args), None(context)]
+        return logits
+    
+    @staticmethod
+    def _mul_ragged_to_dense_to_ragged(queries, keys):
+        queries_dense = queries.to_tensor()    # [batch, max(args), hdim]
+        keys_dense = keys.to_tensor()         # [batch, max(context), hdim]
+        logits_dense = tf.einsum("ijl,ikl->ijk", keys_dense, queries_dense)  # [batch, max(args), max(context)]
+        logits_part_ragged = tf.RaggedTensor.from_tensor(logits_dense, lengths=queries.row_lengths())  # [batch, None(args), max(context)]
+        lengths = queries.with_values(tf.gather(keys.row_lengths(), queries.value_rowids()))  # [batch, None(args)]
+        logits_values = tf.RaggedTensor.from_tensor(logits_part_ragged.values, lengths=lengths.values)
+        logits = logits_part_ragged.with_values(logits_values)
+        return logits
+
+    def call(
+        self, 
+        queries: tf.RaggedTensor, # [batch, None(args), hdim]
+        keys: tf.RaggedTensor, # [batch, None(context), hdim]
+        training=False
+    ) -> tf.RaggedTensor: # [batch, None(args), None(context)]
+        if self.method == "map_fn":
+            return self._mul_map_fn(queries, keys)
+        elif self.method == "broadcast_ragged":
+            return self._mul_broadcast_ragged(queries, keys)
+        elif self.method == "ragged_to_dense_to_ragged":
+            return self._mul_ragged_to_dense_to_ragged(queries, keys)
+        else:
+            raise Exception(f"Unsupported multiplication method: {self.method}")
 
 
 class LocalArgumentPrediction(TacticPrediction):
