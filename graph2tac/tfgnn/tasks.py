@@ -308,6 +308,32 @@ class LocalArgumentModel(tf.keras.Model):
         metric_results[LocalArgumentPrediction.STRICT_ACCURACY] = self.strict_accuracy.result()
         return metric_results
 
+@tf.function
+def arg_best_logit_and_pred(
+    logits: tf.RaggedTensor,  # [batch, None(args), None(context)]
+) -> tuple[tf.RaggedTensor, tf.RaggedTensor]:  # ([batch, None(args)], [batch, None(args)])
+    """Find the value and index of the best arguments logit
+
+    If the context is empty, return -inf for the value and 0 for the index
+
+    :param logits: Logits.  Shape: [batch, None(args), None(context)]
+    :type logits: tf.RaggedTensor
+    :return: value and index of the best logits.  Shape: [batch, None(arg)]
+    :rtype: tuple[tf.RaggedTensor, tf.RaggedTensor]
+    """
+    # pad context with -inf to make rows uniform
+    logits = logits.with_values(logits.values.to_tensor(default_value=-np.inf))  # [batch, None(args), max(context)]
+    if tf.shape(logits.values)[-1] == 0:
+        # best_logit is -inf and pred is 0 if there are no logits
+        template = logits.with_values(logits.value_rowids())  # [batch, None(args)]
+        best_logit = tf.math.log(tf.zeros_like(template, dtype=tf.float32))  # [batch, None(args)]  
+        pred = tf.zeros_like(template, dtype=tf.int64)  # [batch, None(args)]
+    else:
+        # since we pad context with -inf, the best_logit is -inf and pred is 0 if context is empty
+        best_logit = tf.ragged.map_flat_values(tf.reduce_max, logits, axis=-1)  # [batch, None(args)]
+        pred = tf.ragged.map_flat_values(tf.argmax, logits, axis=-1, output_type=tf.int64)  # [batch, None(args)]
+    return (best_logit, pred)
+
 
 class GlobalArgumentModel(tf.keras.Model):
     def __init__(self, **kwargs):
@@ -325,23 +351,20 @@ class GlobalArgumentModel(tf.keras.Model):
         tactic_accuracy = tf.keras.metrics.sparse_categorical_accuracy(tactic, tactic_logits)
 
         # local arguments
-        local_arguments = y[GlobalArgumentPrediction.LOCAL_ARGUMENTS_LOGITS]  # [batch, None(args)]
+        local_arguments = y[GlobalArgumentPrediction.LOCAL_ARGUMENTS_LOGITS]  # [batch, 1, None(args)]
         local_arguments_logits = y_pred[GlobalArgumentPrediction.LOCAL_ARGUMENTS_LOGITS]  # [batch, None(args), None(context]
-        local_arguments_logits = local_arguments_logits.to_tensor(default_value=-np.inf)  # [batch, max(args), context] # FIXME(jrute) 
+        #local_arguments_logits = local_arguments_logits.to_tensor(default_value=-np.inf)  # [batch, max(args), context] # FIXME(jrute) 
         local_true = tf.squeeze(local_arguments, 1)  # [batch, None(args)]
-        local_logits = ragged_logits(local_arguments, local_arguments_logits)  # [batch, None(args), context]
-        local_best_logit = tf.ragged.map_flat_values(tf.reduce_max, local_logits, axis=-1)  # [batch, None(args)]
-        local_pred = tf.ragged.map_flat_values(tf.argmax, local_logits, axis=-1, output_type=tf.int64)  # [batch, None(args)]
-        
+        #local_logits = ragged_logits(local_arguments, local_arguments_logits)  # [batch, None(args), context]
+        local_best_logit, local_pred = arg_best_logit_and_pred(local_arguments_logits)
         
         # global arguments
-        global_arguments = y[GlobalArgumentPrediction.GLOBAL_ARGUMENTS_LOGITS]  # [batch, None(args)]
+        global_arguments = y[GlobalArgumentPrediction.GLOBAL_ARGUMENTS_LOGITS]  # [batch, 1, None(args)]
         global_arguments_logits = y_pred[GlobalArgumentPrediction.GLOBAL_ARGUMENTS_LOGITS]  # [batch, None(args), None(context]
-        global_arguments_logits = global_arguments_logits.to_tensor(default_value=-np.inf)  # [batch, max(args), context] # FIXME(jrute) 
+        #global_arguments_logits = global_arguments_logits.to_tensor(default_value=-np.inf)  # [batch, max(args), context] # FIXME(jrute) 
         global_true = tf.squeeze(global_arguments, 1)  # [batch, None(args)]
-        global_logits = ragged_logits(global_arguments, global_arguments_logits)
-        global_best_logit = tf.ragged.map_flat_values(tf.reduce_max, global_logits, axis=-1)  # [batch, None(args)]
-        global_pred = tf.ragged.map_flat_values(tf.argmax, global_logits, axis=-1, output_type=tf.int64)  # [batch, None(args)]
+        #global_logits = ragged_logits(global_arguments, global_arguments_logits)
+        global_best_logit, global_pred = arg_best_logit_and_pred(global_arguments_logits)
 
         # all arguments
         # for ground truth, we can take which ever argument is higher since the other is -1
