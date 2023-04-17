@@ -310,7 +310,7 @@ class PredictServer:
 
         # definition recalculation
         if self.config.update == "all":
-            def_clusters_for_update = list(definitions.clustered_definitions(full = False))
+            def_clusters_for_update = list(definitions.clustered_definitions())
             print("updating", len(def_clusters_for_update), "all definitions")
             prev_defined_nodes = self.data_server._base_node_label_num
             logger.info(f"Prepared for update all {len(def_clusters_for_update)} definition clusters")
