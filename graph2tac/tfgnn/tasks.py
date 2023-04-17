@@ -667,7 +667,7 @@ class GlobalEmbeddings(tf.keras.layers.Layer):
 class QueryKeyMul(tf.keras.layers.Layer):
     def __init__(
         self,
-        method="broadcast_ragged",
+        method="broadcast_ragged2",
         name="query_key_mul",
         **kwargs
     ):
@@ -697,6 +697,17 @@ class QueryKeyMul(tf.keras.layers.Layer):
         return logits
     
     @staticmethod
+    def _mul_broadcast_ragged2(queries, keys):
+        key_ix = keys.with_values(tf.range(tf.shape(keys.values)[0]))  # [batch, None(context)]
+        keys_values_ixs = tf.gather(key_ix, queries.value_rowids())  # [batch-args, None(context)]
+        keys_values = tf.gather(keys.values, keys_values_ixs)  # [batch-args, None(context), hdim]
+        queries_values_values = tf.gather(queries.values, keys_values.value_rowids())  # [batch-args-context, hdim]
+        logits_values_values = tf.einsum("ij,ij->i", keys_values.values, queries_values_values)  # [batch-args-context]
+        logits_values = keys_values.with_values(logits_values_values)  # [batch-args, None(context)]
+        logits = queries.with_values(logits_values)  # [batch, None(args), None(context)]
+        return logits
+    
+    @staticmethod
     def _mul_ragged_to_dense_to_ragged(queries, keys):
         queries_dense = queries.to_tensor()    # [batch, max(args), hdim]
         keys_dense = keys.to_tensor()         # [batch, max(context), hdim]
@@ -719,6 +730,8 @@ class QueryKeyMul(tf.keras.layers.Layer):
             return self._mul_map_fn(queries, keys)
         elif self.method == "broadcast_ragged":
             return self._mul_broadcast_ragged(queries, keys)
+        elif self.method == "broadcast_ragged2":
+            return self._mul_broadcast_ragged2(queries, keys)
         elif self.method == "ragged_to_dense_to_ragged":
             return self._mul_ragged_to_dense_to_ragged(queries, keys)
         else:
@@ -745,7 +758,7 @@ class QueryKeyMulGlobal(tf.keras.layers.Layer):
 
     def unit_normalize_tensor(self, x: tf.Tensor) ->  tf.Tensor:
         x_norm = tf.norm(x, axis=-1, keepdims=True)
-        return tf.math.divide_no_nan(x, x_norm)
+        return x / x_norm
 
     def unit_normalize_ragged(self, rt: tf.RaggedTensor) -> tf.RaggedTensor:
         return tf.ragged.map_flat_values(self.unit_normalize_tensor, rt)
