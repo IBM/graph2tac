@@ -62,7 +62,6 @@ class LogitsFromEmbeddings(tf.keras.layers.Layer):
     """
     def __init__(self,
                  embedding_matrix: tf.Variable,
-                 valid_indices: tf.Tensor,
                  cosine_similarity: bool,
                  name: str = 'logits_from_embeddings',
                  **kwargs
@@ -75,12 +74,10 @@ class LogitsFromEmbeddings(tf.keras.layers.Layer):
             self._temp = tf.Variable(initial_value=1.0, trainable=True)
         
         self._embedding_matrix = embedding_matrix
-        self._valid_indices = valid_indices
         super().__init__(name=name, **kwargs)
 
-    def update_embedding_matrix(self, embedding_matrix: tf.Variable, valid_indices: tf.Tensor):
+    def update_embedding_matrix(self, embedding_matrix: tf.Variable):
         self._embedding_matrix = embedding_matrix
-        self._valid_indices = valid_indices
 
     def call(self, hidden_state, training=False):
         emb_matrix = self._embedding_matrix
@@ -93,7 +90,7 @@ class LogitsFromEmbeddings(tf.keras.layers.Layer):
             hidden_state_norm = tf.norm(hidden_state, axis=-1, keepdims=True)
             hidden_state = tf.math.divide_no_nan(hidden_state, hidden_state_norm)
             
-        logits = tf.matmul(a=hidden_state, b=tf.gather(emb_matrix, self._valid_indices), transpose_b=True)
+        logits = tf.matmul(a=hidden_state, b=emb_matrix, transpose_b=True)
 
         if self._cosine_similarity:
             logits = logits / self._temp
