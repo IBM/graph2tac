@@ -665,17 +665,35 @@ class GlobalEmbeddings(tf.keras.layers.Layer):
 
 
 class QueryKeyMul(tf.keras.layers.Layer):
+    """Ragged Query-Key multiplication
+
+    Calculate inner product of ragged key and query tensors.
+    It is one of the most computationally intensive in the network and hence has been heavily
+    optimized.
+
+    :param method: One of multiple methods to computing the query and key.
+    :type tf: str
+    :param name: Layer name
+    :type tf: str
+    """
+
     def __init__(
         self,
-        method="broadcast_ragged2",
-        name="query_key_mul",
+        method : str = "broadcast_ragged",
+        name : str = "query_key_mul",
         **kwargs
     ):
         super().__init__(name=name, **kwargs)
         self.method = method
 
     @staticmethod
-    def _mul_map_fn(queries, keys):
+    def _mul_map_fn(
+        queries : tf.RaggedTensor,  # shape: # [batch, None(args), hdim]
+        keys : tf.RaggedTensor,  # shape: # [batch, None(context), hdim]
+    ) -> tf.RaggedTensor:  # shape: # [batch, None(args), None(context)]
+        """
+        Compute the inner product via tf.map_fun.  Won't run on a GPU.
+        """
         @tf.function
         def linear_op(qk):
             x = tf.einsum("ij, kj -> ik", qk[0], qk[1])
@@ -688,30 +706,56 @@ class QueryKeyMul(tf.keras.layers.Layer):
         )
     
     @staticmethod
-    def _mul_broadcast_ragged(queries, keys):
-        keys_values = tf.gather(keys, queries.value_rowids())  # [batch-args, None(context), hdim]
-        queries_values_values = tf.gather(queries.values, keys_values.value_rowids())  # [batch-args-context, hdim]
-        logits_values_values = tf.einsum("ij,ij->i", keys_values.values, queries_values_values)  # [batch-args-context]
-        logits_values = keys_values.with_values(logits_values_values)  # [batch-args, None(context)]
-        logits = queries.with_values(logits_values)  # [batch, None(args), None(context)]
-        return logits
-    
-    @staticmethod
-    def _mul_broadcast_ragged2(queries, keys):
+    def _mul_broadcast_ragged(
+        queries : tf.RaggedTensor,  # shape: # [batch, None(args), hdim]
+        keys : tf.RaggedTensor,  # shape: # [batch, None(context), hdim]
+    ) -> tf.RaggedTensor:  # shape: # [batch, None(args), None(context)]
+        """
+        Compute the inner product by broadcasting the query and key tensors.
+        
+        Both are broadcast to shape [batch, None(args), None(context), hdim]
+        before multiplying.  Special care is taken to avoid operations which
+        take place too long on the CPU.
+        """
+        # broadcast ragged keys to be shape [batch, None(args), None(context), hdim]
+        # these lines are equivalent to tf.gather(keys, queries.value_rowids())
+        # but faster since the ragged gather is only done on the indices and
+        # not the key vectors.  Ragged gathers take place on the CPU.
         key_ix = keys.with_values(tf.range(tf.shape(keys.values)[0]))  # [batch, None(context)]
         keys_values_ixs = tf.gather(key_ix, queries.value_rowids())  # [batch-args, None(context)]
         keys_values = tf.gather(keys.values, keys_values_ixs)  # [batch-args, None(context), hdim]
+        
+        # broadcast ragged queries to shape [batch, None(args), None(context), hdim]
         queries_values_values = tf.gather(queries.values, keys_values.value_rowids())  # [batch-args-context, hdim]
+
+        # multiply key and query
+        # can just multiply the ragged values arrays since they have same shape
         logits_values_values = tf.einsum("ij,ij->i", keys_values.values, queries_values_values)  # [batch-args-context]
         logits_values = keys_values.with_values(logits_values_values)  # [batch-args, None(context)]
         logits = queries.with_values(logits_values)  # [batch, None(args), None(context)]
         return logits
     
     @staticmethod
-    def _mul_ragged_to_dense_to_ragged(queries, keys):
+    def _mul_ragged_to_dense_to_ragged(
+        queries : tf.RaggedTensor,  # shape: # [batch, None(args), hdim]
+        keys : tf.RaggedTensor,  # shape: # [batch, None(context), hdim]
+    ) -> tf.RaggedTensor:  # shape: # [batch, None(args), None(context)]
+        """
+        Compute the inner product by converting ragged arrays to tensors first.
+        
+        This can be computationally intensive when some batch elements
+        have large numbers of arguments
+        """
+        # convert arrays to non-ragged
+        # these two line are the most computationally intensive in this method
+        # RaggedTensor.to_tensor seems to take place on the CPU.
         queries_dense = queries.to_tensor()    # [batch, max(args), hdim]
         keys_dense = keys.to_tensor()         # [batch, max(context), hdim]
+        
+        # multiply
         logits_dense = tf.einsum("ijl,ikl->ijk", queries_dense, keys_dense)  # [batch, max(args), max(context)]
+
+        # convert back to ragged
         logits_part_ragged = tf.RaggedTensor.from_tensor(logits_dense, lengths=queries.row_lengths())  # [batch, None(args), max(context)]
         lengths = queries.with_values(tf.gather(keys.row_lengths(), queries.value_rowids()))  # [batch, None(args)]
         logits_values = tf.RaggedTensor.from_tensor(logits_part_ragged.values, lengths=lengths.values)
@@ -724,6 +768,16 @@ class QueryKeyMul(tf.keras.layers.Layer):
         keys: tf.RaggedTensor, # [batch, None(context), hdim]
         training=False
     ) -> tf.RaggedTensor: # [batch, None(args), None(context)]
+        """Compute the ragged inner product of ragged queries and keys.
+
+        :param queries: Queries associated with argument positions. Shape [batch, None(args), hdim]
+        :type queries: tf.RaggedTensor
+        :param keys: Keys associated with local or global context. Shape [batch, None(context), hdim]
+        :type keys: tf.RaggedTensor
+        :return: Logits.  Shape [batch, None(args), None(context)]
+        :rtype: tf.RaggedTensor
+        """
+        # TODO(jrute): Clean up row split types to be consistent across model code
         queries = queries.with_row_splits_dtype(tf.int64)
         keys = keys.with_row_splits_dtype(tf.int64)
         if self.method == "map_fn":
@@ -738,6 +792,19 @@ class QueryKeyMul(tf.keras.layers.Layer):
             raise Exception(f"Unsupported multiplication method: {self.method}")
 
 class QueryKeyMulGlobal(tf.keras.layers.Layer):
+    """Layer for computing global logits.
+
+    Take inner product of tensors.  If using cosine similarity, 
+    then unit normalize before the inner product and divide by a
+    learned temperature tensor.  (The temperature parameter is 
+    because cosine similarity otherwise only produces logits between
+    -1 and 1.)
+
+    :param name: layer name
+    :type name: str
+    :param cosine_similarity: Whether to use cosine similarlity with learned temperature parameter.
+    :type name: str
+    """
     def __init__(
         self,
         name="query_key_mul_global",
