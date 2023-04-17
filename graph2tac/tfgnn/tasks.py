@@ -511,7 +511,6 @@ class TacticPrediction(PredictionTask):
         # a layer to compute tactic logits from tactic embeddings
         self.tactic_logits_from_embeddings = LogitsFromEmbeddings(
             embedding_matrix=self.tactic_embedding.embeddings,
-            valid_indices=tf.range(self._graph_constants.tactic_num),
             cosine_similarity=False,
             name=self.TACTIC_LOGITS
         )
@@ -856,7 +855,6 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
         # create a layer to extract logits from the node label embeddings
         self.global_arguments_logits = LogitsFromEmbeddings(
             embedding_matrix=self.graph_embedding.get_node_embeddings(),
-            valid_indices=tf.constant(self._graph_constants.global_context, dtype=tf.int32),
             cosine_similarity=self._global_cosine_similarity
         )
 
