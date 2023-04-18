@@ -304,7 +304,7 @@ class PredictServer:
 
         # definitions
 
-        full = not self.config.partial
+        full = self.config.full_definitions
         print("Full =", full)
         self.data_server.align_definitions(definitions.definitions(full = full), from_start = full)
         #print(self.data_server._def_node_to_i)
@@ -433,14 +433,14 @@ class PredictServer:
 
         # embs = self.model.prediction_task.graph_embedding.get_node_embeddings()
         # print("Nodes used on input:")
-        proof_state = self.data_server.proofstate(proof_state.root, proof_state.context)
+        proof_state_graph = self.data_server.proofstate(proof_state.root, proof_state.context)
         # for n in sorted(set(proof_state.graph.nodes)):
         #     print(f"{n}: {embs[n]}")
         # print("Nodes in global context:")
         # for n in proof_state.context.global_context:
         #     print(f"{n}: {embs[n]}")
         actions, confidences = self.model.ranked_predictions(
-            state=proof_state,
+            state=proof_state_graph,
             tactic_expand_bound=self.config.tactic_expand_bound,
             total_expand_bound=self.config.total_expand_bound,
             allowed_model_tactics=self.current_allowed_tactics,
@@ -617,10 +617,10 @@ def parse_args() -> argparse.Namespace:
                         action='store_true',
                         help="with tf_eager=True activated network may initialize faster but run slower, use carefully if you need")
 
-    parser.add_argument('--partial',
+    parser.add_argument('--full_definitions',
                         default=False,
                         action='store_true',
-                        help="use only the new definition")
+                        help="Ignore definition cache")
 
     parser.add_argument('--temperature',
                         type=float,
