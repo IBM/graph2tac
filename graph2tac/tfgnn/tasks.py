@@ -774,7 +774,7 @@ class QueryKeyMulGlobal(tf.keras.layers.Layer):
             # since cosine similarity is between -1.0 and 1.0
             # we add a learned temperature parameter
             # so logits can be in a wider or narrower range -1/temp to 1/temp
-            self._temp = tf.Variable(initial_value=1.0, trainable=True)
+            self._temp = tf.Variable(initial_value=0.008, trainable=True)
         self.query_key_mul = QueryKeyMul()
 
     def unit_normalize_tensor(self, x: tf.Tensor) ->  tf.Tensor:
@@ -798,6 +798,7 @@ class QueryKeyMulGlobal(tf.keras.layers.Layer):
         logits = self.query_key_mul(queries, keys)
 
         if self._cosine_similarity:
+            tf.print("temp", self._temp)
             logits = logits / self._temp
         
         return logits
