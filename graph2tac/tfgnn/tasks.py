@@ -64,6 +64,18 @@ def ragged_logits(y_true: tf.RaggedTensor, y_pred: tf.Tensor) -> Tuple[tf.Ragged
         logits = tf.RaggedTensor.from_tensor(y_pred, lengths=y_true.row_lengths())
     return logits
 
+def convert_ragged_logits_to_dense(logits: tf.RaggedTensor, context_size=None) -> tf.Tensor:
+    # logits shape: [batch, None(args), None(context)]
+
+    # expand context (replacing unused context element logits with -inf)
+    # shape: [batch, None(args), max(context)]
+    logits = logits.with_values(logits.values.to_tensor(default_value=-np.inf, shape=[None, context_size]))
+
+    # expand args (replacing unused arg position logits with 0.0)
+    # shape: [batch, max(args), max(context)]
+    logits = logits.to_tensor(default_value=0.0)
+
+    return logits
 
 @tf.function
 def _local_arguments_pred(y_true: tf.Tensor, y_pred: tf.Tensor) -> tf.Tensor:
@@ -296,6 +308,32 @@ class LocalArgumentModel(tf.keras.Model):
         metric_results[LocalArgumentPrediction.STRICT_ACCURACY] = self.strict_accuracy.result()
         return metric_results
 
+@tf.function
+def arg_best_logit_and_pred(
+    logits: tf.RaggedTensor,  # [batch, None(args), None(context)]
+) -> tuple[tf.RaggedTensor, tf.RaggedTensor]:  # ([batch, None(args)], [batch, None(args)])
+    """Find the value and index of the best arguments logit
+
+    If the context is empty, return -inf for the value and 0 for the index
+
+    :param logits: Logits.  Shape: [batch, None(args), None(context)]
+    :type logits: tf.RaggedTensor
+    :return: value and index of the best logits.  Shape: [batch, None(arg)]
+    :rtype: tuple[tf.RaggedTensor, tf.RaggedTensor]
+    """
+    # pad context with -inf to make rows uniform
+    logits = logits.with_values(logits.values.to_tensor(default_value=-np.inf))  # [batch, None(args), max(context)]
+    if tf.shape(logits.values)[-1] == 0:
+        # best_logit is -inf and pred is 0 if there are no logits
+        template = logits.with_values(logits.value_rowids())  # [batch, None(args)]
+        best_logit = tf.math.log(tf.zeros_like(template, dtype=tf.float32))  # [batch, None(args)]  
+        pred = tf.zeros_like(template, dtype=tf.int64)  # [batch, None(args)]
+    else:
+        # since we pad context with -inf, the best_logit is -inf and pred is 0 if context is empty
+        best_logit = tf.ragged.map_flat_values(tf.reduce_max, logits, axis=-1)  # [batch, None(args)]
+        pred = tf.ragged.map_flat_values(tf.argmax, logits, axis=-1, output_type=tf.int64)  # [batch, None(args)]
+    return (best_logit, pred)
+
 
 class GlobalArgumentModel(tf.keras.Model):
     def __init__(self, **kwargs):
@@ -313,23 +351,16 @@ class GlobalArgumentModel(tf.keras.Model):
         tactic_accuracy = tf.keras.metrics.sparse_categorical_accuracy(tactic, tactic_logits)
 
         # local arguments
-        local_arguments = y[GlobalArgumentPrediction.LOCAL_ARGUMENTS_LOGITS]  # [batch, None(args)]
+        local_arguments = y[GlobalArgumentPrediction.LOCAL_ARGUMENTS_LOGITS]  # [batch, 1, None(args)]
         local_arguments_logits = y_pred[GlobalArgumentPrediction.LOCAL_ARGUMENTS_LOGITS]  # [batch, None(args), None(context]
-        local_arguments_logits = local_arguments_logits.to_tensor(default_value=-np.inf)  # [batch, max(args), context] # FIXME(jrute) 
         local_true = tf.squeeze(local_arguments, 1)  # [batch, None(args)]
-        local_logits = ragged_logits(local_arguments, local_arguments_logits)  # [batch, None(args), context]
-        local_best_logit = tf.ragged.map_flat_values(tf.reduce_max, local_logits, axis=-1)  # [batch, None(args)]
-        local_pred = tf.ragged.map_flat_values(tf.argmax, local_logits, axis=-1, output_type=tf.int64)  # [batch, None(args)]
-        
+        local_best_logit, local_pred = arg_best_logit_and_pred(local_arguments_logits)
         
         # global arguments
-        global_arguments = y[GlobalArgumentPrediction.GLOBAL_ARGUMENTS_LOGITS]  # [batch, None(args)]
+        global_arguments = y[GlobalArgumentPrediction.GLOBAL_ARGUMENTS_LOGITS]  # [batch, 1, None(args)]
         global_arguments_logits = y_pred[GlobalArgumentPrediction.GLOBAL_ARGUMENTS_LOGITS]  # [batch, None(args), None(context]
-        global_arguments_logits = global_arguments_logits.to_tensor(default_value=-np.inf)  # [batch, max(args), context] # FIXME(jrute) 
         global_true = tf.squeeze(global_arguments, 1)  # [batch, None(args)]
-        global_logits = ragged_logits(global_arguments, global_arguments_logits)
-        global_best_logit = tf.ragged.map_flat_values(tf.reduce_max, global_logits, axis=-1)  # [batch, None(args)]
-        global_pred = tf.ragged.map_flat_values(tf.argmax, global_logits, axis=-1, output_type=tf.int64)  # [batch, None(args)]
+        global_best_logit, global_pred = arg_best_logit_and_pred(global_arguments_logits)
 
         # all arguments
         # for ground truth, we can take which ever argument is higher since the other is -1
@@ -615,6 +646,228 @@ class TacticPrediction(PredictionTask):
         return {TacticPrediction.TACTIC_LOGITS: [tf.keras.metrics.SparseCategoricalAccuracy(name="accuracy")]}
 
 
+class GlobalEmbeddings(tf.keras.layers.Layer):
+    def __init__(
+        self,
+        global_embeddings_layer: LogitsFromEmbeddings,
+        dynamic_global_context: bool,
+        name="global_embeddings",
+        **kwargs
+    ):
+        super().__init__(name=name, **kwargs)
+        self.global_embeddings_layer = global_embeddings_layer
+        self.dynamic_global_context = dynamic_global_context
+
+    def call(
+        self, 
+        global_context: tf.RaggedTensor,  # [batch, None(context)]
+        inference: bool = False,
+        training=False
+    ) -> tf.Tensor: # [batch, None(context), hdim]
+        # [valid_context, hdim]
+        all_embeddings = self.global_embeddings_layer.get_keys_embeddings()
+
+        # note: inference model always uses dynamic global context
+        if self.dynamic_global_context or inference:
+            # select the global context for each batch
+            # [batch, None(context), hdim]
+            return tf.gather(all_embeddings, global_context)
+        else:
+            # currently this would mess up later indexing
+            raise NotImplementedError("dynamical_global_context must be set to true")
+            # repeat all the embeddings for each batch element
+            # [batch, valid_context, hdim]
+            batch_size = tf.shape(global_context)[0]
+            global_embeddings = tf.tile(tf.expand_dims(all_embeddings, axis=0), multiples=[batch_size, 1, 1])
+            # [batch, None(context), hdim]
+            return tf.RaggedTensor.from_tensor(global_embeddings, ragged_rank=1)
+
+
+class QueryKeyMul(tf.keras.layers.Layer):
+    """Ragged Query-Key multiplication
+
+    Calculate inner product of ragged key and query tensors.
+    It is one of the most computationally intensive in the network and hence has been heavily
+    optimized.
+
+    :param method: One of multiple methods to computing the query and key.
+    :type tf: str
+    :param name: Layer name
+    :type tf: str
+    """
+
+    def __init__(
+        self,
+        method : str = "broadcast_ragged",
+        name : str = "query_key_mul",
+        **kwargs
+    ):
+        super().__init__(name=name, **kwargs)
+        self.method = method
+
+    @staticmethod
+    def _mul_map_fn(
+        queries : tf.RaggedTensor,  # shape: # [batch, None(args), hdim]
+        keys : tf.RaggedTensor,  # shape: # [batch, None(context), hdim]
+    ) -> tf.RaggedTensor:  # shape: # [batch, None(args), None(context)]
+        """
+        Compute the inner product via tf.map_fun.  Won't run on a GPU.
+        """
+        @tf.function
+        def linear_op(qk):
+            x = tf.einsum("ij, kj -> ik", qk[0], qk[1])
+            x = tf.RaggedTensor.from_tensor(x)
+            return x
+        return tf.map_fn(
+            linear_op,
+            elems=[queries, keys],
+            fn_output_signature=tf.RaggedTensorSpec(shape=[None, None])
+        )
+    
+    @staticmethod
+    def _mul_broadcast_ragged(
+        queries : tf.RaggedTensor,  # shape: # [batch, None(args), hdim]
+        keys : tf.RaggedTensor,  # shape: # [batch, None(context), hdim]
+    ) -> tf.RaggedTensor:  # shape: # [batch, None(args), None(context)]
+        """
+        Compute the inner product by broadcasting the query and key tensors.
+        
+        Both are broadcast to shape [batch, None(args), None(context), hdim]
+        before multiplying.  Special care is taken to avoid operations which
+        take place too long on the CPU.
+        """
+        # broadcast ragged keys to be shape [batch, None(args), None(context), hdim]
+        # these lines are equivalent to tf.gather(keys, queries.value_rowids())
+        # but faster since the ragged gather is only done on the indices and
+        # not the key vectors.  Ragged gathers take place on the CPU.
+        key_ix = keys.with_values(tf.range(tf.shape(keys.values)[0]))  # [batch, None(context)]
+        keys_values_ixs = tf.gather(key_ix, queries.value_rowids())  # [batch-args, None(context)]
+        keys_values = tf.gather(keys.values, keys_values_ixs)  # [batch-args, None(context), hdim]
+        
+        # broadcast ragged queries to shape [batch, None(args), None(context), hdim]
+        queries_values_values = tf.gather(queries.values, keys_values.value_rowids())  # [batch-args-context, hdim]
+
+        # multiply key and query
+        # can just multiply the ragged values arrays since they have same shape
+        logits_values_values = tf.einsum("ij,ij->i", keys_values.values, queries_values_values)  # [batch-args-context]
+        logits_values = keys_values.with_values(logits_values_values)  # [batch-args, None(context)]
+        logits = queries.with_values(logits_values)  # [batch, None(args), None(context)]
+        return logits
+    
+    @staticmethod
+    def _mul_ragged_to_dense_to_ragged(
+        queries : tf.RaggedTensor,  # shape: # [batch, None(args), hdim]
+        keys : tf.RaggedTensor,  # shape: # [batch, None(context), hdim]
+    ) -> tf.RaggedTensor:  # shape: # [batch, None(args), None(context)]
+        """
+        Compute the inner product by converting ragged arrays to tensors first.
+        
+        This can be computationally intensive when some batch elements
+        have large numbers of arguments
+        """
+        # convert arrays to non-ragged
+        # these two line are the most computationally intensive in this method
+        # RaggedTensor.to_tensor seems to take place on the CPU.
+        queries_dense = queries.to_tensor()    # [batch, max(args), hdim]
+        keys_dense = keys.to_tensor()         # [batch, max(context), hdim]
+        
+        # multiply
+        logits_dense = tf.einsum("ijl,ikl->ijk", queries_dense, keys_dense)  # [batch, max(args), max(context)]
+
+        # convert back to ragged
+        logits_part_ragged = tf.RaggedTensor.from_tensor(logits_dense, lengths=queries.row_lengths())  # [batch, None(args), max(context)]
+        lengths = queries.with_values(tf.gather(keys.row_lengths(), queries.value_rowids()))  # [batch, None(args)]
+        logits_values = tf.RaggedTensor.from_tensor(logits_part_ragged.values, lengths=lengths.values)
+        logits = logits_part_ragged.with_values(logits_values)
+        return logits
+
+    def call(
+        self, 
+        queries: tf.RaggedTensor, # [batch, None(args), hdim]
+        keys: tf.RaggedTensor, # [batch, None(context), hdim]
+        training=False
+    ) -> tf.RaggedTensor: # [batch, None(args), None(context)]
+        """Compute the ragged inner product of ragged queries and keys.
+
+        :param queries: Queries associated with argument positions. Shape [batch, None(args), hdim]
+        :type queries: tf.RaggedTensor
+        :param keys: Keys associated with local or global context. Shape [batch, None(context), hdim]
+        :type keys: tf.RaggedTensor
+        :return: Logits.  Shape [batch, None(args), None(context)]
+        :rtype: tf.RaggedTensor
+        """
+        # TODO(jrute): Clean up row split types to be consistent across model code
+        queries = queries.with_row_splits_dtype(tf.int64)
+        keys = keys.with_row_splits_dtype(tf.int64)
+        if self.method == "map_fn":
+            return self._mul_map_fn(queries, keys)
+        elif self.method == "broadcast_ragged":
+            return self._mul_broadcast_ragged(queries, keys)
+        elif self.method == "broadcast_ragged2":
+            return self._mul_broadcast_ragged2(queries, keys)
+        elif self.method == "ragged_to_dense_to_ragged":
+            return self._mul_ragged_to_dense_to_ragged(queries, keys)
+        else:
+            raise Exception(f"Unsupported multiplication method: {self.method}")
+
+class QueryKeyMulGlobal(tf.keras.layers.Layer):
+    """Layer for computing global logits.
+
+    Take inner product of tensors.  If using cosine similarity, 
+    then unit normalize before the inner product and divide by a
+    learned temperature tensor.  (The temperature parameter is 
+    because cosine similarity otherwise only produces logits between
+    -1 and 1.)
+
+    :param name: layer name
+    :type name: str
+    :param cosine_similarity: Whether to use cosine similarlity with learned temperature parameter.
+    :type name: str
+    """
+    def __init__(
+        self,
+        name="query_key_mul_global",
+        cosine_similarity: bool = True,
+        temp: Optional[tf.Variable] = None,
+        **kwargs
+    ):
+        super().__init__(name=name, **kwargs)
+        self._cosine_similarity = cosine_similarity
+        if self._cosine_similarity:
+            # since cosine similarity is between -1.0 and 1.0
+            # we add a learned temperature parameter
+            # so logits can be in a wider or narrower range -1/temp to 1/temp
+
+            assert temp is not None
+            self._temp = temp
+        self.query_key_mul = QueryKeyMul()
+
+    def unit_normalize_tensor(self, x: tf.Tensor) ->  tf.Tensor:
+        x_norm = tf.norm(x, axis=-1, keepdims=True)
+        return x / x_norm
+
+    def unit_normalize_ragged(self, rt: tf.RaggedTensor) -> tf.RaggedTensor:
+        return tf.ragged.map_flat_values(self.unit_normalize_tensor, rt)
+
+    def call(
+        self, 
+        queries: tf.RaggedTensor, # [batch, None(args), hdim]
+        keys: tf.RaggedTensor, # [batch, context, hdim]
+        training=False
+    ) -> tf.Tensor: # [batch, max(args), context]        
+        if self._cosine_similarity:
+            # normalize embeddings before taking inner product
+            keys = self.unit_normalize_ragged(keys)
+            queries = self.unit_normalize_ragged(queries)
+            
+        logits = self.query_key_mul(queries, keys)
+
+        if self._cosine_similarity:
+            logits = logits / self._temp
+        
+        return logits
+
+
 class LocalArgumentPrediction(TacticPrediction):
     """
     Wrapper for the base tactic plus local argument prediction tasks.
@@ -668,10 +921,10 @@ class LocalArgumentPrediction(TacticPrediction):
         return config
 
     @staticmethod
-    def _local_arguments_logits(scalar_proofstate_graph: tfgnn.GraphTensor,
-                                hidden_graph: tfgnn.GraphTensor,
-                                hidden_state_sequences: tf.Tensor
-                                ) -> tf.Tensor:
+    def _local_context_hidden(
+        scalar_proofstate_graph: tfgnn.GraphTensor,
+        hidden_graph: tfgnn.GraphTensor,
+    ) -> tf.RaggedTensor:  # [batch_size, None(local_context), hidden_size]
         """
         Computes logits for local arguments from the hidden states and the local context node ids.
         """
@@ -689,23 +942,8 @@ class LocalArgumentPrediction(TacticPrediction):
 
         # the hidden states for the nodes in the local context
         # [ batch_size, None(num_context_nodes), hidden_size ]
-        context_node_hidden_states = tf.gather(hidden_graph.node_sets['node']['hidden_state'],
+        return tf.gather(hidden_graph.node_sets['node']['hidden_state'],
                                                local_context_ids).with_row_splits_dtype(tf.int64)
-
-        # the logits for each local context node to be each local argument
-        # [ batch_size, max(num_arguments), max(num_context_nodes) ]
-        arguments_logits = tf.matmul(hidden_state_sequences,
-                                     context_node_hidden_states.to_tensor(),
-                                     transpose_b=True)
-
-        # a mask for the local context nodes that actually exist
-        # [ batch_size,  max(num_context_nodes) ]
-        context_mask = tf.cast(tf.zeros_like(scalar_proofstate_graph.context['local_context_ids']),
-                               dtype=tf.float32).to_tensor(-float('inf'))
-
-        # the masked logits
-        # [ batch_size, max(num_arguments), max(num_context_nodes) ]
-        return arguments_logits + tf.expand_dims(context_mask, axis=1)
 
     def _hidden_state_sequences(self, hidden_graph: tfgnn.GraphTensor, tactic: tf.Tensor) -> tf.RaggedTensor:
         num_arguments = tf.gather(tf.constant(self._graph_constants.tactic_index_to_numargs, dtype=tf.int64), tactic)
@@ -716,11 +954,6 @@ class LocalArgumentPrediction(TacticPrediction):
         num_arguments = tf.shape(logits)[1]
         num_logits = tf.shape(logits)[2]
         return tf.reshape(logits, shape=(tactic_expand_bound, -1, num_arguments, num_logits))
-
-    @classmethod
-    def _reshape_global_inference_logits(cls, logits: tf.Tensor, tactic_expand_bound: int, dyn_global_context: tf.RaggedTensor) -> tf.Tensor:
-        global_logits = cls._reshape_inference_logits(logits, tactic_expand_bound)
-        return tf.gather(global_logits, dyn_global_context[0], axis=3)
 
     def create_train_model(self) -> tf.keras.Model:
         """
@@ -857,6 +1090,14 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
             embedding_matrix=self.graph_embedding.get_node_embeddings(),
             cosine_similarity=self._global_cosine_similarity
         )
+        self.global_embeddings = GlobalEmbeddings(
+            global_embeddings_layer=self.global_arguments_logits,
+            dynamic_global_context=self._dynamic_global_context
+        )
+        self.global_logits = QueryKeyMulGlobal(
+            cosine_similarity=self._global_cosine_similarity,
+            temp=self.global_arguments_logits._temp if self._global_cosine_similarity else None
+        )
 
         # we use trivial lambda layers to appropriately rename outputs
         self.local_arguments_logits_output = tf.keras.layers.Lambda(lambda x: x, name=self.LOCAL_ARGUMENTS_LOGITS)
@@ -915,37 +1156,50 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
         norm = -tf.math.log(local_arguments_logits_norm + global_arguments_logits_norm)
         return local_arguments_logits + norm, global_arguments_logits + norm
 
-    def convert_logits_to_ragged(self, pair) -> tf.RaggedTensor:
-        # logits: [batch_size, max(args), context]
-        #   - context is the full context (expanded to max size in case of local args)
-        # context_ids: [batch_size, None(context)]
-        #   - None(context) is the available context
-        # arg_cnt: [batch_size]
-        logits, context_ids, arg_cnts, label = pair
+    def _ragged_log_softmax_double(
+        self,
+        logits0: tf.RaggedTensor,  # [batch_dim, (ragged_dim)]
+        logits1: tf.RaggedTensor,  # [batch_dim, (ragged_dim)]
+    ) -> tuple[tf.RaggedTensor, tf.RaggedTensor]:  # [batch_dim, (ragged_dim)]
+
+        # subtract off max value to make stable 
+        max_logits0 = tf.expand_dims(tf.reduce_max(logits0, axis=-1), -1)  # [total(args), 1]
+        max_logits1 = tf.expand_dims(tf.reduce_max(logits1, axis=-1), -1)  # [total(args), 1]
+        max_logits = tf.maximum(max_logits0, max_logits1)
+        logits0 = logits0 - max_logits  # [batch_dim, (ragged_dim)]
+        logits1 = logits1 - max_logits  # [batch_dim, (ragged_dim)]
+
+        # elementwise exp
+        exp_logits0 = tf.math.exp(logits0)  # [batch_dim, (ragged_dim)]
+        exp_logits1 = tf.math.exp(logits1)  # [batch_dim, (ragged_dim)]
+        sum_exp0 = tf.expand_dims(tf.reduce_sum(exp_logits0, axis=-1), -1)  # [batch_dim, 1]
+        sum_exp1 = tf.expand_dims(tf.reduce_sum(exp_logits1, axis=-1), -1)  # [batch_dim, 1]
+        sum_exp = sum_exp0 + sum_exp1  # [batch_dim, 1]
+
+        # divide in log space to get log probability
+        log_sum = tf.math.log(sum_exp)  # [batch_dim, 1]
+        return (logits0 - log_sum, logits1 - log_sum) # [batch_dim, (ragged_dim)]
+
+    def _log_softmax_logits(
+        self,
+        local_arguments_logits: tf.RaggedTensor,  # [batch, None(args), None(context)]
+        global_arguments_logits: tf.RaggedTensor,  # [batch, None(args), None(context)]
+    ) -> Tuple[tf.RaggedTensor, tf.RaggedTensor]:  # ([batch, None(args), None(context)], [batch, None(args), None(context)])
+        """
+        Normalize local and global arguments logits making sure the log_softmax is numerically stable.
+        """
+        # perform softmax on inner ragged logits
+        # [total(args), None(local_context)], # [total(args), None(global_context)]
+        local_logits_values, global_logits_values = \
+            self._ragged_log_softmax_double(local_arguments_logits.values, global_arguments_logits.values)
         
-        # make arg dimension ragged in global_logits
-        # shape: [batch_size, None(args), context]
-        logits_ = tf.RaggedTensor.from_tensor(logits, lengths=tf.cast(arg_cnts, tf.int64))
+        # shape back into double ragged tensors
+        # [total(args), None(local_context)]
+        local_logits = local_arguments_logits.with_values(local_logits_values)
+        # [total(args), None(global_context)]
+        global_logits = global_arguments_logits.with_values(global_logits_values)
 
-        # duplicate context list for every arg position
-        # shape: [batch_size, None(args), None(context)]
-        context_ids_ = logits_.with_values(
-            tf.gather(context_ids, logits_.value_rowids()).with_row_splits_dtype(tf.int64)
-        )
-
-        # make cxt dimension ragged
-        # shape: [batch_size, None(args), None(context)]
-        if label == "global":
-            # for global_logits, must select available args (in given order)
-            logits_ragged = tf.gather(logits_, context_ids_, batch_dims=2)
-        else:
-            # local logits are already in the correct order.  Just filter extra -inf values at the end of each row.
-            logits_ragged = context_ids_.with_values(
-                tf.RaggedTensor.from_tensor(logits_.values, lengths=context_ids_.values.row_lengths())
-            )
-
-        
-        return logits_ragged
+        return local_logits, global_logits
 
     def create_train_model(self) -> tf.keras.Model:
         """
@@ -963,36 +1217,27 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
 
         hidden_state_sequences = self._hidden_state_sequences(hidden_graph=hidden_graph,
                                                               tactic=scalar_proofstate_graph.context['tactic'])
-        arg_cnts = hidden_state_sequences.row_lengths()
+        # [batch, None(args), hdim]
         local_hidden_state_sequences = self.local_arguments_head(hidden_state_sequences)
-        local_arguments_logits = self._local_arguments_logits(
+        # [batch, None(context), hdim]
+        local_context_hidden = self._local_context_hidden(
             scalar_proofstate_graph,
             hidden_graph,
-            local_hidden_state_sequences.to_tensor()
         )
+        # [batch_size, None(args), None(context)]
+        local_arguments_logits = QueryKeyMul()(local_hidden_state_sequences, local_context_hidden)
         
+        # [batch, None(args), hdim]
         global_hidden_state_sequences = self.global_arguments_head(hidden_state_sequences)
-        global_arguments_logits = self.global_arguments_logits(global_hidden_state_sequences.to_tensor())  # noqa
-        if self._dynamic_global_context:
-            global_arguments_logits_mask = self._global_arguments_logits_mask(scalar_proofstate_graph=scalar_proofstate_graph, global_context_size=len(self._graph_constants.global_context))
-            global_arguments_logits += tf.expand_dims(global_arguments_logits_mask, axis=1)
+        # [batch, context, hdim]
+        global_embeddings = self.global_embeddings(scalar_proofstate_graph.context['global_context_ids'])
+        # [batch, None(args), None(context)]
+        global_arguments_logits = self.global_logits(queries=global_hidden_state_sequences, keys=global_embeddings)
+        
+        normalized_local_arguments_logits, normalized_global_arguments_logits = self._log_softmax_logits(local_arguments_logits=local_arguments_logits, global_arguments_logits=global_arguments_logits)
 
-        normalized_local_arguments_logits, normalized_global_arguments_logits = self._normalize_logits(local_arguments_logits=local_arguments_logits, global_arguments_logits=global_arguments_logits)
-
-        # TODO(jrute): These are temporary conversions from non-ragged to ragged tensors.
-        new_local_arguments_logits = tf.keras.layers.Lambda(self.convert_logits_to_ragged)((
-            normalized_local_arguments_logits, 
-            scalar_proofstate_graph.context['local_context_ids'], 
-            arg_cnts,
-            "local"))
-        new_global_arguments_logits = tf.keras.layers.Lambda(self.convert_logits_to_ragged)((
-            normalized_global_arguments_logits, 
-            scalar_proofstate_graph.context['global_context_ids'], 
-            arg_cnts,
-            "global"))
-
-        local_arguments_logits_output = self.local_arguments_logits_output(new_local_arguments_logits)
-        global_arguments_logits_output = self.global_arguments_logits_output(new_global_arguments_logits)
+        local_arguments_logits_output = self.local_arguments_logits_output(normalized_local_arguments_logits)
+        global_arguments_logits_output = self.global_arguments_logits_output(normalized_global_arguments_logits)
         
         return GlobalArgumentModel(inputs=proofstate_graph,
                                    outputs={self.TACTIC_LOGITS: tactic_logits,
@@ -1044,26 +1289,42 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
         hidden_graph = repeat_scalar_graph(hidden_graph)  # noqa [ PyCallingNonCallable ]
 
         hidden_state_sequences = self._hidden_state_sequences(hidden_graph=hidden_graph, tactic=tactic)
+        # [batch, None(args), hdim]
         local_hidden_state_sequences = self.local_arguments_head(hidden_state_sequences)
-        local_arguments_logits = self._local_arguments_logits(
+        # [batch, None(context), hdim]
+        local_context_hidden = self._local_context_hidden(
             scalar_proofstate_graph,
             hidden_graph,
-            local_hidden_state_sequences.to_tensor()
         )
+        # [batch, None(args), None(context)]
+        local_arguments_logits = QueryKeyMul()(local_hidden_state_sequences, local_context_hidden)
+        
+        # [batch, None(args), hdim]
         global_hidden_state_sequences = self.global_arguments_head(hidden_state_sequences)
-        global_arguments_logits = self.global_arguments_logits(global_hidden_state_sequences.to_tensor())  # noqa
-
-        normalized_local_arguments_logits, normalized_global_arguments_logits = self._normalize_logits(
+        # [batch, context, hdim]
+        global_embeddings = self.global_embeddings(
+            scalar_proofstate_graph.context['global_context_ids'],
+            inference=True
+        )
+        # [batch, None(args), None(context)]
+        global_arguments_logits = self.global_logits(queries=global_hidden_state_sequences, keys=global_embeddings)
+        
+        # [batch, None(args), None(context)], [batch, None(args), None(context)]
+        normalized_local_arguments_logits, normalized_global_arguments_logits = self._log_softmax_logits(
             local_arguments_logits=local_arguments_logits,
             global_arguments_logits=global_arguments_logits)
+        
+        # TODO: Temporary
+        # [batch, max(args), max(context)]
+        normalized_local_arguments_logits = convert_ragged_logits_to_dense(normalized_local_arguments_logits)
+        normalized_global_arguments_logits = convert_ragged_logits_to_dense(normalized_global_arguments_logits)
 
+        # [tactic_expand_bound, batch, max(args), max(local_context)]
         normalized_local_arguments_logits = self._reshape_inference_logits(logits=normalized_local_arguments_logits,
                                                                            tactic_expand_bound=tactic_expand_bound)
-        normalized_global_arguments_logits = self._reshape_global_inference_logits(
-            logits=normalized_global_arguments_logits,
-            tactic_expand_bound=tactic_expand_bound,
-            dyn_global_context=scalar_proofstate_graph.context['global_context_ids'])
-                                                                            
+        # [tactic_expand_bound, batch, max(args), dynamic_global_context]
+        normalized_global_arguments_logits = self._reshape_inference_logits(logits=normalized_global_arguments_logits,
+                                                                           tactic_expand_bound=tactic_expand_bound)
 
         return tf.keras.Model(inputs={self.PROOFSTATE_GRAPH: proofstate_graph, self.TACTIC_MASK: tactic_mask},
                               outputs={self.TACTIC: tf.transpose(top_k_indices),
