@@ -53,6 +53,11 @@ responses:
     - arguments: []
       confidence: 0.49182156017962586
       ident: 4249207563281686782
+- _type: CheckAlignmentResponse
+  contents:
+    unknown_definitions:
+    - node-0-3-Tactician.Ltac1.Record.private_constant_placeholder
+    unknown_tactics: []
 - _type: TacticPredictionsGraph
   contents:
     predictions:
@@ -107,6 +112,11 @@ responses:
     - arguments: []
       confidence: 0.49182156017962586
       ident: 4249207563281686782
+- _type: CheckAlignmentResponse
+  contents:
+    unknown_definitions:
+    - node-0-4-Tactician.Ltac1.Record.private_constant_placeholder
+    unknown_tactics: []
 - _type: TacticPredictionsGraph
   contents:
     predictions:
@@ -197,6 +207,11 @@ responses:
     - arguments: []
       confidence: 0.49688526561841795
       ident: 7975258090277046354
+- _type: CheckAlignmentResponse
+  contents:
+    unknown_definitions:
+    - node-0-5-Tactician.Ltac1.Record.private_constant_placeholder
+    unknown_tactics: []
 - _type: TacticPredictionsGraph
   contents:
     predictions:

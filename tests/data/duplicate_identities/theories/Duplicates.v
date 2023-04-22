@@ -16,6 +16,8 @@ Variable A : Prop.
 Definition t : A -> A.
 try (synth) || (intro; assumption).
 Qed.
+
+Tactician Neural Alignment.
 End X.
 
 Section X.
@@ -23,6 +25,8 @@ Variable A : Prop. (* Duplicate! *)
 Definition u : A -> A.
 try (synth) || (intro; assumption).
 Qed.
+
+Tactician Neural Alignment.
 End X.
 
 Module Type Y.
@@ -33,6 +37,8 @@ Module M1(MyY : Y).
 Definition t : MyY.B -> MyY.B.
 try (synth) || (intro; assumption).
 Qed.
+
+Tactician Neural Alignment.
 End M1.
 
 Definition somethinguseless := Prop.
@@ -41,4 +47,6 @@ Module M2(MyY : Y). (* Duplicate MyY.B *)
 Definition t : MyY.B -> MyY.B.
 try (synth) || (intro; assumption).
 Qed.
+
+
 End M2.
