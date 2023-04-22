@@ -179,8 +179,9 @@ class LoggingCounters:
         )
 
 class DynamicDataServer(AbstractDataServer):
-    def __init__(self, graph_constants: GraphConstants):
+    def __init__(self, graph_constants: GraphConstants, paranoic = True):
         super().__init__(graph_constants.data_config)
+        self.paranoic = paranoic # checks consistency on each update
 
         self._tactic_i_to_numargs = list(graph_constants.tactic_index_to_numargs)
         self._tactic_i_to_hash = list(graph_constants.tactic_index_to_hash)
@@ -193,62 +194,114 @@ class DynamicDataServer(AbstractDataServer):
         self._node_i_to_ident = graph_constants.label_to_ident
         self._node_i_in_spine = graph_constants.label_in_spine
         self._train_num_nodes = len(self._node_i_to_name)
+        assert len(self._node_i_to_ident) == self._train_num_nodes
+        assert len(self._node_i_in_spine) == self._train_num_nodes
         self._last_num_nodes = None
         self._context_stack = []
 
         # extra data
         
         self._def_ident_to_i = {
-            name : i
-            for i,name in enumerate(self._node_i_to_ident)
+            ident : i
+            for i,ident in enumerate(self._node_i_to_ident)
             if i >= self._base_node_label_num
         }
 
         self._def_node_to_i = dict()
         self._globarg_i_to_node = []
         self.global_defs = []
+        self._global_defs_set = set()
 
+        if self.paranoic: self.consistency_check()
+        
     def align_definitions(self, definitions):
 
         self._context_stack.append((
-            self.global_defs,
-            self._globarg_i_to_node,
-            self._def_node_to_i,
-            self._last_num_nodes
+            len(self.global_defs),
+            len(self._node_i_to_name)
         ))
-        self._last_num_nodes = len(self._node_i_to_name)
-
-        self._globarg_i_to_node = list(self._globarg_i_to_node)
-        global_defs = list(self.global_defs)
-        self._def_node_to_i = dict(self._def_node_to_i)
 
         for d in definitions:
-            i = self._def_ident_to_i.get(d.node.identity, None)
-            if i is None:
-                i = self._register_definition(d)
+            node_i = self._def_ident_to_i.get(d.node.identity, None)
+            if node_i is None:
+                node_i = self._register_definition(d)
+                self._def_ident_to_i[d.node.identity] = node_i
             else:
-                self._def_node_to_i[d.node] = i
+                self._def_node_to_i[d.node] = node_i
             self._globarg_i_to_node.append(d.node)
-            #self._globarg_i_to_node[i] = d.node
-            global_defs.append(i)
+            self.global_defs.append(node_i)
 
-        global_defs = np.array(global_defs, dtype = np.int32)
-        self.global_defs = global_defs
+            assert node_i not in self._global_defs_set, "Doubled node"
+            self._global_defs_set.add(node_i)
+
+        if self.paranoic: self.consistency_check()
 
     def is_untrained_definition(self, node):
         return self._def_node_to_i[node] >= self._train_num_nodes
 
     def pop(self):
-        del self._node_i_to_name[self._last_num_nodes:]
-        del self._node_i_to_ident[self._last_num_nodes:]
-        del self._node_i_in_spine[self._last_num_nodes:]
-
         (
-            self.global_defs,
-            self._globarg_i_to_node,
-            self._def_node_to_i,
-            self._last_num_nodes
+            num_nodes_active,
+            num_nodes_total,
         ) = self._context_stack.pop()
+
+        for ident in self._node_i_to_ident[num_nodes_total:]:
+            del self._def_ident_to_i[ident]
+        del self._node_i_to_name[num_nodes_total:]
+        del self._node_i_to_ident[num_nodes_total:]
+        del self._node_i_in_spine[num_nodes_total:]
+
+        for node in self._globarg_i_to_node[num_nodes_active:]:
+            del self._def_node_to_i[node]
+        for node_i in self.global_defs[num_nodes_active:]:
+            self._global_defs_set.remove(node_i)
+
+        del self._globarg_i_to_node[num_nodes_active:]
+        del self.global_defs[num_nodes_active:]
+
+        if self.paranoic: self.consistency_check()
+
+    def consistency_check(self):
+        """
+        (debugging) Checks concictency of:
+            self._node_i_to_name
+            self._node_i_to_ident
+            self._node_i_in_spine
+            self._global_defs_set
+            self._globarg_i_to_node
+            self._def_ident_to_i
+            self.global_defs
+            self._def_node_to_i
+        Another purpose of this function is documenting the invariants
+        we want to preserve.
+        """
+
+        # check node arrays sizes
+        num_nodes_total = len(self._node_i_to_name) # trained & aligned nodes together
+        assert num_nodes_total == len(self._node_i_to_ident)
+        assert num_nodes_total == len(self._node_i_in_spine)
+        num_nodes_active = len(self.global_defs) # only aligned nodes
+        assert num_nodes_active == len(self._globarg_i_to_node)
+
+        # check self._global_defs_set
+        assert len(self._global_defs_set) == num_nodes_active
+        assert self._global_defs_set == set(self.global_defs)
+
+        # check self.global_defs, self._globarg_i_to_node
+        assert len(self._def_node_to_i) == num_nodes_active
+        assert self._def_node_to_i == dict(zip(self._globarg_i_to_node, self.global_defs))
+
+        # check self._def_ident_to_i
+        assert len(self._def_ident_to_i) == num_nodes_total - self._base_node_label_num
+        assert self._def_ident_to_i == {
+            ident : i
+            for i,ident in enumerate(self._node_i_to_ident)
+            if i >= self._base_node_label_num
+        }
+
+        # check identities of active nodes
+        for node, node_i in self._def_node_to_i.items():
+            assert node.identity == self._node_i_to_ident[node_i]
 
     def proofstate(self, root, local_context):
         graph, node_to_i = self._downward_closure([root])
@@ -282,27 +335,28 @@ class PredictServer:
         self.log_cnts = log_cnts
         self.current_allowed_tactics = None
         self.response_history = response_history
-        self.allowed_tactics_stack = []
+        self.msg_stack = []
 
-    def _enter_coq_context(self, definitions: OnlineDefinitionsReader, tactics):
-        
-        # tactics
-
-        self.allowed_tactics_stack.append(self.current_allowed_tactics)
+    def _calculate_current_allowed_tactics(self, msg : GlobalContextMessage):
         self.current_allowed_tactics = []
-        for t in tactics:
+        for t in msg.tactics:
             i = self.data_server._tactic_to_i.get(t.ident, None)
             if i is not None:
-                self.current_allowed_tactics.append(i)
+                self.current_allowed_tactics.append(i)        
 
-        # definitions
+    def _enter_coq_context(self, msg : GlobalContextMessage):
 
-        self.data_server.align_definitions(definitions.definitions(full = False))
+        self.msg_stack.append(msg)
+        self._calculate_current_allowed_tactics(msg)
+
+        # definition alignment
+
+        self.data_server.align_definitions(msg.definitions.definitions(full = False))
         #print(self.data_server._def_node_to_i)
         #print([d.node for d in definitions.definitions()])
-        for d in definitions.definitions():
-            if d.node not in self.data_server._def_node_to_i:
-                raise Exception("A missing definition node")
+        # for d in definitions.definitions():
+        #     if d.node not in self.data_server._def_node_to_i:
+        #         raise Exception("A missing definition node")
 
         if len(self.data_server.global_defs) > 0:
             static_global_context = np.arange(max(self.data_server.global_defs)+1, dtype=np.uint32)
@@ -318,21 +372,21 @@ class PredictServer:
 
         # definition recalculation
         if self.config.update == "all":
-            def_clusters_for_update = list(definitions.clustered_definitions(full = False))
-            #print("updating", len(def_clusters_for_update), "all definitions")
-            prev_defined_nodes = self.data_server._base_node_label_num
+            def_clusters_for_update = list(msg.definitions.clustered_definitions(full = False))
+            print("updating", len(def_clusters_for_update), "all definitions")
+            #prev_defined_nodes = self.data_server._base_node_label_num
             logger.info(f"Prepared for update all {len(def_clusters_for_update)} definition clusters")
         elif self.config.update == "new":
             def_clusters_for_update = [
-                cluster for cluster in definitions.clustered_definitions(full = False)
+                cluster for cluster in msg.definitions.clustered_definitions(full = False)
                 if self.data_server.is_untrained_definition(cluster[0].node)
             ]
-            prev_defined_nodes = self.data_server._last_num_nodes
+            #prev_defined_nodes = self.data_server._last_num_nodes
             logger.info(f"Prepared for update {len(def_clusters_for_update)} definition clusters containing unaligned definitions")
         else:
             assert self.config.update is None
             def_clusters_for_update = []
-            prev_defined_nodes = None
+            #prev_defined_nodes = None
             logger.info(f"No update of the definition clusters requested")
         # definitions.clustered_definitions is in reverse order of dependencies, so we reverse our list
         def_clusters_for_update.reverse()
@@ -387,13 +441,14 @@ class PredictServer:
 
     def _exit_coq_context(self):
 
-        self.current_allowed_tactics = self.allowed_tactics_stack.pop()
         self.data_server.pop()
+        msg = self.msg_stack.pop()
+        self._calculate_current_allowed_tactics(msg)
 
     @contextmanager
     def coq_context(self, msg: GlobalContextMessage):
         # print(">>>>> ENTER")
-        self._enter_coq_context(msg.definitions, msg.tactics)
+        self._enter_coq_context(msg)
         yield
         # print("<<<<< EXIT")
         self._exit_coq_context()
@@ -409,9 +464,9 @@ class PredictServer:
                 arguments.append(self.data_server._globarg_i_to_node[arg_index])
                 # print("Global", arg_index, self.data_server._def_node_to_i[arguments[-1]])
 
-        # print("  tactic:", self.data_server._tactic_i_to_hash[tactic])
-        # print("  arguments:", arguments)
-        # print("  confidence:", confidence)
+        print("  tactic:", self.data_server._tactic_i_to_hash[tactic])
+        print("  arguments:", arguments)
+        print("  confidence:", confidence)
         return TacticPredictionGraph(
             int(self.data_server._tactic_i_to_hash[tactic]),
             arguments,
