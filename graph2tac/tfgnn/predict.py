@@ -224,7 +224,7 @@ class TFGNNPredict(Predict):
             # already have sufficient array
             return
 
-        new_node_label_num += round(new_node_label_num)
+        new_node_label_num += round(reserve*new_node_label_num)
         self.graph_constants.global_context = list(range(new_node_label_num))
 
         logger.info(f'extending global context from {self.graph_constants.node_label_num} to {new_node_label_num} elements')
@@ -234,6 +234,9 @@ class TFGNNPredict(Predict):
         if self.definition_task is not None:
             self.definition_task._graph_embedding = new_graph_emb_layer
         self.graph_constants.node_label_num = new_node_label_num
+        self.prediction_task.global_arguments_logits.update_embedding_matrix(
+            embedding_matrix=self.prediction_task.graph_embedding.get_node_embeddings()
+        )
 
         # clear the inference model cache to force re-creation of the inference models using the new layers
         self._inference_model_cache = {}
