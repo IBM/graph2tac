@@ -17,6 +17,8 @@ import contextlib
 import yaml
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
+#np.set_printoptions(linewidth=np.inf, threshold=sys.maxsize)
+
 from pytact.data_reader import (capnp_message_generator, capnp_message_generator_from_file,
                                 TacticPredictionGraph, TacticPredictionsGraph,
                                 GlobalContextMessage, CheckAlignmentMessage, CheckAlignmentResponse,
@@ -202,9 +204,9 @@ class DynamicDataServer(AbstractDataServer):
             if i >= self._base_node_label_num
         }
 
-        self._def_node_to_i = None
-        self._globarg_i_to_node = None
-        self.global_defs = None
+        self._def_node_to_i = dict()
+        self._globarg_i_to_node = []
+        self.global_defs = []
 
     def align_definitions(self, definitions):
 
@@ -216,9 +218,10 @@ class DynamicDataServer(AbstractDataServer):
         ))
         self._last_num_nodes = len(self._node_i_to_name)
 
-        self._globarg_i_to_node = []
-        global_defs = []
-        self._def_node_to_i = dict()
+        self._globarg_i_to_node = list(self._globarg_i_to_node)
+        global_defs = list(self.global_defs)
+        self._def_node_to_i = dict(self._def_node_to_i)
+
         for d in definitions:
             i = self._def_ident_to_i.get(d.node.identity, None)
             if i is None:
@@ -282,7 +285,7 @@ class PredictServer:
         self.allowed_tactics_stack = []
 
     def _enter_coq_context(self, definitions: OnlineDefinitionsReader, tactics):
-
+        
         # tactics
 
         self.allowed_tactics_stack.append(self.current_allowed_tactics)
@@ -294,7 +297,12 @@ class PredictServer:
 
         # definitions
 
-        self.data_server.align_definitions(definitions.definitions())
+        self.data_server.align_definitions(definitions.definitions(full = False))
+        #print(self.data_server._def_node_to_i)
+        #print([d.node for d in definitions.definitions()])
+        for d in definitions.definitions():
+            if d.node not in self.data_server._def_node_to_i:
+                raise Exception("A missing definition node")
 
         if len(self.data_server.global_defs) > 0:
             static_global_context = np.arange(max(self.data_server.global_defs)+1, dtype=np.uint32)
@@ -310,13 +318,13 @@ class PredictServer:
 
         # definition recalculation
         if self.config.update == "all":
-            def_clusters_for_update = list(definitions.clustered_definitions())
-            print("updating", len(def_clusters_for_update), "all definitions")
+            def_clusters_for_update = list(definitions.clustered_definitions(full = False))
+            #print("updating", len(def_clusters_for_update), "all definitions")
             prev_defined_nodes = self.data_server._base_node_label_num
             logger.info(f"Prepared for update all {len(def_clusters_for_update)} definition clusters")
         elif self.config.update == "new":
             def_clusters_for_update = [
-                cluster for cluster in definitions.clustered_definitions()
+                cluster for cluster in definitions.clustered_definitions(full = False)
                 if self.data_server.is_untrained_definition(cluster[0].node)
             ]
             prev_defined_nodes = self.data_server._last_num_nodes
@@ -356,8 +364,18 @@ class PredictServer:
                 #     )
                 #     defined_nodes.add(n)
 
-                print("Update:", new_defined_nodes)
+                # print("Names:")
+                # for n,x in zip(new_defined_nodes, cluster):
+                #     print(f"{n} = {x.name}, {x.node.identity}")
+
+                # print("Before:")
+                # for n in new_defined_nodes:
+                #     print(f"{n}: {self.model.prediction_task.graph_embedding.get_node_embeddings()[n][:10]}")
+                # print("Update:", new_defined_nodes)
                 self.model.compute_new_definitions([cluster_state])
+                # print("After:")
+                # for n in new_defined_nodes:
+                #     print(f"{n}: {self.model.prediction_task.graph_embedding.get_node_embeddings()[n]}")
 
             logger.info(f"Definition clusters updated.")
         else:
@@ -374,8 +392,10 @@ class PredictServer:
 
     @contextmanager
     def coq_context(self, msg: GlobalContextMessage):
+        # print(">>>>> ENTER")
         self._enter_coq_context(msg.definitions, msg.tactics)
         yield
+        # print("<<<<< EXIT")
         self._exit_coq_context()
 
     def _decode_action(self, action: NDArray[np.int_], confidence: np.float_, proof_state: ProofState) -> TacticPredictionGraph:
@@ -383,10 +403,15 @@ class PredictServer:
         arguments = []
         for arg_type, arg_index in action[1:]:
             if arg_type == 0: # local argument
+                # print("Local", arg_index)
                 arguments.append(proof_state.context[arg_index])
             else:
                 arguments.append(self.data_server._globarg_i_to_node[arg_index])
+                # print("Global", arg_index, self.data_server._def_node_to_i[arguments[-1]])
 
+        # print("  tactic:", self.data_server._tactic_i_to_hash[tactic])
+        # print("  arguments:", arguments)
+        # print("  confidence:", confidence)
         return TacticPredictionGraph(
             int(self.data_server._tactic_i_to_hash[tactic]),
             arguments,
@@ -397,8 +422,16 @@ class PredictServer:
         if self.current_allowed_tactics is None:
             raise Exception("Cannot predict outside 'with predict_server.coq_context()'")
 
+        # embs = self.model.prediction_task.graph_embedding.get_node_embeddings()
+        # print("Nodes used on input:")
+        proof_state_graph = self.data_server.proofstate(proof_state.root, proof_state.context)
+        # for n in sorted(set(proof_state.graph.nodes)):
+        #     print(f"{n}: {embs[n]}")
+        # print("Nodes in global context:")
+        # for n in proof_state.context.global_context:
+        #     print(f"{n}: {embs[n]}")
         actions, confidences = self.model.ranked_predictions(
-            state=self.data_server.proofstate(proof_state.root, proof_state.context),
+            state=proof_state_graph,
             tactic_expand_bound=self.config.tactic_expand_bound,
             total_expand_bound=self.config.total_expand_bound,
             allowed_model_tactics=self.current_allowed_tactics,
@@ -408,6 +441,7 @@ class PredictServer:
         # use only top-k
         actions = actions[:self.config.search_expand_bound]
         confidences = confidences[:self.config.search_expand_bound]
+        # print("Confidences:", confidences, flush = True)
         return TacticPredictionsGraph([
             self._decode_action(action, confidence, proof_state)
             for action, confidence in zip(actions, confidences)
