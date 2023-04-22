@@ -231,7 +231,7 @@ class DynamicDataServer(AbstractDataServer):
             self._globarg_i_to_node.append(d.node)
             self.global_defs.append(node_i)
 
-            assert node_i not in self._global_defs_set, "Doubled node"
+            assert node_i not in self._global_defs_set, "Two nodes of the same identity in current global context"
             self._global_defs_set.add(node_i)
 
         if self.paranoic: self.consistency_check()
@@ -292,7 +292,6 @@ class DynamicDataServer(AbstractDataServer):
         assert self._def_node_to_i == dict(zip(self._globarg_i_to_node, self.global_defs))
 
         # check self._def_ident_to_i
-        assert len(self._def_ident_to_i) == num_nodes_total - self._base_node_label_num
         assert self._def_ident_to_i == {
             ident : i
             for i,ident in enumerate(self._node_i_to_ident)
@@ -322,6 +321,17 @@ class DynamicDataServer(AbstractDataServer):
             metadata=dummy_proofstate_info
         )
 
+    def check_alignment(self, tactics, definitions):
+        unaligned_tactics = [
+            tactic.ident for tactic in tactics
+            if tactic.ident not in self.data_server._tactic_to_i
+        ]
+        unaligned_definitions = [
+            d for d in definitions
+            if self._def_ident_to_i.get(d.node.identity, self._train_num_nodes) >= self._train_num_nodes
+        ]
+        return unaligned_tactics, unaligned_definitions
+    
 class PredictServer:
     def __init__(self,
                  model: Predict,
@@ -464,9 +474,9 @@ class PredictServer:
                 arguments.append(self.data_server._globarg_i_to_node[arg_index])
                 # print("Global", arg_index, self.data_server._def_node_to_i[arguments[-1]])
 
-        print("  tactic:", self.data_server._tactic_i_to_hash[tactic])
-        print("  arguments:", arguments)
-        print("  confidence:", confidence)
+        # print("  tactic:", self.data_server._tactic_i_to_hash[tactic])
+        # print("  arguments:", arguments)
+        # print("  confidence:", confidence)
         return TacticPredictionGraph(
             int(self.data_server._tactic_i_to_hash[tactic]),
             arguments,
@@ -503,15 +513,11 @@ class PredictServer:
         ])
 
     def check_alignment(self, msg: GlobalContextMessage) -> CheckAlignmentResponse:
-        unaligned_tactics = [
-            tactic.ident for tactic in msg.tactics
-            if tactic.ident not in self.data_server._tactic_to_i
-        ]
-        unaligned_definitions = [
-            d for d in msg.definitions.definitions()
-            if d.node.identity not in self.data_server._def_ident_to_i
-        ]
 
+        unaligned_tactics, unaligned_definitions = self.data_server.check_alignment(
+            msg.tactics, msg.definitions.definitions()
+        )
+        print("unaligned_definitions:", unaligned_definitions)
         return CheckAlignmentResponse(
             unknown_tactics = unaligned_tactics,
             unknown_definitions = unaligned_definitions,
