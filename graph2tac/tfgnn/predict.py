@@ -237,8 +237,7 @@ class TFGNNPredict(Predict):
 
             # update the global arguments logits head (always necessary, because the global context may shrink!)
             self.prediction_task.global_arguments_logits.update_embedding_matrix(
-                embedding_matrix=self.prediction_task.graph_embedding.get_node_embeddings(),
-                valid_indices=tf.constant(self.graph_constants.global_context, dtype=tf.int32)
+                embedding_matrix=self.prediction_task.graph_embedding.get_node_embeddings()
             )
 
             # clear the inference model cache to force re-creation of the inference models using the new layers
