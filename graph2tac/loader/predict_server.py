@@ -17,7 +17,7 @@ import contextlib
 import yaml
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
-np.set_printoptions(linewidth=np.inf, threshold=sys.maxsize)
+#np.set_printoptions(linewidth=np.inf, threshold=sys.maxsize)
 
 from pytact.data_reader import (capnp_message_generator, capnp_message_generator_from_file,
                                 TacticPredictionGraph, TacticPredictionsGraph,
@@ -208,7 +208,7 @@ class DynamicDataServer(AbstractDataServer):
         self._globarg_i_to_node = []
         self.global_defs = []
 
-    def align_definitions(self, definitions, from_start):
+    def align_definitions(self, definitions):
 
         self._context_stack.append((
             self.global_defs,
@@ -218,16 +218,9 @@ class DynamicDataServer(AbstractDataServer):
         ))
         self._last_num_nodes = len(self._node_i_to_name)
 
-        if from_start:
-            print("From start")
-            self._globarg_i_to_node = []
-            global_defs = []
-            self._def_node_to_i = dict()
-        else:
-            print("Continuation")
-            self._globarg_i_to_node = list(self._globarg_i_to_node)
-            global_defs = list(self.global_defs)
-            self._def_node_to_i = dict(self._def_node_to_i)
+        self._globarg_i_to_node = list(self._globarg_i_to_node)
+        global_defs = list(self.global_defs)
+        self._def_node_to_i = dict(self._def_node_to_i)
 
         for d in definitions:
             i = self._def_ident_to_i.get(d.node.identity, None)
@@ -304,9 +297,7 @@ class PredictServer:
 
         # definitions
 
-        full = self.config.full_definitions
-        print("Full =", full)
-        self.data_server.align_definitions(definitions.definitions(full = full), from_start = full)
+        self.data_server.align_definitions(definitions.definitions(full = False))
         #print(self.data_server._def_node_to_i)
         #print([d.node for d in definitions.definitions()])
         for d in definitions.definitions():
@@ -327,13 +318,13 @@ class PredictServer:
 
         # definition recalculation
         if self.config.update == "all":
-            def_clusters_for_update = list(definitions.clustered_definitions(full = full))
+            def_clusters_for_update = list(definitions.clustered_definitions(full = False))
             #print("updating", len(def_clusters_for_update), "all definitions")
             prev_defined_nodes = self.data_server._base_node_label_num
             logger.info(f"Prepared for update all {len(def_clusters_for_update)} definition clusters")
         elif self.config.update == "new":
             def_clusters_for_update = [
-                cluster for cluster in definitions.clustered_definitions(full = full)
+                cluster for cluster in definitions.clustered_definitions(full = False)
                 if self.data_server.is_untrained_definition(cluster[0].node)
             ]
             prev_defined_nodes = self.data_server._last_num_nodes
@@ -616,11 +607,6 @@ def parse_args() -> argparse.Namespace:
                         default=False,
                         action='store_true',
                         help="with tf_eager=True activated network may initialize faster but run slower, use carefully if you need")
-
-    parser.add_argument('--full_definitions',
-                        default=False,
-                        action='store_true',
-                        help="Ignore definition cache")
 
     parser.add_argument('--temperature',
                         type=float,
