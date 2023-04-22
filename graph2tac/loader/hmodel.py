@@ -144,10 +144,9 @@ class HPredict(Predict):
         self._label_to_idx = dict()
 
     @predict_api_debugging
-    def initialize(self, global_context: Optional[List[int]] = None) -> None:
-        if global_context is not None:
-            for idx, label in enumerate(global_context):
-                self._label_to_idx[label] = idx
+    def allocate_definitions(self, new_node_label_num : int) -> None:
+        for idx in range(new_node_label_num):
+            self._label_to_idx[idx] = idx
 
     @predict_api_debugging
     def compute_new_definitions(self, clusters: List[LoaderDefinition]) -> None:

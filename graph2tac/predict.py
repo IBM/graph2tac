@@ -86,9 +86,9 @@ class Predict:
             self._debug_message_number = 0
 
     @predict_api_debugging
-    def initialize(self, global_context: Optional[List[int]] = None) -> None:
+    def allocate_definitions(self, new_node_label_num) -> None:
         """
-        [ Public API ] Initializes the model to use a different global context than the one seen during training.
+        [ Public API ] Prepares sufficient size for (new) model's definition
 
         @param global_context: a replacement for the original global_context in the GraphConstants seen during training
         """

@@ -369,16 +369,13 @@ class PredictServer:
         #         raise Exception("A missing definition node")
 
         if len(self.data_server.global_defs) > 0:
-            static_global_context = np.arange(max(self.data_server.global_defs)+1, dtype=np.uint32)
-        else:
-            static_global_context = np.arange(1, dtype=np.uint32)
-        logger.info(f"initializing network with {len(static_global_context)} defs in global context")
-        t0 = time.time()
-
-        self.model.initialize(static_global_context)
-        t1 = time.time()
-        self.log_cnts.build_network_time = t1-t0
-        logger.info(f"Building network model completed in {self.log_cnts.build_network_time:.6f} seconds")
+            num_labels = max(self.data_server.global_defs)+1
+            logger.info(f"allocating space for {num_labels} defs")
+            t0 = time.time()
+            self.model.allocate_definitions(num_labels)
+            t1 = time.time()
+            self.log_cnts.build_network_time = t1-t0
+            logger.info(f"Allocating definitions completed in {self.log_cnts.build_network_time:.6f} seconds")
 
         # definition recalculation
         if self.config.update == "all":
