@@ -1,0 +1,7 @@
+(coq.theory
+ (name DuplicateDefinitions)
+ (package duplicate-definitions)
+  (flags (-nois))
+)
+
+(include_subdirs qualified)
