@@ -1,3 +1,0 @@
-total_epochs: 2
-batch_size: 8
-tf_seed: 0
