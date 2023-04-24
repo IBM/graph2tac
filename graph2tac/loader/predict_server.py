@@ -380,21 +380,18 @@ class PredictServer:
         # definition recalculation
         if self.config.update == "all":
             def_clusters_for_update = list(msg.definitions.clustered_definitions(full = False))
-            print("updating", len(def_clusters_for_update), "all definitions")
-            #prev_defined_nodes = self.data_server._base_node_label_num
             logger.info(f"Prepared for update all {len(def_clusters_for_update)} definition clusters")
         elif self.config.update == "new":
             def_clusters_for_update = [
                 cluster for cluster in msg.definitions.clustered_definitions(full = False)
                 if self.data_server.is_untrained_definition(cluster[0].node)
             ]
-            #prev_defined_nodes = self.data_server._last_num_nodes
             logger.info(f"Prepared for update {len(def_clusters_for_update)} definition clusters containing unaligned definitions")
         else:
             assert self.config.update is None
             def_clusters_for_update = []
-            #prev_defined_nodes = None
             logger.info(f"No update of the definition clusters requested")
+
         # definitions.clustered_definitions is in reverse order of dependencies, so we reverse our list
         def_clusters_for_update.reverse()
 
@@ -405,25 +402,45 @@ class PredictServer:
                 def_clusters_for_update = tqdm.tqdm(def_clusters_for_update)
 
             defined_nodes = set()
+            def was_defined(n): # debugging function
+                if self.config.update == "new":
+                    if n < self.data_server._train_num_nodes: return True
+                else:
+                    if n < self.data_server._base_node_label_num: return True
+                if n in defined_nodes:
+                   return True
+                if self.data_server._context_stack:
+                    last_num_nodes_active = self.data_server._context_stack[-1][0]
+                    ident = self.data_server._node_i_to_ident[n]
+                    arg_i = self.data_server._def_ident_to_i.get(ident, last_num_nodes_active)
+                    if arg_i < last_num_nodes_active:
+                        defined_nodes.add(n)
+                        return True
+                return False
+
+            def sanity_check(cluster_graph): # debugging function
+                new_defined_nodes = cluster_graph.graph.nodes[:cluster_graph.num_definitions]
+                used_nodes = cluster_graph.graph.nodes[cluster_graph.num_definitions:]
+                for n in set(used_nodes):
+                    assert was_defined(n), (
+                        f"Definition clusters out of order. "
+                        f"Attempting to compute definition embedding for node labels {new_defined_nodes} "
+                        f"({cluster_graph.definition_names}) without first computing "
+                        f"the definition embedding for node label {n} used in that definition."
+                    )   
+                for n in new_defined_nodes:
+                    assert not was_defined(n), (
+                        f"Something is wrong with the definition clusters. "
+                        f"Attempting to compute definition embedding for node labels {new_defined_nodes} "
+                        f"({cluster_graph.definition_names}) "
+                        f"for which node label {n} has already been computed."
+                    )
+                    defined_nodes.add(n)
+                
             for cluster in def_clusters_for_update:
-                cluster_state = self.data_server.cluster_to_graph(cluster)
-                new_defined_nodes = cluster_state.graph.nodes[:cluster_state.num_definitions]
-                used_nodes = cluster_state.graph.nodes[cluster_state.num_definitions:]
-                # for n in used_nodes:
-                #     assert n < prev_defined_nodes or n in defined_nodes, (
-                #         f"Definition clusters out of order. "
-                #         f"Attempting to compute definition embedding for node labels {new_defined_nodes} "
-                #         f"({cluster_state.definition_names}) without first computing "
-                #         f"the definition embedding for node label {n} used in that definition."
-                #     )   
-                # for n in new_defined_nodes:
-                #     assert n >= prev_defined_nodes and n not in defined_nodes, (
-                #         f"Something is wrong with the definition clusters. "
-                #         f"Attempting to compute definition embedding for node labels {new_defined_nodes} "
-                #         f"({cluster_state.definition_names}) "
-                #         f"for which node label {n} has already been computed."
-                #     )
-                #     defined_nodes.add(n)
+
+                cluster_graph = self.data_server.cluster_to_graph(cluster)
+                sanity_check(cluster_graph)
 
                 # print("Names:")
                 # for n,x in zip(new_defined_nodes, cluster):
@@ -433,7 +450,7 @@ class PredictServer:
                 # for n in new_defined_nodes:
                 #     print(f"{n}: {self.model.prediction_task.graph_embedding.get_node_embeddings()[n][:10]}")
                 # print("Update:", new_defined_nodes)
-                self.model.compute_new_definitions([cluster_state])
+                self.model.compute_new_definitions([cluster_graph])
                 # print("After:")
                 # for n in new_defined_nodes:
                 #     print(f"{n}: {self.model.prediction_task.graph_embedding.get_node_embeddings()[n]}")
