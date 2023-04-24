@@ -203,6 +203,11 @@ class Pipeline:
                 _, tmp_model_dir = cls._run_training(tmp_path=tmp_path, data_dir=data_dir, params_dir=params_dir)
                 # replace model with the one just trained
                 shutil.copytree(tmp_model_dir, pretrained_model_dir)
+                # remove unneeded binary files
+                for tensorboard_file in pretrained_model_dir.glob("**/events.out.tfevents*"):
+                    tensorboard_file.unlink()
+                for zeroth_checkpoint_file in pretrained_model_dir.glob("ckpt/ckpt-0*"):
+                    zeroth_checkpoint_file.unlink()
                 return {}, pretrained_model_dir  # don't return results for pretrained model
         
         # check for cached models and results
