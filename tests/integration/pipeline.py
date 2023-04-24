@@ -24,6 +24,8 @@ TESTDATADIR = TESTDIR / "data"
 class ParamSets:
     @staticmethod
     def get_pipeline_step(param_dir: Path):
+        if (param_dir / "model").exists():
+            return "load_previous_model"
         if (param_dir / "hmodel.yml").exists():
             return "hmodel"
         elif (param_dir / "run_config.yml").exists():
@@ -230,6 +232,12 @@ class Pipeline:
             return True
         else:
             from graph2tac.tfgnn.predict import TFGNNPredict
+            # a seed has to be set after tensor is imported.
+            # Only matters if using a cached or saved model.
+            # This seed value shouldn't matter for the results since server
+            # and model are deterministic.
+            tf.random.set_seed(1)  
+
             TFGNNPredict(
                 log_dir=model_dir,
                 debug_dir=None,

@@ -1,0 +1,30 @@
+prediction_task_type: global_argument_prediction
+hidden_size: 8
+unit_norm_embs: true
+tactic_embedding_size: 8
+gnn_type: simple_convolution_gnn
+gnn_config:
+  hops: 2
+  dense_activation: relu
+  ffn_layers:
+  - activation: relu
+    units: 16
+  dropout_rate: 0.1
+  residual_activation: null
+  layer_norm: true
+  reduce_type: mean
+  final_reduce_type: mean
+tactic_head_type: dense_tactic
+tactic_head_config:
+  hidden_layers:
+  - activation: relu
+    units: 16
+arguments_head_type: simple_rnn
+arguments_head_config:
+  activation: linear
+  recurrent_activation: relu
+  recurrent_depth: 2
+global_cosine_similarity: true
+arguments_loss_coefficient: 1.0
+sum_loss_over_tactic: true
+dynamic_global_context: true

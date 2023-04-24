@@ -85,7 +85,7 @@ def test_load_previous_model(request: pytest.FixtureRequest, tmp_path: Path, dat
         params_dir=params_dir,
         cache=request.config.cache,
         use_cached_results=False,
-        retrain=False
+        retrain=retrain
     )
     Pipeline.load_model(
         tmp_path=model_dir,
