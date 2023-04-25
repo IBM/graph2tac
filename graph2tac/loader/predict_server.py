@@ -147,11 +147,14 @@ class LoggingCounters:
         self.update_def_time += t1 - t0
 
     def measure_t_coq_start(self):
-        assert self.t0_coq < 0
+        if self.t0_coq >= 0:
+            logger.warning("(coq_start) Nesting theorems in LoggingCounters, likely causing to misleading summaries")
         self.t0_coq = time.time()
     def measure_t_coq_finish(self):
         t1_coq = time.time()
-        assert self.t0_coq >= 0
+        if self.t0_coq < 0:
+            logger.warning("(coq_finish) Nesting theorems in LoggingCounters, likely causing misleading summaries")
+            return
         self.n_coq += 1
         self.t_coq += t1_coq - self.t0_coq
         self.t0_coq = -1.0
@@ -624,7 +627,7 @@ class PredictServer:
         self.log_cnts.start_session()
         self.prediction_loop(capnp_message_generator(capnp_socket, record_file))
 
-    def start_prediction_loop_with_replay(replay_file: Path, record_file: Optional[BinaryIO]):
+    def start_prediction_loop_with_replay(self, replay_file: Path, record_file: Optional[BinaryIO]):
         with open(replay_file, "rb") as f:
             self.log_cnts.start_session()
             self.prediction_loop(capnp_message_generator_from_file(f, record=record_file))
