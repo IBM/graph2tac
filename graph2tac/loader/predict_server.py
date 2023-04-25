@@ -400,15 +400,10 @@ class DynamicDataServer(AbstractDataServer):
         arguments = []
         for arg_type, arg_index in action[1:]:
             if arg_type == 0: # local argument
-                # print("Local", arg_index)
                 arguments.append(proof_state.context[arg_index])
             else:
                 arguments.append(self._active_i_to_node[arg_index])
-                # print("Global", arg_index, self.data_server._node_to_node_i[arguments[-1]])
 
-        # print("  tactic:", self.data_server._tactic_i_to_hash[tactic])
-        # print("  arguments:", arguments)
-        # print("  confidence:", confidence)
         return TacticPredictionGraph(
             int(self._tactic_i_to_hash[tactic]),
             arguments,
@@ -469,11 +464,6 @@ class PredictServer:
         # definition alignment
         
         self.data_server.align_definitions(msg.definitions.definitions(full = False))
-        #print(self.data_server._node_to_node_i)
-        #print([d.node for d in definitions.definitions()])
-        # for d in definitions.definitions():
-        #     if d.node not in self.data_server._node_to_node_i:
-        #         raise Exception("A missing definition node")
 
         num_labels = self.data_server.num_nodes_total
         logger.info(f"allocating space for {num_labels} defs")
@@ -533,22 +523,9 @@ class PredictServer:
                     def_clusters_for_update = tqdm.tqdm(def_clusters_for_update)
 
                 for cluster in def_clusters_for_update:
-
                     cluster_graph = self.data_server.cluster_to_graph(cluster)
                     sanity_check(cluster_graph)
-
-                    # print("Names:")
-                    # for n,x in zip(new_defined_nodes, cluster):
-                    #     print(f"{n} = {x.name}, {x.node.identity}")
-
-                    # print("Before:")
-                    # for n in new_defined_nodes:
-                    #     print(f"{n}: {self.model.prediction_task.graph_embedding.get_node_embeddings()[n][:10]}")
-                    # print("Update:", new_defined_nodes)
                     self.model.compute_new_definitions([cluster_graph])
-                    # print("After:")
-                    # for n in new_defined_nodes:
-                    #     print(f"{n}: {self.model.prediction_task.graph_embedding.get_node_embeddings()[n]}")
 
                 logger.info(f"Definition clusters updated.")
             else:
@@ -562,24 +539,16 @@ class PredictServer:
 
     @contextmanager
     def coq_context(self, msg: GlobalContextMessage):
-        # print(">>>>> ENTER")
         self._enter_coq_context(msg)
         yield
-        # print("<<<<< EXIT")
         self._exit_coq_context()
 
     def predict(self, proof_state: ProofState) -> TacticPredictionsGraph:
         if self.current_allowed_tactics is None:
             raise Exception("Cannot predict outside 'with predict_server.coq_context()'")
 
-        # embs = self.model.prediction_task.graph_embedding.get_node_embeddings()
-        # print("Nodes used on input:")
         proof_state_graph = self.data_server.proofstate(proof_state.root, proof_state.context)
-        # for n in sorted(set(proof_state.graph.nodes)):
-        #     print(f"{n}: {embs[n]}")
-        # print("Nodes in global context:")
-        # for n in proof_state.context.global_context:
-        #     print(f"{n}: {embs[n]}")
+
         actions, confidences = self.model.ranked_predictions(
             state=proof_state_graph,
             tactic_expand_bound=self.config.tactic_expand_bound,
@@ -588,10 +557,11 @@ class PredictServer:
             available_global=None
         )
         confidences = apply_temperature(confidences, self.config.temperature)
+
         # use only top-k
         actions = actions[:self.config.search_expand_bound]
         confidences = confidences[:self.config.search_expand_bound]
-        # print("Confidences:", confidences, flush = True)
+
         return TacticPredictionsGraph([
             self.data_server.decode_action(action, confidence, proof_state)
             for action, confidence in zip(actions, confidences)
