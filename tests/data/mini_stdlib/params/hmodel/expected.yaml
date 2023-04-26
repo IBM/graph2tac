@@ -18,11 +18,11 @@
   tactic: 7
 00b24f327f52afd6042de73b7645a7f0765bc13819c9b1b65a345e8ca1de5320:
 - args:
-  - arg_index: 260
+  - arg_index: 606
     arg_type: 1
   tactic: 7
 - args:
-  - arg_index: 260
+  - arg_index: 623
     arg_type: 1
   tactic: 7
 00b3b210dfc9dc066d59c7f050a9031626af2a33a011ac74820980e1309403e4:
@@ -33,13 +33,13 @@
   tactic: 19
 013c0ca15a24faed7c2245f2faf8e6e83bde4544e1898a8867d521329aff3ccf:
 - args:
-  - arg_index: 7
+  - arg_index: 120
     arg_type: 1
   - arg_index: 1
     arg_type: 0
   tactic: 17
 - args:
-  - arg_index: 7
+  - arg_index: 130
     arg_type: 1
   - arg_index: 1
     arg_type: 0
