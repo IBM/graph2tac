@@ -53,7 +53,7 @@ def args_decode(args,
     for arg in args:
         value = (arg[0], inverse_map[arg[0]].get(arg[1], -1))
         if value[1] == -1:
-            #print("args", args, "inverse_map", inverse_map)
+            # print("args", args, "inverse_map", inverse_map)
             return None
         res.append(value)
     return res
@@ -109,7 +109,7 @@ class Train:
             try:
                 train_action.append(action_encode(action,
                                               local_context=state.context.local_context,
-                                              global_context=self._global_context))
+                                              global_context=state.context.global_context))
             except IndexError:
                 none_counter += 1
 
@@ -145,8 +145,7 @@ class HPredict(Predict):
 
     @predict_api_debugging
     def allocate_definitions(self, new_node_label_num : int) -> None:
-        for idx in range(new_node_label_num):
-            self._label_to_idx[idx] = idx
+        pass
 
     @predict_api_debugging
     def compute_new_definitions(self, clusters: List[LoaderDefinition]) -> None:
@@ -163,13 +162,17 @@ class HPredict(Predict):
                            tactic_expand_bound: int = 20,
                            total_expand_bound: int = 1000000,
                            annotation: str = "",
-                           debug: bool = False
+                           debug: bool = False,
                            ) -> Tuple[np.ndarray, List]:
-        context = state.context.local_context
         state_hash = my_hash_of(state, self._with_context)
-        inverse_local_context = dict()
-        for (i, node_idx) in enumerate(context):
-           inverse_local_context[node_idx] = i
+        inverse_local_context = {
+            node_idx : i
+            for i,node_idx in enumerate(state.context.local_context)
+        }
+        inverse_global_context = {
+            node_idx : i
+            for i,node_idx in enumerate(state.context.global_context)
+        }
 
         predictions = self._data.get(state_hash, [])
         if len(predictions) > 0:
@@ -183,11 +186,11 @@ class HPredict(Predict):
 
             args_decoded = args_decode(args,
                                        inverse_local_context=inverse_local_context,
-                                       inverse_global_label=self._label_to_idx)
+                                       inverse_global_label=inverse_global_context)
             if args_decoded is not None:
                 args_decoded = np.array(args_decoded, dtype=np.uint32).reshape((len(args_decoded), 2))
             if debug:
-                print("HMODEL ", annotation, self.graph_constants.tactic_index_to_string[tactic_idx].decode(), "index into context:", args_decoded, end="")
+                print("HMODEL ", annotation, self.graph_constants.tactic_index_to_string[tactic_idx], "index into context:", args_decoded, end="")
             if tactic_idx in allowed_model_tactics:
                 if args_decoded is not None:
                     decoded_predictions.append(np.concatenate([np.array([(tactic_idx, tactic_idx)], dtype=np.uint32), args_decoded]))
