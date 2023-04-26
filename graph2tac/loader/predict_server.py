@@ -232,7 +232,7 @@ class LoggingCounters:
         )
 
 class DynamicDataServer(AbstractDataServer):
-    def __init__(self, graph_constants: GraphConstants, paranoic = True):
+    def __init__(self, graph_constants: GraphConstants, paranoic = False):
         super().__init__(graph_constants.data_config)
         self.paranoic = paranoic # checks consistency on each update
 
