@@ -1,0 +1,71 @@
+arguments_head_config:
+  activation: linear
+  dtype: float32
+  name: rnn_arguments_head
+  recurrent_activation: relu
+  recurrent_depth: 2
+  trainable: true
+arguments_head_type: simple_rnn
+arguments_loss_coefficient: 1.0
+dynamic_global_context: true
+global_cosine_similarity: true
+gnn_config:
+  dense_activation: relu
+  dropout_rate: 0.1
+  dtype: float32
+  ffn_layers:
+  - activation: relu
+    activity_regularizer: null
+    bias_constraint: null
+    bias_initializer:
+      class_name: Zeros
+      config: {}
+    bias_regularizer: null
+    dtype: float32
+    kernel_constraint: null
+    kernel_initializer:
+      class_name: GlorotUniform
+      config:
+        seed: null
+    kernel_regularizer: null
+    name: simple_convolution_gnn_ffn_dense_0
+    trainable: true
+    units: 16
+    use_bias: true
+  final_reduce_type: mean
+  hops: 2
+  layer_norm: true
+  name: simple_convolution_gnn
+  reduce_type: mean
+  residual_activation: null
+  trainable: true
+gnn_type: simple_convolution_gnn
+hidden_size: 8
+prediction_task_type: global_argument_prediction
+sum_loss_over_tactic: true
+tactic_embedding_size: 8
+tactic_head_config:
+  dtype: float32
+  hidden_layers:
+  - activation: relu
+    activity_regularizer: null
+    bias_constraint: null
+    bias_initializer:
+      class_name: Zeros
+      config: {}
+    bias_regularizer: null
+    dtype: float32
+    kernel_constraint: null
+    kernel_initializer:
+      class_name: GlorotUniform
+      config:
+        seed: null
+    kernel_regularizer: null
+    name: dense_tactic_head_dense_0
+    trainable: true
+    units: 16
+    use_bias: true
+  name: dense_tactic_head
+  trainable: true
+tactic_head_type: dense_tactic
+unit_norm_embs: true
