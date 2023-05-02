@@ -670,8 +670,10 @@ class GlobalEmbeddings(tf.keras.layers.Layer):
         # note: inference model always uses dynamic global context
         if self.dynamic_global_context or inference:
             # select the global context for each batch
+            # this is equivalent to `tf.gather(all_embeddings, global_context)`
+            # but *much faster* when inference is run on CPU
             # [batch, None(context), hdim]
-            return tf.gather(all_embeddings, global_context)
+            return global_context.with_values(tf.gather(all_embeddings, global_context.values))
         else:
             # currently this would mess up later indexing
             raise NotImplementedError("dynamical_global_context must be set to true")
