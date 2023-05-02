@@ -51,7 +51,7 @@ class Predict:
     """
     Common prediction API to load training checkpoints and make predictions in order to interact with an evaluator.
     This class exposes the following methods:
-        - `initialize`: set the global context during evaluation
+        - `allocate_definitions`: set the global context during evaluation
         - `compute_new_definitions`: update node label embeddings using definition cluster graphs
         - `ranked_predictions`: make predictions for a single proof-state
     and the following attribute:
@@ -86,13 +86,13 @@ class Predict:
             self._debug_message_number = 0
 
     @predict_api_debugging
-    def initialize(self, global_context: Optional[List[int]] = None) -> None:
+    def allocate_definitions(self, new_node_label_num) -> None:
         """
-        [ Public API ] Initializes the model to use a different global context than the one seen during training.
+        [ Public API ] Prepares sufficient size for (new) model's definition
 
-        @param global_context: a replacement for the original global_context in the GraphConstants seen during training
+        @param new_node_label_num: required size of the array of nodes stored in the model
         """
-        raise NotImplementedError('initialize should be implemented by sub-classes')
+        raise NotImplementedError('allocate_definitions should be implemented by sub-classes')
 
     @predict_api_debugging
     def ranked_predictions(self,

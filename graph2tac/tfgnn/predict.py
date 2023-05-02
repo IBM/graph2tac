@@ -215,34 +215,32 @@ class TFGNNPredict(Predict):
             logger.info(f'restored checkpoint #{checkpoint_number}!')
 
     @predict_api_debugging
-    def initialize(self, global_context: Optional[List[int]] = None) -> None:
+    def allocate_definitions(self, new_node_label_num : int, reserve : float = 0.5) -> None:
         if self.prediction_task_type != GLOBAL_ARGUMENT_PREDICTION:
             # no need to update anything if we are not going to use the global context
             return
 
-        if global_context is not None:
-            # update the global context
-            self.graph_constants.global_context = global_context
+        if new_node_label_num <= self.graph_constants.node_label_num:
+            # already have sufficient array
+            return
 
-            # extend the embedding table if necessary
-            new_node_label_num = max(global_context)+1
-            if new_node_label_num > self.graph_constants.node_label_num:
-                logger.info(f'extending global context from {self.graph_constants.node_label_num} to {new_node_label_num} elements')
-                new_graph_emb_layer = self.prediction_task.graph_embedding.extend_embeddings(new_node_label_num)
-                self.prediction_task.graph_embedding = new_graph_emb_layer
-                
-                if self.definition_task is not None:
-                    self.definition_task._graph_embedding = new_graph_emb_layer
-                self.graph_constants.node_label_num = new_node_label_num
+        new_node_label_num += round(reserve*new_node_label_num)
+        self.graph_constants.global_context = list(range(new_node_label_num))
 
-            # update the global arguments logits head (always necessary, because the global context may shrink!)
-            self.prediction_task.global_arguments_logits.update_embedding_matrix(
-                embedding_matrix=self.prediction_task.graph_embedding.get_node_embeddings()
-            )
+        logger.info(f'extending global context from {self.graph_constants.node_label_num} to {new_node_label_num} elements')
+        new_graph_emb_layer = self.prediction_task.graph_embedding.extend_embeddings(new_node_label_num)
+        self.prediction_task.graph_embedding = new_graph_emb_layer
 
-            # clear the inference model cache to force re-creation of the inference models using the new layers
-            self._inference_model_cache = {}
-            self.cached_definition_computation = None
+        if self.definition_task is not None:
+            self.definition_task._graph_embedding = new_graph_emb_layer
+        self.graph_constants.node_label_num = new_node_label_num
+        self.prediction_task.global_arguments_logits.update_embedding_matrix(
+            embedding_matrix=self.prediction_task.graph_embedding.get_node_embeddings()
+        )
+
+        # clear the inference model cache to force re-creation of the inference models using the new layers
+        self._inference_model_cache = {}
+        self.cached_definition_computation = None
 
     def _fetch_definition_computation(self):
         """

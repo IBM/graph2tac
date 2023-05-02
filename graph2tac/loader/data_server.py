@@ -48,7 +48,7 @@ class AbstractDataServer:
         self._node_i_in_spine = [True]*self._base_node_label_num
         self._definition_label = graph_api_capnp.Graph.Node.Label.definition.value
         self._edges_to_ignore = (graph_api_capnp.EdgeClassification.constOpaqueDef,)
-        self._def_node_to_i = dict()
+        self._node_to_node_i = dict()
         self._tactic_to_i = dict()
         self._tactic_i_count = []
         self._tactic_i_to_numargs = []
@@ -88,10 +88,10 @@ class AbstractDataServer:
 
     def _register_definition(self, d):
         node = d.node
-        if node in self._def_node_to_i:
-            return self._def_node_to_i[node]
+        if node in self._node_to_node_i:
+            return self._node_to_node_i[node]
         new_i = len(self._node_i_to_name)
-        self._def_node_to_i[node] = new_i
+        self._node_to_node_i[node] = new_i
         self._node_i_to_name.append(d.name)
         self._node_i_to_ident.append(d.node.identity)
         self._node_i_in_spine.append(False)
@@ -99,7 +99,7 @@ class AbstractDataServer:
         
     def _get_node_label_index(self, node):
         if int(node.label.which) == self._definition_label:
-            return self._def_node_to_i[node]
+            return self._node_to_node_i[node]
         else:
             return int(node.label.which)
 
@@ -484,7 +484,7 @@ class DataServer(AbstractDataServer):
             spine = []
             filedeps = []
             for d in file_data.definitions(spine_only = True, across_files = False):
-                node_i = self._def_node_to_i[d.node]
+                node_i = self._node_to_node_i[d.node]
                 spine.append(node_i)
                 self._node_i_in_spine[node_i] = True
                 filedeps.extend(d.external_previous)
@@ -584,7 +584,7 @@ class DataServer(AbstractDataServer):
         local_context_i = [node_to_i[n] for n in local_context]
 
         available_global_context = np.array([
-            self._def_node_to_i[ctx_def.node]
+            self._node_to_node_i[ctx_def.node]
             for ctx_def in definition.global_context(across_files = False)
         ], dtype = np.uint32)
         filedeps, filectx = self.get_def_file_ctx(definition)
@@ -624,7 +624,7 @@ class DataServer(AbstractDataServer):
         local_nodes_to_ctx_i = { node : i for i,node in enumerate(local_context) }
         for arg in proof_step.tactic_arguments:
             arg_local = local_nodes_to_ctx_i.get(arg, -1)
-            if arg_local < 0: arg_global = self._def_node_to_i.get(arg, -1)
+            if arg_local < 0: arg_global = self._node_to_node_i.get(arg, -1)
             else: arg_global = -1
             # node reindexing: "node label" -> "index to global_context"
             if arg_global >= 0:

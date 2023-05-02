@@ -112,10 +112,10 @@ class LoggingCounters:
     """Index of last maximum time single predict since last 'initialize'"""
     t_coq: float = 0.0
     """Total time (in seconds) spent waiting on Coq since last 'initialize'"""
+    t0_coq: float = -1.0
+    """last (absolute) time we called coq"""
     n_coq: int = 0
     """Number of 'prediction' requests made by Coq"""
-    build_network_time: float = 0.0
-    """Time (in seconds) to build network when processing most recent 'intitialize' message"""
     update_def_time: float = 0.0
     """Time (in seconds) to update the definitions processing most recent 'intitialize' message"""
     n_def_clusters_updated: int = 0
@@ -138,6 +138,58 @@ class LoggingCounters:
     May incorrectly be 0.0 if there isn't enough time between 'initialize' calls.
     """
 
+    @contextmanager
+    def measure_update_def_time(self, n_def_clusters_updated):
+        t0 = time.time()
+        yield
+        t1 = time.time()
+        self.n_def_clusters_updated += n_def_clusters_updated
+        self.update_def_time += t1 - t0
+
+    def measure_t_coq_start(self):
+        if self.t0_coq >= 0:
+            logger.warning("(coq_start) Nesting theorems in LoggingCounters, likely causing to misleading summaries")
+        self.t0_coq = time.time()
+    def measure_t_coq_finish(self):
+        t1_coq = time.time()
+        if self.t0_coq < 0:
+            logger.warning("(coq_finish) Nesting theorems in LoggingCounters, likely causing misleading summaries")
+            return
+        self.n_coq += 1
+        self.t_coq += t1_coq - self.t0_coq
+        self.t0_coq = -1.0
+
+    @contextmanager
+    def measure_t_predict(self):
+
+        t0 = time.time()
+        yield
+        t1 = time.time()
+
+        self.msg_idx += 1
+        if t1 - t0 > self.max_t_predict:
+            self.max_t_predict = t1 - t0
+            self.argmax_t_predict = self.msg_idx
+
+        self.t_predict += (t1 - t0)
+        self.n_predict += 1
+
+    def start_session(self):
+        self.session_idx += 1
+        self.thm_idx = -1
+        self.reset_definition_counters()
+
+    def start_theorem(self, log_annotation):
+        self.thm_idx += 1
+        self.thm_annotation = log_annotation
+        self.msg_idx = -1
+        self.t_predict = 0.0
+        self.n_predict = 0
+        self.max_t_predict = 0.0
+        self.argmax_t_predict = -1
+        self.t_coq = 0.0
+        self.n_coq = 0
+
     def update_process_stats(self):
         """
         Update the CPU and memory statistics recording the difference 
@@ -149,16 +201,19 @@ class LoggingCounters:
         self.total_mem = new_mem.vms
         self.physical_mem = new_mem.rss
 
+    def reset_definition_counters(self):
+        self.update_def_time = 0.0
+        self.n_def_clusters_updated = 0
+
     def summary_log_message(self) -> str:
         summary_data = {
             "UUID" : f"{self.process_uuid}",
             "Session" : f"{self.session_idx}",
             "Theorem" : f"{self.thm_idx}",
             "Annotation" : f"{self.thm_annotation}",
-            "Initialize|Network build time (s)" : f"{self.build_network_time:.6f}",
             "Initialize|Def clusters to update" : f"{self.n_def_clusters_updated}",
             "Initialize|Def update time (s)" : f"{self.update_def_time:.6f}",
-            "Predict|Messages cnt" : f"{self.msg_idx}",
+            "Predict|Messages cnt" : f"{self.msg_idx+1}",
             "Predict|Avg predict time (s/msg)" : 
                 f"{self.t_predict/self.n_predict:.6f}" if self.n_predict else "NA",
             "Predict|Max predict time (s/msg)" : f"{self.max_t_predict:.6f}",
@@ -177,8 +232,9 @@ class LoggingCounters:
         )
 
 class DynamicDataServer(AbstractDataServer):
-    def __init__(self, graph_constants: GraphConstants):
+    def __init__(self, graph_constants: GraphConstants, paranoic):
         super().__init__(graph_constants.data_config)
+        self.paranoic = paranoic # checks consistency on each update
 
         self._tactic_i_to_numargs = list(graph_constants.tactic_index_to_numargs)
         self._tactic_i_to_hash = list(graph_constants.tactic_index_to_hash)
@@ -190,48 +246,125 @@ class DynamicDataServer(AbstractDataServer):
         self._node_i_to_name = graph_constants.label_to_names
         self._node_i_to_ident = graph_constants.label_to_ident
         self._node_i_in_spine = graph_constants.label_in_spine
-        self._num_train_nodes = len(self._node_i_to_name)
+        self._train_num_nodes = len(self._node_i_to_name)
+        assert len(self._node_i_to_ident) == self._train_num_nodes
+        assert len(self._node_i_in_spine) == self._train_num_nodes
+        self._last_num_nodes = None
+        self._context_stack = []
 
         # extra data
         
-        self._def_ident_to_i = {
-            name : i
-            for i,name in enumerate(self._node_i_to_ident)
+        self._ident_to_node_i = {
+            ident : i
+            for i,ident in enumerate(self._node_i_to_ident)
             if i >= self._base_node_label_num
         }
 
-        self._def_node_to_i = None
-        self._globarg_i_to_node = None
-        self.global_context = None
+        self._node_to_node_i = dict()
+        self._active_i_to_node = []
+        self._active_i_to_node_i = []
+        self._node_i_to_active_i = dict()
+
+        if self.paranoic: self.consistency_check()
+
+    @property
+    def num_nodes_total(self): # trained & aligned nodes together
+        return len(self._node_i_to_name)
+    @property
+    def num_nodes_active(self): # only aligned nodes
+        return len(self._active_i_to_node_i)
 
     def align_definitions(self, definitions):
-        
-        self._globarg_i_to_node = []
-        global_defs = []
-        self._def_node_to_i = dict()
+
+        self._context_stack.append((
+            len(self._active_i_to_node_i),
+            len(self._node_i_to_name)
+        ))
+
         for d in definitions:
-            i = self._def_ident_to_i.get(d.node.identity, None)
-            if i is None:
-                i = self._register_definition(d)
+            node_i = self._ident_to_node_i.get(d.node.identity, None)
+            if node_i is None:
+                node_i = self._register_definition(d)
+                self._ident_to_node_i[d.node.identity] = node_i
             else:
-                self._def_node_to_i[d.node] = i
-            self._globarg_i_to_node.append(d.node)
-            global_defs.append(i)
+                self._node_to_node_i[d.node] = node_i
 
-        global_defs = np.array(global_defs, dtype = np.int32)
-        self.global_defs = global_defs
+            assert node_i not in self._node_i_to_active_i, "Two nodes of the same identity in current global context"
+            self._node_i_to_active_i[node_i] = len(self._active_i_to_node_i)
+            self._active_i_to_node.append(d.node)
+            self._active_i_to_node_i.append(node_i)
 
-    def is_new_definition(self, node):
-        return self._def_node_to_i[node] >= self._num_train_nodes
+        if self.paranoic: self.consistency_check()
 
-    def reset(self):
-        self.global_defs = None
-        self._globarg_i_to_node = None
-        self._def_node_to_i = None
+    def pop(self):
+        (
+            num_nodes_active,
+            num_nodes_total,
+        ) = self._context_stack.pop()
 
-        del self._node_i_to_name[self._num_train_nodes:]
-        del self._node_i_to_ident[self._num_train_nodes:]
-        del self._node_i_in_spine[self._num_train_nodes:]
+        for ident in self._node_i_to_ident[num_nodes_total:]:
+            del self._ident_to_node_i[ident]
+        del self._node_i_to_name[num_nodes_total:]
+        del self._node_i_to_ident[num_nodes_total:]
+        del self._node_i_in_spine[num_nodes_total:]
+
+        for node in self._active_i_to_node[num_nodes_active:]:
+            del self._node_to_node_i[node]
+        for node_i in self._active_i_to_node_i[num_nodes_active:]:
+            del self._node_i_to_active_i[node_i]
+
+        del self._active_i_to_node[num_nodes_active:]
+        del self._active_i_to_node_i[num_nodes_active:]
+
+        if self.paranoic: self.consistency_check()
+
+    def consistency_check(self):
+        """
+        (debugging) Checks concictency of:
+            self._node_i_to_name
+            self._node_i_to_ident
+            self._node_i_in_spine
+            self._ident_to_node_i
+            self._node_to_node_i
+            self._node_i_to_active_i
+            self._active_i_to_node
+            self._active_i_to_node_i
+        Another purpose of this function is documenting the invariants
+        we want to preserve.
+        """
+
+        # check node arrays sizes
+        num_nodes_total = self.num_nodes_total
+        num_nodes_active = self.num_nodes_active
+        assert len(self._node_i_to_name) == num_nodes_total
+        assert len(self._node_i_to_ident) == num_nodes_total
+        assert len(self._node_i_in_spine) == num_nodes_total
+        assert len(self._active_i_to_node_i) == num_nodes_active
+        assert len(self._active_i_to_node) == num_nodes_active
+
+        # check self._node_i_to_active_i
+        assert len(self._node_i_to_active_i) == num_nodes_active
+        assert self._node_i_to_active_i == {
+            node_i : active_i
+            for active_i, node_i in enumerate(self._active_i_to_node_i)
+        }
+
+        # check self._active_i_to_node_i, self._active_i_to_node
+        assert len(self._node_to_node_i) == num_nodes_active
+        assert self._node_to_node_i == dict(zip(
+            self._active_i_to_node, self._active_i_to_node_i
+        ))
+
+        # check self._ident_to_node_i
+        assert self._ident_to_node_i == {
+            ident : i
+            for i,ident in enumerate(self._node_i_to_ident)
+            if i >= self._base_node_label_num
+        }
+
+        # check identities of active nodes
+        for node, node_i in self._node_to_node_i.items():
+            assert node.identity == self._node_i_to_ident[node_i]
 
     def proofstate(self, root, local_context):
         graph, node_to_i = self._downward_closure([root])
@@ -240,7 +373,7 @@ class DynamicDataServer(AbstractDataServer):
 
         context = ProofstateContext(
             local_context=np.array(local_context_i, dtype = np.uint32),
-            global_context=np.array(self.global_defs, dtype = np.uint32),
+            global_context=np.array(self._active_i_to_node_i, dtype = np.uint32),
         )
         dummy_proofstate_info = ProofstateMetadata(b'dummy_proofstate_name', -1, True)
 
@@ -251,6 +384,59 @@ class DynamicDataServer(AbstractDataServer):
             metadata=dummy_proofstate_info
         )
 
+    def check_alignment(self, tactics, definitions):
+        unaligned_tactics = [
+            tactic.ident for tactic in tactics
+            if tactic.ident not in self._tactic_to_i
+        ]
+        unaligned_definitions = [
+            d for d in definitions
+            if self._ident_to_node_i.get(d.node.identity, self._train_num_nodes) >= self._train_num_nodes
+        ]
+        return CheckAlignmentResponse(
+            unknown_tactics = unaligned_tactics,
+            unknown_definitions = unaligned_definitions,
+        )
+
+    def decode_action(self, action: NDArray[np.int_], confidence: np.float_, proof_state: ProofState) -> TacticPredictionGraph:
+        tactic = action[0,0]
+        arguments = []
+        for arg_type, arg_index in action[1:]:
+            if arg_type == 0: # local argument
+                arguments.append(proof_state.context[arg_index])
+            else:
+                arguments.append(self._active_i_to_node[arg_index])
+
+        return TacticPredictionGraph(
+            int(self._tactic_i_to_hash[tactic]),
+            arguments,
+            float(confidence),
+        )
+    
+    def node_i_was_trained(self, node_i : int):
+        return node_i < self._train_num_nodes
+    def node_was_trained(self, node):
+        return self.node_i_was_trained(self._node_to_node_i[node])
+
+    def node_i_was_defined(
+            self,
+            node_i : int,
+            history : int, # how many pop's away is the studied timepoint
+    ):
+        if node_i < self._base_node_label_num: return True
+        if not history:
+            num_nodes_active = self.num_nodes_active
+        elif history <= len(self._context_stack):
+            num_nodes_active = self._context_stack[-history][0]
+        else:
+            return False
+
+        active_i = self._node_i_to_active_i.get(node_i, num_nodes_active)
+        return active_i < num_nodes_active
+
+    def tactic_to_i(self, tactic):
+        return self._tactic_to_i.get(tactic.ident, None)
+
 class PredictServer:
     def __init__(self,
                  model: Predict,
@@ -258,238 +444,196 @@ class PredictServer:
                  log_cnts: LoggingCounters,
                  response_history: ResponseHistory,
     ):
-        self.data_server = DynamicDataServer(model.graph_constants)
+        self.data_server = DynamicDataServer(
+            graph_constants = model.graph_constants,
+            paranoic = config.paranoic_data_server,
+        )
         self.model = model
         self.config = config
         self.log_cnts = log_cnts
         self.current_allowed_tactics = None
-        self.inside_context = False
         self.response_history = response_history
+        self.msg_stack = []
 
-    def _enter_coq_context(self, definitions: OnlineDefinitionsReader, tactics):
-
-        if self.inside_context:
-            raise Exception("Cannot nest coq contexts")
-        self.inside_context = True
-
-        # tactics
-
+    def _calculate_current_allowed_tactics(self, msg : GlobalContextMessage):
         self.current_allowed_tactics = []
-        for t in tactics:
-            i = self.data_server._tactic_to_i.get(t.ident, None)
-            if i is not None:
-                self.current_allowed_tactics.append(i)
+        for tactic in msg.tactics:
+            tactic_i = self.data_server.tactic_to_i(tactic)
+            if tactic_i is not None:
+                self.current_allowed_tactics.append(tactic_i)
 
-        # definitions
+    def _enter_coq_context(self, msg : GlobalContextMessage):
 
-        self.data_server.align_definitions(definitions.definitions())
+        self.msg_stack.append(msg)
+        self._calculate_current_allowed_tactics(msg)
 
-        if len(self.data_server.global_defs) > 0:
-            static_global_context = np.arange(max(self.data_server.global_defs)+1, dtype=np.uint32)
-        else:
-            static_global_context = np.arange(1, dtype=np.uint32)
-        logger.info(f"initializing network with {len(static_global_context)} defs in global context")
-        t0 = time.time()
+        # definition alignment
+        
+        self.data_server.align_definitions(msg.definitions.definitions(full = False))
 
-        self.model.initialize(static_global_context)
-        t1 = time.time()
-        self.log_cnts.build_network_time = t1-t0
-        logger.info(f"Building network model completed in {self.log_cnts.build_network_time:.6f} seconds")
+        num_labels = self.data_server.num_nodes_total
+        logger.info(f"allocating space for {num_labels} defs")
+        self.model.allocate_definitions(num_labels)
 
         # definition recalculation
         if self.config.update == "all":
-            def_clusters_for_update = list(definitions.clustered_definitions())
-            prev_defined_nodes = self.data_server._base_node_label_num
+            def_clusters_for_update = list(msg.definitions.clustered_definitions(full = False))
             logger.info(f"Prepared for update all {len(def_clusters_for_update)} definition clusters")
         elif self.config.update == "new":
             def_clusters_for_update = [
-                cluster for cluster in definitions.clustered_definitions()
-                if self.data_server.is_new_definition(cluster[0].node)
+                cluster for cluster in msg.definitions.clustered_definitions(full = False)
+                if not self.data_server.node_was_trained(cluster[0].node)
             ]
-            prev_defined_nodes = self.data_server._num_train_nodes
             logger.info(f"Prepared for update {len(def_clusters_for_update)} definition clusters containing unaligned definitions")
         else:
             assert self.config.update is None
             def_clusters_for_update = []
-            prev_defined_nodes = None
             logger.info(f"No update of the definition clusters requested")
+
         # definitions.clustered_definitions is in reverse order of dependencies, so we reverse our list
         def_clusters_for_update.reverse()
 
-        t0 = time.time()
-        if def_clusters_for_update:
-            logger.info(f"Updating definition clusters...")
-            if self.config.progress_bar:
-                def_clusters_for_update = tqdm.tqdm(def_clusters_for_update)
+        defined_nodes = set()
+        def was_defined(node_i): # debugging function
+            if node_i in defined_nodes:
+                return True
+            res = self.data_server.node_i_was_defined(node_i, history = 1)
+            if self.config.update == "new":
+                res = res or self.data_server.node_i_was_trained(node_i)
+            if res: defined_nodes.add(node_i)
+            return res
 
-            defined_nodes = set()
-            for cluster in def_clusters_for_update:
-                cluster_state = self.data_server.cluster_to_graph(cluster)
-                new_defined_nodes = cluster_state.graph.nodes[:cluster_state.num_definitions]
-                used_nodes = cluster_state.graph.nodes[cluster_state.num_definitions:]
-                for n in used_nodes:
-                    assert n < prev_defined_nodes or n in defined_nodes, (
-                        f"Definition clusters out of order. "
-                        f"Attempting to compute definition embedding for node labels {new_defined_nodes} "
-                        f"({cluster_state.definition_names}) without first computing "
-                        f"the definition embedding for node label {n} used in that definition."
-                    )   
-                for n in new_defined_nodes:
-                    assert n >= prev_defined_nodes and n not in defined_nodes, (
-                        f"Something is wrong with the definition clusters. "
-                        f"Attempting to compute definition embedding for node labels {new_defined_nodes} "
-                        f"({cluster_state.definition_names}) "
-                        f"for which node label {n} has already been computed."
-                    )
-                    defined_nodes.add(n)
+        def sanity_check(cluster_graph): # debugging function
+            new_defined_nodes = cluster_graph.graph.nodes[:cluster_graph.num_definitions]
+            used_nodes = cluster_graph.graph.nodes[cluster_graph.num_definitions:]
+            for n in set(used_nodes):
+                assert was_defined(n), (
+                    f"Definition clusters out of order. "
+                    f"Attempting to compute definition embedding for node labels {new_defined_nodes} "
+                    f"({cluster_graph.definition_names}) without first computing "
+                    f"the definition embedding for node label {n} used in that definition."
+                )   
+            for n in new_defined_nodes:
+                assert not was_defined(n), (
+                    f"Something is wrong with the definition clusters. "
+                    f"Attempting to compute definition embedding for node labels {new_defined_nodes} "
+                    f"({cluster_graph.definition_names}) "
+                    f"for which node label {n} has already been computed."
+                )
+                defined_nodes.add(n)
 
-                self.model.compute_new_definitions([cluster_state])
+        with self.log_cnts.measure_update_def_time(len(def_clusters_for_update)):
+            if def_clusters_for_update:
+                logger.info(f"Updating definition clusters...")
+                if self.config.progress_bar:
+                    def_clusters_for_update = tqdm.tqdm(def_clusters_for_update)
 
-            logger.info(f"Definition clusters updated.")
-        else:
-            logger.info(f"No cluster to update.")
+                for cluster in def_clusters_for_update:
+                    cluster_graph = self.data_server.cluster_to_graph(cluster)
+                    sanity_check(cluster_graph)
+                    self.model.compute_new_definitions([cluster_graph])
 
-        t1 = time.time()
-        self.log_cnts.n_def_clusters_updated = len(def_clusters_for_update)
-        self.log_cnts.update_def_time = t1 - t0
+                logger.info(f"Definition clusters updated.")
+            else:
+                logger.info(f"No cluster to update.")
 
     def _exit_coq_context(self):
 
-        self.inside_context = False
-        self.current_allowed_tactics = None
-        self.data_server.reset()
+        self.data_server.pop()
+        msg = self.msg_stack.pop()
+        self._calculate_current_allowed_tactics(msg)
 
     @contextmanager
     def coq_context(self, msg: GlobalContextMessage):
-        self._enter_coq_context(msg.definitions, msg.tactics)
+        self._enter_coq_context(msg)
         yield
         self._exit_coq_context()
 
-    def _decode_action(self, action: NDArray[np.int_], confidence: np.float_, proof_state: ProofState) -> TacticPredictionGraph:
-        tactic = action[0,0]
-        arguments = []
-        for arg_type, arg_index in action[1:]:
-            if arg_type == 0: # local argument
-                arguments.append(proof_state.context[arg_index])
-            else:
-                arguments.append(self.data_server._globarg_i_to_node[arg_index])
-
-        return TacticPredictionGraph(
-            int(self.data_server._tactic_i_to_hash[tactic]),
-            arguments,
-            float(confidence),
-        )
-
     def predict(self, proof_state: ProofState) -> TacticPredictionsGraph:
-        if not self.inside_context:
+        if self.current_allowed_tactics is None:
             raise Exception("Cannot predict outside 'with predict_server.coq_context()'")
 
+        proof_state_graph = self.data_server.proofstate(proof_state.root, proof_state.context)
+
         actions, confidences = self.model.ranked_predictions(
-            state=self.data_server.proofstate(proof_state.root, proof_state.context),
+            state=proof_state_graph,
             tactic_expand_bound=self.config.tactic_expand_bound,
             total_expand_bound=self.config.total_expand_bound,
             allowed_model_tactics=self.current_allowed_tactics,
             available_global=None
         )
         confidences = apply_temperature(confidences, self.config.temperature)
+
         # use only top-k
         actions = actions[:self.config.search_expand_bound]
         confidences = confidences[:self.config.search_expand_bound]
+
         return TacticPredictionsGraph([
-            self._decode_action(action, confidence, proof_state)
+            self.data_server.decode_action(action, confidence, proof_state)
             for action, confidence in zip(actions, confidences)
         ])
 
-    def check_alignment(self, msg: GlobalContextMessage) -> CheckAlignmentResponse:
-        unaligned_tactics = [
-            tactic.ident for tactic in msg.tactics
-            if tactic.ident not in self.data_server._tactic_to_i
-        ]
-        unaligned_definitions = [
-            d for d in msg.definitions.definitions()
-            if d.node.identity not in self.data_server._def_ident_to_i
-        ]
+    def prediction_loop(self, context: GlobalContextMessage):
 
-        return CheckAlignmentResponse(
-            unknown_tactics = unaligned_tactics,
-            unknown_definitions = unaligned_definitions,
-        )
-
-def prediction_loop(predict_server: PredictServer, context: GlobalContextMessage):
-
-    prediction_requests = context.prediction_requests
-    if predict_server.config.with_meter:
-        message_iterator = tqdm.tqdm(prediction_requests)
-    else:
-        message_iterator = prediction_requests
-    log_cnts = predict_server.log_cnts
-    log_cnts.session_idx += 1
-    log_cnts.thm_idx = -1
-
-    msg = next(message_iterator, None)
-    while msg is not None:
-        if isinstance(msg, ProofState):
-            log_cnts.thm_idx += 1
-            log_cnts.thm_annotation = context.log_annotation
-
-            # FIXME: Implement incremental updating of the context
-            with predict_server.coq_context(context):
-
-                log_cnts.msg_idx = -1
-                log_cnts.t_predict = 0.0
-                log_cnts.n_predict = 0
-                log_cnts.max_t_predict = 0.0
-                log_cnts.argmax_t_predict = -1
-                log_cnts.t_coq = 0.0
-                log_cnts.n_coq = 0
-                t0_coq = time.time()
-                while msg is not None:
-                    if isinstance(msg, ProofState):
-                        log_cnts.t_coq += (time.time() - t0_coq)
-                        log_cnts.n_coq += 1
-                        log_cnts.msg_idx += 1
-
-                        t0 = time.time()
-
-                        # important line -- getting prediction
-                        response = predict_server.predict(msg)
-
-                        t1 = time.time()
-                        if t1-t0 > log_cnts.max_t_predict:
-                            log_cnts.max_t_predict = t1-t0
-                            log_cnts.argmax_t_predict = log_cnts.msg_idx
-
-                        log_cnts.t_predict += (t1 - t0)
-                        log_cnts.n_predict += 1
-
-                        # important line -- sending prediction
-                        predict_server.response_history.record_response(response)
-                        prediction_requests.send(response)
-                        msg = next(message_iterator, None)
-                    else:
-                        break
-
-            log_cnts.update_process_stats()
-            logger.summary(log_cnts.summary_log_message())
-        elif isinstance(msg, CheckAlignmentMessage):
-            logger.info("checkAlignment request")
-            response = predict_server.check_alignment(context)
-            logger.info("sending checkAlignment response to coq")
-            predict_server.response_history.record_response(response)
-            prediction_requests.send(response)
-            msg = next(message_iterator, None)
-        elif isinstance(msg, GlobalContextMessage):
-            prediction_loop(predict_server, msg)
-            msg = next(message_iterator, None)
+        if self.config.with_meter:
+            message_iterator = tqdm.tqdm(context.prediction_requests)
         else:
-            raise Exception("Capnp protocol error")
+            message_iterator = context.prediction_requests
 
-def start_prediction_loop(predict_server: PredictServer, capnp_socket: socket.socket, record_file: Optional[BinaryIO]):
-    prediction_loop(predict_server, capnp_message_generator(capnp_socket, record_file))
+        is_theorem = False
+        
+        with self.coq_context(context):
 
-def start_prediction_loop_with_replay(predict_server: PredictServer, replay_file: Path, record_file: Optional[BinaryIO]):
-    with open(replay_file, "rb") as f:
-        prediction_loop(predict_server, capnp_message_generator_from_file(f, record=record_file))
+            for msg in message_iterator:
+
+                if isinstance(msg, ProofState):
+
+                    if not is_theorem:
+                        is_theorem = True
+                        self.log_cnts.start_theorem(context.log_annotation)
+                    else:
+                        self.log_cnts.measure_t_coq_finish()
+
+                    with self.log_cnts.measure_t_predict():
+                        response = self.predict(msg) # prediction with a network
+
+                    self.response_history.record_response(response)
+
+                    # sending response back to coq
+                    context.prediction_requests.send(response)
+
+                    self.log_cnts.measure_t_coq_start()
+
+                elif isinstance(msg, CheckAlignmentMessage):
+                    logger.info("checkAlignment request")
+                    response = self.data_server.check_alignment(
+                        context.tactics,
+                        context.definitions.definitions(),
+                    )
+                    logger.info("sending checkAlignment response to coq")
+                    self.response_history.record_response(response)
+                    context.prediction_requests.send(response)
+
+                elif isinstance(msg, GlobalContextMessage):
+                    self.prediction_loop(msg)
+
+                else:
+                    raise Exception("Capnp protocol error")
+
+        if is_theorem:
+            self.log_cnts.measure_t_coq_finish()
+            self.log_cnts.update_process_stats()
+            logger.summary(self.log_cnts.summary_log_message())
+            self.log_cnts.reset_definition_counters()
+
+    def start_prediction_loop(self, capnp_socket: socket.socket, record_file: Optional[BinaryIO]):
+        self.log_cnts.start_session()
+        self.prediction_loop(capnp_message_generator(capnp_socket, record_file))
+
+    def start_prediction_loop_with_replay(self, replay_file: Path, record_file: Optional[BinaryIO]):
+        with open(replay_file, "rb") as f:
+            self.log_cnts.start_session()
+            self.prediction_loop(capnp_message_generator_from_file(f, record=record_file))
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -601,6 +745,11 @@ def parse_args() -> argparse.Namespace:
                         default=None,
                         help="a list of tactic names to exclude from predictions")
 
+    parser.add_argument('--paranoic_data_server',
+                        default=False,
+                        action='store_true',
+                        help="Makes data_server check its inner consistency on each update")
+
     return parser.parse_args()
 
 def load_model(config: argparse.Namespace, log_levels: dict) -> Predict:
@@ -685,7 +834,7 @@ def main() -> ResponseHistory:
 
     with record_context as record_file:
         if config.replay_file is not None:
-            start_prediction_loop_with_replay(predict_server, config.replay_file, record_file)
+            predict_server.start_prediction_loop_with_replay(config.replay_file, record_file)
         elif config.tcp:
             logger.info(f"starting tcp/ip server on port {config.port}")
             addr = (config.host, config.port)
@@ -706,7 +855,7 @@ def main() -> ResponseHistory:
                     capnp_socket, remote_addr = server_sock.accept()
                     logger.info(f"coq client connected {remote_addr}")
 
-                    start_prediction_loop(predict_server, capnp_socket, record_file)
+                    predict_server.start_prediction_loop(capnp_socket, record_file)
                     logger.info(f"coq client disconnected {remote_addr}")
             finally:
                 logger.info(f'closing the server on port {config.port}')
@@ -714,7 +863,7 @@ def main() -> ResponseHistory:
         else:
             logger.info("starting stdin server")
             capnp_socket = socket.socket(fileno=sys.stdin.fileno())
-            start_prediction_loop(predict_server, capnp_socket, record_file)
+            predict_server.start_prediction_loop(capnp_socket, record_file)
     
     return response_history  # return for testing purposes
 
