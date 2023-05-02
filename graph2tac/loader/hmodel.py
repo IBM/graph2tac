@@ -131,11 +131,19 @@ class Train:
 
 
 class HPredict(Predict):
-    def __init__(self, checkpoint_dir: Path, debug_dir: Optional[Path] = None):
+    def __init__(self,
+                 checkpoint_dir: Path,
+                 tactic_expand_bound: int = 20,
+                 debug_dir: Optional[Path] = None
+    ):
         loaded_model = pickle.load(open(checkpoint_dir/'hmodel.sav', 'rb'))
 
         # initialize self._graph_constants
-        super().__init__(graph_constants=loaded_model['graph_constants'], debug_dir=debug_dir)
+        super().__init__(
+            graph_constants=loaded_model['graph_constants'],
+            tactic_expand_bound=tactic_expand_bound,
+            debug_dir=debug_dir,
+        )
 
         self._data = loaded_model['data']
         self._label_to_index = None
@@ -159,7 +167,6 @@ class HPredict(Predict):
                            state: LoaderProofstate,
                            allowed_model_tactics: List[int],
                            available_global: Optional[np.ndarray] = None,
-                           tactic_expand_bound: int = 20,
                            total_expand_bound: int = 1000000,
                            annotation: str = "",
                            debug: bool = False,

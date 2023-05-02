@@ -136,23 +136,24 @@ class PredictOutput:
 class TFGNNPredict(Predict):
     def __init__(self,
                  log_dir: Path,
+                 tactic_expand_bound: int,
                  debug_dir: Optional[Path] = None,
                  checkpoint_number: Optional[int] = None,
                  exclude_tactics: Optional[List[str]] = None,
-                 numpy_output: bool = True
+                 allocation_reserve: float = 0.5,
+                 numpy_output: bool = True,
                  ):
         """
         @param log_dir: the directory for the checkpoint that is to be loaded (as passed to the Trainer class)
         @param debug_dir: set to a directory to dump pickle files for every API call that is made
         @param checkpoint_number: the checkpoint number we want to load (use `None` for the latest checkpoint)
         @param exclude_tactics: a list of tactic names to exclude from all predictions
+        @param allocation_reserve: proportional size of extra allocated space when resizing the nodes embedding array
         @param numpy_output: set to True to return the predictions as a tuple of numpy arrays (for evaluation purposes)
         """
 
-        # initialize inference model cache (most of the time we always use one model for a fixed tactic_expand_bound)
-        self._inference_model_cache = {}
         self._exporter = DataToTFGNN()
-        self.cached_definition_computation = None
+        self._allocation_reserve = allocation_reserve
 
         # create dummy dataset for pre-processing purposes
         graph_constants_filepath = log_dir / 'config' / 'graph_constants.yaml'
@@ -162,7 +163,11 @@ class TFGNNPredict(Predict):
             graph_constants = GraphConstants(**graph_constants_d)
 
         # call to parent constructor to defines self.graph_constants
-        super().__init__(graph_constants=graph_constants, debug_dir=debug_dir)
+        super().__init__(
+            graph_constants=graph_constants,
+            tactic_expand_bound=tactic_expand_bound,
+            debug_dir=debug_dir,
+        )
 
         # to build dummy proofstates we will need to use a tactic taking no arguments
         self._dummy_tactic_id = tf.argmin(graph_constants.tactic_index_to_numargs)  # num_arguments == 0
@@ -214,17 +219,14 @@ class TFGNNPredict(Predict):
             load_status.expect_partial().assert_nontrivial_match().assert_existing_objects_matched().run_restore_ops()
             logger.info(f'restored checkpoint #{checkpoint_number}!')
 
-    @predict_api_debugging
-    def allocate_definitions(self, new_node_label_num : int, reserve : float = 0.5) -> None:
-        if self.prediction_task_type != GLOBAL_ARGUMENT_PREDICTION:
-            # no need to update anything if we are not going to use the global context
-            return
+        # TODO: allocate (reserve) extra space
+        node_label_num = self.graph_constants.node_label_num
+        extra_label_num = round(self._allocation_reserve*node_label_num)
+        if extra_label_num > node_label_num: self._allocate_definitions(node_label_num + extra_label_num)
+        self._compile_network()
 
-        if new_node_label_num <= self.graph_constants.node_label_num:
-            # already have sufficient array
-            return
-
-        new_node_label_num += round(reserve*new_node_label_num)
+    def _allocate_definitions(self, new_node_label_num) -> None: # explicit change of the network array
+        
         self.graph_constants.global_context = list(range(new_node_label_num))
 
         logger.info(f'extending global context from {self.graph_constants.node_label_num} to {new_node_label_num} elements')
@@ -238,46 +240,28 @@ class TFGNNPredict(Predict):
             embedding_matrix=self.prediction_task.graph_embedding.get_node_embeddings()
         )
 
-        # clear the inference model cache to force re-creation of the inference models using the new layers
-        self._inference_model_cache = {}
-        self.cached_definition_computation = None
+    @predict_api_debugging
+    def allocate_definitions(self, new_node_label_num : int) -> None:
+        if self.prediction_task_type != GLOBAL_ARGUMENT_PREDICTION:
+            # no need to update anything if we are not going to use the global context
+            return
 
-    def _fetch_definition_computation(self):
-        """
-        The definition computation needs to be rebuilt when the embeddings table is swapped out.
+        if new_node_label_num <= self.graph_constants.node_label_num:
+            # already have sufficient array
+            return
 
-        When the embeddings table is changed, this cached function is deleted and
-        we rebuild it here when we need it.
-        """
+        new_node_label_num += round(self._allocation_reserve*new_node_label_num)
 
-        if self.cached_definition_computation is not None:
-            return self.cached_definition_computation
+        self._allocate_definitions(new_node_label_num)
+        self._compile_network()
 
-        @tf.function(input_signature = (LoaderDefinitionSpec,))
-        def _compute_and_replace_definition_embs(loader_definition):
-            graph_tensor = self._exporter.definition_to_graph_tensor(loader_definition)
-            definition_graph = stack_graph_tensors([graph_tensor])
-
-            scalar_definition_graph = definition_graph.merge_batch_to_components()
-            definition_embeddings = self.definition_task(scalar_definition_graph).flat_values
-            defined_labels = Trainer._get_defined_labels(definition_graph).flat_values
-
-            self.prediction_task.graph_embedding.update_node_embeddings(
-                embeddings=definition_embeddings,
-                indices=defined_labels
-            )
-        
-        self.cached_definition_computation = _compute_and_replace_definition_embs
-        return _compute_and_replace_definition_embs
-    
     @predict_api_debugging
     def compute_new_definitions(self, new_cluster_subgraphs: List[LoaderDefinition]) -> None:
         if self.definition_task is None:
             raise RuntimeError('cannot update definitions when a definition task is not present')
 
         assert len(new_cluster_subgraphs) == 1
-        compute_and_replace_definition_embs = self._fetch_definition_computation()
-        compute_and_replace_definition_embs(new_cluster_subgraphs[0])
+        self._compute_and_replace_definition_embs(new_cluster_subgraphs[0])
 
     @tf.function(input_signature = (LoaderProofstateSpec,))
     def _make_proofstate_graph_tensor(self, state : LoaderProofstate):
@@ -289,6 +273,43 @@ class TFGNNPredict(Predict):
         graph_id = tf.constant(-1, dtype=tf.int64)
         x = DataToTFGNN.proofstate_to_graph_tensor(state, action, graph_id)
         return x
+
+    def _compile_network(self):
+        @tf.function(input_signature = (LoaderDefinitionSpec,))
+        def compute_and_replace_definition_embs(loader_definition):
+            graph_tensor = self._exporter.definition_to_graph_tensor(loader_definition)
+            definition_graph = stack_graph_tensors([graph_tensor])
+
+            scalar_definition_graph = definition_graph.merge_batch_to_components()
+            definition_embeddings = self.definition_task(scalar_definition_graph).flat_values
+            defined_labels = Trainer._get_defined_labels(definition_graph).flat_values
+
+            self.prediction_task.graph_embedding.update_node_embeddings(
+                embeddings=definition_embeddings,
+                indices=defined_labels
+            )
+        self._compute_and_replace_definition_embs = compute_and_replace_definition_embs
+
+        inference_model_bare = self.prediction_task.create_inference_model(
+            tactic_expand_bound=self._tactic_expand_bound,
+            graph_constants=self.graph_constants
+        )
+        allowed_model_tactics_spec = tf.TensorSpec(shape=(None,), dtype=tf.int32)
+        @tf.function(input_signature = (LoaderProofstateSpec, allowed_model_tactics_spec))
+        def inference_model(state, allowed_model_tactics):
+            tactic_mask = tf.scatter_nd(
+                indices = tf.expand_dims(allowed_model_tactics, axis = 1),
+                updates = tf.ones_like(allowed_model_tactics, dtype=bool),
+                shape = [self.graph_constants.tactic_num]
+            )
+            graph_tensor_single = self._make_proofstate_graph_tensor(state)
+            graph_tensor_stacked = stack_graph_tensors([graph_tensor_single])
+            inference_output = inference_model_bare({
+                self.prediction_task.PROOFSTATE_GRAPH: graph_tensor_stacked,
+                self.prediction_task.TACTIC_MASK: tf.expand_dims(tactic_mask, axis=0),
+            })
+            return inference_output
+        self._inference_model = inference_model
 
     # Currently not used
     def _make_proofstate_batch(self, datapoints : Iterable[LoaderProofstate]):
@@ -353,32 +374,9 @@ class TFGNNPredict(Predict):
                                             global_arguments=tf.where(arguments < global_context_size, arguments, -1))
                     for arguments, value in zip(tf.cast(arg_combinations, dtype=tf.int64), combination_values)]
 
-    def _inference_model(self, tactic_expand_bound: int) -> tf.keras.Model:
-        if tactic_expand_bound not in self._inference_model_cache.keys():
-            inference_model_bare = self.prediction_task.create_inference_model(tactic_expand_bound=tactic_expand_bound,
-                                                                          graph_constants=self.graph_constants)
-            allowed_model_tactics_spec = tf.TensorSpec(shape=(None,), dtype=tf.int32)
-            @tf.function(input_signature = (LoaderProofstateSpec, allowed_model_tactics_spec))
-            def inference_model(state, allowed_model_tactics):
-                tactic_mask = tf.scatter_nd(
-                    indices = tf.expand_dims(allowed_model_tactics, axis = 1),
-                    updates = tf.ones_like(allowed_model_tactics, dtype=bool),
-                    shape = [self.graph_constants.tactic_num]
-                )
-                graph_tensor_single = self._make_proofstate_graph_tensor(state)
-                graph_tensor_stacked = stack_graph_tensors([graph_tensor_single])
-                inference_output = inference_model_bare({
-                    self.prediction_task.PROOFSTATE_GRAPH: graph_tensor_stacked,
-                    self.prediction_task.TACTIC_MASK: tf.expand_dims(tactic_mask, axis=0),
-                })
-                return inference_output
-            self._inference_model_cache[tactic_expand_bound] = inference_model
-        return self._inference_model_cache[tactic_expand_bound]
-
     @predict_api_debugging
     def ranked_predictions(self,
                            state: LoaderProofstate,
-                           tactic_expand_bound: int,
                            total_expand_bound: int,
                            available_global: Optional[np.ndarray] = None,
                            allowed_model_tactics: Optional[Iterable[int]] = None
@@ -389,8 +387,7 @@ class TFGNNPredict(Predict):
         if available_global is not None:
             raise NotImplementedError('available_global is not supported yet')
 
-        inference_model = self._inference_model(tactic_expand_bound)
-        inference_output = inference_model(state, allowed_model_tactics)
+        inference_output = self._inference_model(state, allowed_model_tactics)
         predict_output = PredictOutput(state=None, predictions=[])
 
         # go over the tactic_expand_bound batches

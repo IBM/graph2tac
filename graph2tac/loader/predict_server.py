@@ -557,7 +557,6 @@ class PredictServer:
 
         actions, confidences = self.model.ranked_predictions(
             state=proof_state_graph,
-            tactic_expand_bound=self.config.tactic_expand_bound,
             total_expand_bound=self.config.total_expand_bound,
             allowed_model_tactics=self.current_allowed_tactics,
             available_global=None
@@ -784,13 +783,18 @@ def load_model(config: argparse.Namespace, log_levels: dict) -> Predict:
         logger.info("importing TFGNNPredict class...")
         from graph2tac.tfgnn.predict import TFGNNPredict
         model = TFGNNPredict(log_dir=Path(config.model).expanduser().absolute(),
-                               debug_dir=config.debug_predict,
-                               checkpoint_number=config.checkpoint_number,
-                               exclude_tactics=exclude_tactics)
+                             tactic_expand_bound=config.tactic_expand_bound,
+                             debug_dir=config.debug_predict,
+                             checkpoint_number=config.checkpoint_number,
+                             exclude_tactics=exclude_tactics)
     elif config.arch == 'hmodel':
         logger.info("importing HPredict class..")
         from graph2tac.loader.hmodel import HPredict
-        model = HPredict(checkpoint_dir=Path(config.model).expanduser().absolute(), debug_dir=config.debug_predict)
+        model = HPredict(
+            checkpoint_dir=Path(config.model).expanduser().absolute(),
+            tactic_expand_bound=config.tactic_expand_bound,
+            debug_dir=config.debug_predict
+        )
     else:
         raise Exception(f'the provided model architecture {config.arch} is not supported')
 
