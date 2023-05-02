@@ -4,3 +4,4 @@ tf_log_level: critical
 tactic_expand_bound: 3  # there are only 3 tactics in this dataset
 total_expand_bound: 10
 search_expand_bound: 4
+paranoic_data_server: null

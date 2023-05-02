@@ -232,7 +232,7 @@ class LoggingCounters:
         )
 
 class DynamicDataServer(AbstractDataServer):
-    def __init__(self, graph_constants: GraphConstants, paranoic = False):
+    def __init__(self, graph_constants: GraphConstants, paranoic):
         super().__init__(graph_constants.data_config)
         self.paranoic = paranoic # checks consistency on each update
 
@@ -444,7 +444,10 @@ class PredictServer:
                  log_cnts: LoggingCounters,
                  response_history: ResponseHistory,
     ):
-        self.data_server = DynamicDataServer(model.graph_constants)
+        self.data_server = DynamicDataServer(
+            graph_constants = model.graph_constants,
+            paranoic = config.paranoic_data_server,
+        )
         self.model = model
         self.config = config
         self.log_cnts = log_cnts
@@ -741,6 +744,11 @@ def parse_args() -> argparse.Namespace:
                         type=Path,
                         default=None,
                         help="a list of tactic names to exclude from predictions")
+
+    parser.add_argument('--paranoic_data_server',
+                        default=False,
+                        action='store_true',
+                        help="Makes data_server check its inner consistency on each update")
 
     return parser.parse_args()
 
