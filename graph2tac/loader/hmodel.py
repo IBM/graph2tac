@@ -83,7 +83,6 @@ class Train:
         )
         self._data = {}
         self.output_dir = output_dir
-        self._global_context = self._data_server.graph_constants().global_context
         self._tactic_index_to_hash = self._data_server.graph_constants().tactic_index_to_hash
         self._max_subgraph_size = max_subgraph_size
         self._with_context = with_context

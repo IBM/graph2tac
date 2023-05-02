@@ -1271,8 +1271,7 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
 
         # [batch_size, ]
         no_local_context_proofstates = scalar_proofstate_graph.context['local_context_ids'].row_lengths() == 0
-        no_global_context_proofstates = tf.fill(dims=(proofstate_graph.total_num_components,),
-                                                value=len(graph_constants.global_context) == 0)
+        no_global_context_proofstates = scalar_proofstate_graph.context['global_context_ids'].row_lengths() == 0
         no_context_proofstates = no_local_context_proofstates & no_global_context_proofstates
 
         # [batch_size, tactic_num]

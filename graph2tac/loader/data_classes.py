@@ -104,7 +104,6 @@ class GraphConstants:
     tactic_index_to_numargs: list[int]
     tactic_index_to_string: list[str]    # tactic names
     tactic_index_to_hash: list[int]
-    global_context: list[int]
     label_to_names: list[str]
     label_to_ident: list[int]
     label_in_spine: list[bool]

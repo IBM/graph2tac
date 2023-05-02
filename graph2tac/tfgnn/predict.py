@@ -219,15 +219,12 @@ class TFGNNPredict(Predict):
             load_status.expect_partial().assert_nontrivial_match().assert_existing_objects_matched().run_restore_ops()
             logger.info(f'restored checkpoint #{checkpoint_number}!')
 
-        # TODO: allocate (reserve) extra space
         node_label_num = self.graph_constants.node_label_num
         extra_label_num = round(self._allocation_reserve*node_label_num)
         if extra_label_num > node_label_num: self._allocate_definitions(node_label_num + extra_label_num)
         self._compile_network()
 
     def _allocate_definitions(self, new_node_label_num) -> None: # explicit change of the network array
-        
-        self.graph_constants.global_context = list(range(new_node_label_num))
 
         logger.info(f'extending global context from {self.graph_constants.node_label_num} to {new_node_label_num} elements')
         new_graph_emb_layer = self.prediction_task.graph_embedding.extend_embeddings(new_node_label_num)
@@ -444,7 +441,7 @@ class TFGNNPredict(Predict):
                 predictions = self._expand_arguments_logits(total_expand_bound=total_expand_bound,
                                                             num_arguments=num_arguments,
                                                             local_context_size=local_context_size,
-                                                            global_context_size=len(self.graph_constants.global_context),
+                                                            global_context_size=global_context_size,
                                                             **inference_data)
                 predict_output.predictions.extend(filter(lambda inference: inference.value > -float('inf'), predictions))
         return predict_outputs
