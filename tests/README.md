@@ -58,11 +58,11 @@ The datasets are stored in `tests/data/*/dataset/` and the parameter files for e
 
 ### Cached results
 Each step of the integration test (if a training step) is cached which speeds up later steps of the pipeline.  For example, after running 
-`pytest tests/integration/test_pipeline::test_tfgnn_train.py`, the tests will no longer need to retrain the model
-to test the predict_server with `pytest tests/integration/test_pipeline::test_predict_server.py`.
+`pytest tests/integration/test_pipeline.py::test_tfgnn_train`, the tests will no longer need to retrain the model
+to test the predict_server with `pytest tests/integration/test_pipeline.py::test_predict_server`.
 
 The cached training results are cleared and recomputed whenever one runs a specific step of the pipeline with `test_pipeline`, e.g. all cached
-tfgnn models will be cleared when running `pytest tests/integration/test_pipeline::test_tfgnn_train.py`.
+tfgnn models will be cleared when running `pytest tests/integration/test_pipeline.py::test_tfgnn_train`.
 
 Further, one can all clear all the pytest cached results with the parameter `--cache-clear`.
 
