@@ -90,7 +90,7 @@ class Predict:
         """
         [ Public API ] Prepares sufficient size for (new) model's definition
 
-        @param global_context: a replacement for the original global_context in the GraphConstants seen during training
+        @param new_node_label_num: required size of the array of nodes stored in the model
         """
         raise NotImplementedError('allocate_definitions should be implemented by sub-classes')
 
