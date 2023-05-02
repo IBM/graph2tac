@@ -116,6 +116,8 @@ class LoggingCounters:
     """last (absolute) time we called coq"""
     n_coq: int = 0
     """Number of 'prediction' requests made by Coq"""
+    build_network_time: float = 0.0
+    """Total time (in seconds) of all network initializations"""
     update_def_time: float = 0.0
     """Time (in seconds) to update the definitions processing most recent 'intitialize' message"""
     n_def_clusters_updated: int = 0
@@ -137,6 +139,13 @@ class LoggingCounters:
     Can be > 100% if using multiple cores (same as in htop).
     May incorrectly be 0.0 if there isn't enough time between 'initialize' calls.
     """
+
+    @contextmanager
+    def measure_build_network_time(self, n_def_clusters_updated):
+        t0 = time.time()
+        yield
+        t1 = time.time()
+        self.build_network_time += t1 - t0
 
     @contextmanager
     def measure_update_def_time(self, n_def_clusters_updated):
@@ -211,6 +220,7 @@ class LoggingCounters:
             "Session" : f"{self.session_idx}",
             "Theorem" : f"{self.thm_idx}",
             "Annotation" : f"{self.thm_annotation}",
+            "Initialize|Network build time (s)" : f"{self.build_network_time:.6f}",
             "Initialize|Def clusters to update" : f"{self.n_def_clusters_updated}",
             "Initialize|Def update time (s)" : f"{self.update_def_time:.6f}",
             "Predict|Messages cnt" : f"{self.msg_idx+1}",
