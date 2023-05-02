@@ -94,7 +94,7 @@ class DatasetConfig:
     shuffle_random_seed : int
 
 @dataclass
-class GraphConstants:
+class GraphConstantsRaw:
     data_config : DataConfig
     tactic_num: int
     edge_label_num: int
@@ -107,3 +107,10 @@ class GraphConstants:
     label_to_names: list[str]
     label_to_ident: list[int]
     label_in_spine: list[bool]
+
+# A trick to allow "global_context" being a parameter without storing it anywhere
+# It can be removed with renaming "GraphConstantsRaw" -> "GraphConstants" if we decide
+# that we don't need to use old models anymore (or delete "global_context" from them)
+class GraphConstants(GraphConstantsRaw):
+    def __init__(self, *args, global_context=None, **kwargs):
+        super().__init__(*args, **kwargs)
