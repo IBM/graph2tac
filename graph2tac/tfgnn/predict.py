@@ -221,7 +221,7 @@ class TFGNNPredict(Predict):
 
         node_label_num = self.graph_constants.node_label_num
         extra_label_num = round(self._allocation_reserve*node_label_num)
-        if extra_label_num > node_label_num: self._allocate_definitions(node_label_num + extra_label_num)
+        if extra_label_num > 0: self._allocate_definitions(node_label_num + extra_label_num)
         self._compile_network()
 
     def _allocate_definitions(self, new_node_label_num) -> None: # explicit change of the network array

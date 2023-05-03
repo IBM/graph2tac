@@ -141,7 +141,7 @@ class LoggingCounters:
     """
 
     @contextmanager
-    def measure_build_network_time(self, n_def_clusters_updated):
+    def measure_build_network_time(self):
         t0 = time.time()
         yield
         t1 = time.time()
@@ -483,7 +483,8 @@ class PredictServer:
 
         num_labels = self.data_server.num_nodes_total
         logger.info(f"allocating space for {num_labels} defs")
-        self.model.allocate_definitions(num_labels)
+        with self.log_cnts.measure_build_network_time():
+            self.model.allocate_definitions(num_labels)
 
         # definition recalculation
         if self.config.update == "all":
@@ -837,7 +838,8 @@ def main() -> ResponseHistory:
     logger.info(f"UUID: {process_uuid}")
 
     log_cnts = LoggingCounters(process_uuid=process_uuid)
-    model = load_model(config, log_levels)
+    with log_cnts.measure_build_network_time():
+        model = load_model(config, log_levels)
     response_history = ResponseHistory(recording_on=(config.replay_file is not None))  # only record response history if replay is on
     predict_server = PredictServer(model, config, log_cnts, response_history)
 
