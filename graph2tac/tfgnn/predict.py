@@ -8,7 +8,7 @@ import tensorflow_gnn as tfgnn
 from dataclasses import dataclass
 from pathlib import Path
 
-from graph2tac.loader.data_classes import DataConfig, GraphConstants, LoaderAction, LoaderActionSpec, LoaderProofstate, LoaderProofstateSpec, LoaderDefinition, LoaderDefinitionSpec
+from graph2tac.loader.data_classes import DataConfig, GraphConstants, LoaderGraph, ProofstateMetadata, ProofstateContext, LoaderAction, LoaderActionSpec, LoaderProofstate, LoaderProofstateSpec, LoaderDefinition, LoaderDefinitionSpec
 from graph2tac.loader.data_server import DataToTFGNN
 from graph2tac.tfgnn.tasks import PredictionTask, TacticPrediction, DefinitionTask, GLOBAL_ARGUMENT_PREDICTION
 from graph2tac.tfgnn.models import GraphEmbedding, LogitsFromEmbeddings
@@ -308,6 +308,29 @@ class TFGNNPredict(Predict):
             return inference_output
         self._inference_model = inference_model
 
+        dummy_graph = LoaderGraph(
+            nodes = np.zeros([1], dtype = int),
+            edges = np.zeros([0,2], dtype = int),
+            edge_labels = np.zeros([0], dtype = int),
+            edge_offsets = np.zeros([0], dtype = int),
+        )
+        dummy_loader_proofstate = LoaderProofstate(
+            graph = dummy_graph,
+            root = 0,
+            context = ProofstateContext(
+                local_context = np.zeros([0], dtype = int),
+                global_context = np.zeros([0], dtype = int),
+            ),
+            metadata = ProofstateMetadata(
+                name = "",
+                step = 0,
+                is_faithful = False,
+            ),
+        )
+        # TODO?: make a working dummy input for _compute_and_replace_definition_embs
+        # currently, empty list of updated definitions crashes in the name_layer
+        self._inference_model(dummy_loader_proofstate, np.zeros([1], dtype = int))
+        
     # Currently not used
     def _make_proofstate_batch(self, datapoints : Iterable[LoaderProofstate]):
         return stack_graph_tensors([
