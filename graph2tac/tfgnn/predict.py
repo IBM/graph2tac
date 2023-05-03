@@ -145,6 +145,7 @@ class TFGNNPredict(Predict):
                  ):
         """
         @param log_dir: the directory for the checkpoint that is to be loaded (as passed to the Trainer class)
+        @param total_expand_bound:
         @param debug_dir: set to a directory to dump pickle files for every API call that is made
         @param checkpoint_number: the checkpoint number we want to load (use `None` for the latest checkpoint)
         @param exclude_tactics: a list of tactic names to exclude from all predictions
@@ -327,8 +328,7 @@ class TFGNNPredict(Predict):
                 is_faithful = False,
             ),
         )
-        # TODO?: make a working dummy input for _compute_and_replace_definition_embs
-        # currently, empty list of updated definitions crashes in the name_layer
+        # run on a dummy input to force precompilation
         self._inference_model(dummy_loader_proofstate, np.zeros([1], dtype = int))
         
     # Currently not used

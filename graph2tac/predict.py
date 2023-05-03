@@ -69,6 +69,7 @@ class Predict:
         """
 
         @param graph_constants: the graph constants seen during training
+        @param total_expand_bound:
         @param debug_dir: a directory where all api calls will be logged for debugging purposes
         """
         self.graph_constants = graph_constants 
