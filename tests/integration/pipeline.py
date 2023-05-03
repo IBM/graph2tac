@@ -247,7 +247,8 @@ class Pipeline:
                 log_dir=model_dir,
                 debug_dir=None,
                 checkpoint_number=None,
-                exclude_tactics=None
+                exclude_tactics=None,
+                tactic_expand_bound=20,
             )
             return True
 

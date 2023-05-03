@@ -424,7 +424,6 @@ class DataServer(AbstractDataServer):
             tactic_index_to_numargs = self._tactic_i_to_numargs,
             tactic_index_to_string = self._tactic_i_to_string,
             tactic_index_to_hash = self._tactic_i_to_hash,
-            global_context = list(range(total_node_label_num)),
             label_to_names = self._node_i_to_name,
             label_to_ident = self._node_i_to_ident,
             label_in_spine = self._node_i_in_spine,

@@ -116,6 +116,8 @@ class LoggingCounters:
     """last (absolute) time we called coq"""
     n_coq: int = 0
     """Number of 'prediction' requests made by Coq"""
+    build_network_time: float = 0.0
+    """Total time (in seconds) of all network initializations"""
     update_def_time: float = 0.0
     """Time (in seconds) to update the definitions processing most recent 'intitialize' message"""
     n_def_clusters_updated: int = 0
@@ -137,6 +139,13 @@ class LoggingCounters:
     Can be > 100% if using multiple cores (same as in htop).
     May incorrectly be 0.0 if there isn't enough time between 'initialize' calls.
     """
+
+    @contextmanager
+    def measure_build_network_time(self):
+        t0 = time.time()
+        yield
+        t1 = time.time()
+        self.build_network_time += t1 - t0
 
     @contextmanager
     def measure_update_def_time(self, n_def_clusters_updated):
@@ -211,6 +220,7 @@ class LoggingCounters:
             "Session" : f"{self.session_idx}",
             "Theorem" : f"{self.thm_idx}",
             "Annotation" : f"{self.thm_annotation}",
+            "Initialize|Network build time (s)" : f"{self.build_network_time:.6f}",
             "Initialize|Def clusters to update" : f"{self.n_def_clusters_updated}",
             "Initialize|Def update time (s)" : f"{self.update_def_time:.6f}",
             "Predict|Messages cnt" : f"{self.msg_idx+1}",
@@ -473,7 +483,8 @@ class PredictServer:
 
         num_labels = self.data_server.num_nodes_total
         logger.info(f"allocating space for {num_labels} defs")
-        self.model.allocate_definitions(num_labels)
+        with self.log_cnts.measure_build_network_time():
+            self.model.allocate_definitions(num_labels)
 
         # definition recalculation
         if self.config.update == "all":
@@ -557,7 +568,6 @@ class PredictServer:
 
         actions, confidences = self.model.ranked_predictions(
             state=proof_state_graph,
-            tactic_expand_bound=self.config.tactic_expand_bound,
             total_expand_bound=self.config.total_expand_bound,
             allowed_model_tactics=self.current_allowed_tactics,
             available_global=None
@@ -784,13 +794,18 @@ def load_model(config: argparse.Namespace, log_levels: dict) -> Predict:
         logger.info("importing TFGNNPredict class...")
         from graph2tac.tfgnn.predict import TFGNNPredict
         model = TFGNNPredict(log_dir=Path(config.model).expanduser().absolute(),
-                               debug_dir=config.debug_predict,
-                               checkpoint_number=config.checkpoint_number,
-                               exclude_tactics=exclude_tactics)
+                             tactic_expand_bound=config.tactic_expand_bound,
+                             debug_dir=config.debug_predict,
+                             checkpoint_number=config.checkpoint_number,
+                             exclude_tactics=exclude_tactics)
     elif config.arch == 'hmodel':
         logger.info("importing HPredict class..")
         from graph2tac.loader.hmodel import HPredict
-        model = HPredict(checkpoint_dir=Path(config.model).expanduser().absolute(), debug_dir=config.debug_predict)
+        model = HPredict(
+            checkpoint_dir=Path(config.model).expanduser().absolute(),
+            tactic_expand_bound=config.tactic_expand_bound,
+            debug_dir=config.debug_predict
+        )
     else:
         raise Exception(f'the provided model architecture {config.arch} is not supported')
 
@@ -823,7 +838,8 @@ def main() -> ResponseHistory:
     logger.info(f"UUID: {process_uuid}")
 
     log_cnts = LoggingCounters(process_uuid=process_uuid)
-    model = load_model(config, log_levels)
+    with log_cnts.measure_build_network_time():
+        model = load_model(config, log_levels)
     response_history = ResponseHistory(recording_on=(config.replay_file is not None))  # only record response history if replay is on
     predict_server = PredictServer(model, config, log_cnts, response_history)
 
