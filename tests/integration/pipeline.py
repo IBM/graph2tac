@@ -236,12 +236,14 @@ class Pipeline:
             )
             return True
         else:
-            from graph2tac.tfgnn.predict import TFGNNPredict
-            # a seed has to be set after tensor is imported.
-            # Only matters if using a cached or saved model.
-            # This seed value shouldn't matter for the results since server
-            # and model are deterministic.
-            tf.random.set_seed(1)  
+            from graph2tac.tfgnn.predict import TFGNNPredict  # put import here so it doesn't break other tests if it crashes
+            from tensorflow.python.eager import context
+            # clear any tensorflow settings from tensorflow imports earlier in the pipeline
+            # without this we can run into issues of setting tf.config twice
+            context._context = None
+            context._create_context()
+            # a seed has to be set after tensorflow is imported.
+            tf.random.set_seed(1)
 
             TFGNNPredict(
                 log_dir=model_dir,
@@ -257,11 +259,14 @@ class Pipeline:
     def run_predict_server(tmp_path: Path, record_file: Path, params_dir: Path, model_dir: Path) -> dict:
         """Run training and return results for comparison"""
         import graph2tac.loader.predict_server  # put import here so it doesn't break other tests if it crashes
-        
-        # a seed has to be set after tensor is imported.
-        # Only matters if using a cached model.
-        # This seed value shouldn't matter for the results since server
-        # and model are deterministic.
+        from tensorflow.python.eager import context
+        # clear any tensorflow settings from tensorflow imports earlier in the pipeline
+        # without this we can run into issues of setting tf.config twice
+        context._context = None
+        context._create_context()
+        # a seed has to be set after tensorflow is imported.
+        # Also it makes the tests deterministic.
+        # (The predict server is usually deterministic except when using --update-no-definitions)
         tf.random.set_seed(1)  
 
         server_args = ["<program>",
