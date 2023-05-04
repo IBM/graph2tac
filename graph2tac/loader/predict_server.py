@@ -100,22 +100,20 @@ class LoggingCounters:
     """Index of the current theorem (based on number of `initialization` messages seen)"""    
     thm_annotation: str = ""
     """A theorem identifier (including file and linenumber if Coq is using coqc)"""
-    msg_idx: int = -1
+    msg_idx: int = 0
     """Number of 'prediction' messages recieved since last 'intitialize' message"""
     t_predict: float = 0.0
     """Total time (in seconds) spent on predict since last 'initialize'"""
-    n_predict: int = 0
-    """Number of 'prediction' messages recieved since last 'intialize'"""
     max_t_predict: float = 0.0
     """Max time (in seconds) spent on single predict since last 'initialize'"""
     argmax_t_predict: int = -1
     """Index of last maximum time single predict since last 'initialize'"""
-    t_coq: float = 0.0
+    t_coq_send: float = 0.0
     """Total time (in seconds) spent waiting on Coq since last 'initialize'"""
-    t0_coq: float = -1.0
+    t_coq_receive: float = 0.0
+    """Total time (in seconds) spent waiting on Coq since last 'initialize'"""
+    t0_coq_receive: float = -1.0
     """last (absolute) time we called coq"""
-    n_coq: int = 0
-    """Number of 'prediction' requests made by Coq"""
     build_network_time: float = 0.0
     """Total time (in seconds) of all network initializations"""
     update_def_time: float = 0.0
@@ -155,18 +153,24 @@ class LoggingCounters:
         self.n_def_clusters_updated += n_def_clusters_updated
         self.update_def_time += t1 - t0
 
-    def measure_t_coq_start(self):
-        if self.t0_coq >= 0:
+    @contextmanager
+    def measure_t_coq_send(self):
+        t0 = time.time()
+        yield
+        t1 = time.time()
+        self.t_coq_send += t1-t0
+
+    def measure_t_coq_receive_start(self):
+        if self.t0_coq_receive >= 0:
             logger.warning("(coq_start) Nesting theorems in LoggingCounters, likely causing to misleading summaries")
-        self.t0_coq = time.time()
-    def measure_t_coq_finish(self):
-        t1_coq = time.time()
-        if self.t0_coq < 0:
+        self.t0_coq_receive = time.time()
+    def measure_t_coq_receive_finish(self):
+        t1_coq_receive = time.time()
+        if self.t0_coq_receive < 0:
             logger.warning("(coq_finish) Nesting theorems in LoggingCounters, likely causing misleading summaries")
             return
-        self.n_coq += 1
-        self.t_coq += t1_coq - self.t0_coq
-        self.t0_coq = -1.0
+        self.t_coq_receive += t1_coq_receive - self.t0_coq_receive
+        self.t0_coq_receive = -1.0
 
     @contextmanager
     def measure_t_predict(self):
@@ -175,13 +179,11 @@ class LoggingCounters:
         yield
         t1 = time.time()
 
-        self.msg_idx += 1
         if t1 - t0 > self.max_t_predict:
             self.max_t_predict = t1 - t0
             self.argmax_t_predict = self.msg_idx
 
         self.t_predict += (t1 - t0)
-        self.n_predict += 1
 
     def start_session(self):
         self.session_idx += 1
@@ -191,13 +193,11 @@ class LoggingCounters:
     def start_theorem(self, log_annotation):
         self.thm_idx += 1
         self.thm_annotation = log_annotation
-        self.msg_idx = -1
+        self.msg_idx = 0
         self.t_predict = 0.0
-        self.n_predict = 0
         self.max_t_predict = 0.0
         self.argmax_t_predict = -1
-        self.t_coq = 0.0
-        self.n_coq = 0
+        self.t_coq_receive = 0.0
 
     def update_process_stats(self):
         """
@@ -215,6 +215,7 @@ class LoggingCounters:
         self.n_def_clusters_updated = 0
 
     def summary_log_message(self) -> str:
+        n_steps = self.msg_idx
         summary_data = {
             "UUID" : f"{self.process_uuid}",
             "Session" : f"{self.session_idx}",
@@ -223,13 +224,12 @@ class LoggingCounters:
             "Initialize|Network build time (s)" : f"{self.build_network_time:.6f}",
             "Initialize|Def clusters to update" : f"{self.n_def_clusters_updated}",
             "Initialize|Def update time (s)" : f"{self.update_def_time:.6f}",
-            "Predict|Messages cnt" : f"{self.msg_idx+1}",
-            "Predict|Avg predict time (s/msg)" : 
-                f"{self.t_predict/self.n_predict:.6f}" if self.n_predict else "NA",
+            "Predict|Messages cnt" : f"{n_steps}",
+            "Predict|Avg predict time (s/msg)" : f"{self.t_predict/n_steps:.6f}",
             "Predict|Max predict time (s/msg)" : f"{self.max_t_predict:.6f}",
             "Predict|Max time predict msg ix" : f"{self.argmax_t_predict}",
-            "Predict|Avg Coq wait time (s/msg)":
-                f"{self.t_coq/self.n_coq:.6f}" if self.n_coq else "NA",
+            "Predict|Avg Coq time (send) (s/msg)": f"{self.t_coq_send/n_steps:.6f}",
+            "Predict|Avg Coq time (iter) (s/msg)": f"{self.t_coq_receive/n_steps:.6f}",
             "Memory|Total memory (MB)": f"{self.total_mem/10**6:.3f}",
             "Memory|Physical memory (MB)": f"{self.physical_mem/10**6:.3f}",
             "Memory|Total mem diff (MB)": f"{self.total_mem_diff/10**6:.3f}",
@@ -602,17 +602,18 @@ class PredictServer:
                         is_theorem = True
                         self.log_cnts.start_theorem(context.log_annotation)
                     else:
-                        self.log_cnts.measure_t_coq_finish()
+                        self.log_cnts.measure_t_coq_receive_finish()
 
                     with self.log_cnts.measure_t_predict():
                         response = self.predict(msg) # prediction with a network
+                    self.log_cnts.msg_idx += 1
 
                     self.response_history.record_response(response)
 
-                    # sending response back to coq
-                    context.prediction_requests.send(response)
-
-                    self.log_cnts.measure_t_coq_start()
+                    with self.log_cnts.measure_t_coq_send():
+                        # sending response back to coq
+                        context.prediction_requests.send(response)
+                    self.log_cnts.measure_t_coq_receive_start()
 
                 elif isinstance(msg, CheckAlignmentMessage):
                     logger.info("checkAlignment request")
@@ -631,7 +632,7 @@ class PredictServer:
                     raise Exception("Capnp protocol error")
 
         if is_theorem:
-            self.log_cnts.measure_t_coq_finish()
+            self.log_cnts.measure_t_coq_receive_finish()
             self.log_cnts.update_process_stats()
             logger.summary(self.log_cnts.summary_log_message())
             self.log_cnts.reset_definition_counters()
