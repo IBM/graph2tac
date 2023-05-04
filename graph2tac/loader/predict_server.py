@@ -677,11 +677,11 @@ def parse_args() -> argparse.Namespace:
                         choices=['tfgnn', 'hmodel'],
                         help='the model architecture tfgnn or hmodel (current default is tfgnn)')
 
-    parser.add_argument('--log_level', type=str,
+    parser.add_argument('--log-level', '--log_level', type=str,
                         default='info',
                         help='debug | verbose | info | summary | warning | error | critical')
 
-    parser.add_argument('--tf_log_level', type=str,
+    parser.add_argument('--tf-log-level', '--tf_log_level', type=str,
                         default='info',
                         help='debug | verbose | info | summary | warning | error | critical')
 
@@ -691,46 +691,46 @@ def parse_args() -> argparse.Namespace:
                         help='Record all exchanged messages to the specified file, so that they can later be ' +
                         'replayed through "pytact-fake-coq" or --replay')
 
-    parser.add_argument('--with_meter',
+    parser.add_argument('--with-meter', '--with_meter',
                         default=False,
                         action='store_true',
                         help="Display throughput of predict calls per second")
 
-    parser.add_argument('--total_expand_bound',
+    parser.add_argument('--total-expand-bound', '--total_expand_bound',
                         type=int,
                         default=2048,
                         help="total_expand_bound for ranked argument search")
 
-    parser.add_argument('--tactic_expand_bound',
+    parser.add_argument('--tactic-expand-bound', '--tactic_expand_bound',
                         type=int,
                         default=8,
                         help="tactic_expand_bound for ranked argument search")
 
-    parser.add_argument('--search_expand_bound',
+    parser.add_argument('--search-expand-bound', '--search_expand_bound',
                         type=int,
                         default=8,
                         help="maximal number of predictions to be sent to search algorithm in coq evaluation client ")
 
     update_group = parser.add_mutually_exclusive_group()
-    update_group.add_argument('--update_no_definitions', '--update-no-definitions',
+    update_group.add_argument('--update-no-definitions', '--update_no_definitions',
         action='store_const', dest='update', const=None, default=None,
         help='for new definitions (not learned during training) use default embeddings (default)'
     )
-    update_group.add_argument('--update_new_definitions', '--update-new-definitions',
+    update_group.add_argument('--update-new-definitions', '--update_new_definitions',
         action='store_const', dest='update', const='new',
         help='for new definitions (not learned during training) use embeddings calculated from the model'
     )
-    update_group.add_argument('--update_all_definitions', '--update-all-definitions',
+    update_group.add_argument('--update-all-definitions', '--update_all_definitions',
         action='store_const', dest='update', const='all',
         help='overwrite all definition embeddings with new embeddings calculated from the model'
     )
 
-    parser.add_argument('--progress_bar',
+    parser.add_argument('--progress-bar', '--progress_bar',
                         default=False,
                         action='store_true',
                         help="show the progress bar of update definition clusters")
 
-    parser.add_argument('--tf_eager',
+    parser.add_argument('--tf-eager', '--tf_eager',
                         default=False,
                         action='store_true',
                         help="with tf_eager=True activated network may initialize faster but run slower, use carefully if you need")
@@ -740,27 +740,27 @@ def parse_args() -> argparse.Namespace:
                         default=1.0,
                         help="temperature to apply to the probability distributions returned by the model")
 
-    parser.add_argument('--debug-predict',
+    parser.add_argument('--debug-predict', '--debug_predict',
                         type=Path,
                         default=None,
                         help="set this flag to run Predict in debug mode")
 
-    parser.add_argument('--checkpoint-number',
+    parser.add_argument('--checkpoint-number', '--checkpoint_number',
                         type=int,
                         default=None,
                         help="choose the checkpoint number to use (defaults to latest available checkpoint)")
 
-    parser.add_argument('--exclude-tactics',
+    parser.add_argument('--exclude-tactics', '--exclude_tactics',
                         type=Path,
                         default=None,
                         help="a list of tactic names to exclude from predictions")
 
-    parser.add_argument('--paranoic_data_server',
+    parser.add_argument('--paranoic-data-server', '--paranoic_data_server',
                         default=False,
                         action='store_true',
                         help="Makes data_server check its inner consistency on each update")
 
-    parser.add_argument('--cpu_thread_count', '--cpu-thread-count',
+    parser.add_argument('--cpu-thread-count', '--cpu_thread_count',
                         type=int,
                         default=0,
                         help="number of cpu threads to use tensorflow to use (automatic by default)")
