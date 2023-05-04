@@ -760,6 +760,11 @@ def parse_args() -> argparse.Namespace:
                         action='store_true',
                         help="Makes data_server check its inner consistency on each update")
 
+    parser.add_argument('--cpu_thread_count', '--cpu-thread-count',
+                        type=int,
+                        default=0,
+                        help="number of cpu threads to use tensorflow to use (automatic by default)")
+    
     return parser.parse_args()
 
 def load_model(config: argparse.Namespace, log_levels: dict) -> Predict:
@@ -783,6 +788,9 @@ def load_model(config: argparse.Namespace, log_levels: dict) -> Predict:
         import tensorflow as tf
         tf.get_logger().setLevel(int(log_levels[config.tf_log_level]))
         tf.config.run_functions_eagerly(config.tf_eager)
+        tf.config.threading.set_inter_op_parallelism_threads(
+            config.cpu_thread
+        )
 
         if config.exclude_tactics is not None:
             with Path(config.exclude_tactics).open('r') as yaml_file:
