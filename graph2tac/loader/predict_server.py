@@ -789,7 +789,7 @@ def load_model(config: argparse.Namespace, log_levels: dict) -> Predict:
         tf.get_logger().setLevel(int(log_levels[config.tf_log_level]))
         tf.config.run_functions_eagerly(config.tf_eager)
         tf.config.threading.set_inter_op_parallelism_threads(
-            config.cpu_thread
+            config.cpu_thread_count
         )
 
         if config.exclude_tactics is not None:
