@@ -110,9 +110,11 @@ class LoggingCounters:
     """Max time (in seconds) spent on single predict since last 'initialize'"""
     argmax_t_predict: int = -1
     """Index of last maximum time single predict since last 'initialize'"""
-    t_coq: float = 0.0
+    t_coq_send: float = 0.0
     """Total time (in seconds) spent waiting on Coq since last 'initialize'"""
-    t0_coq: float = -1.0
+    t_coq_receive: float = 0.0
+    """Total time (in seconds) spent waiting on Coq since last 'initialize'"""
+    t0_coq_receive: float = -1.0
     """last (absolute) time we called coq"""
     n_coq: int = 0
     """Number of 'prediction' requests made by Coq"""
@@ -155,18 +157,23 @@ class LoggingCounters:
         self.n_def_clusters_updated += n_def_clusters_updated
         self.update_def_time += t1 - t0
 
-    def measure_t_coq_start(self):
-        if self.t0_coq >= 0:
+    @contextmanager
+    def measure_t_coq_send(self):
+        t0 = time.time()
+        yield
+        t1 = time.time()
+        self.t_coq_send += t1-t0
+        if self.t0_coq_receive >= 0:
             logger.warning("(coq_start) Nesting theorems in LoggingCounters, likely causing to misleading summaries")
-        self.t0_coq = time.time()
+        self.t0_coq_receive = t1
     def measure_t_coq_finish(self):
-        t1_coq = time.time()
-        if self.t0_coq < 0:
+        t1_coq_receive = time.time()
+        if self.t0_coq_receive < 0:
             logger.warning("(coq_finish) Nesting theorems in LoggingCounters, likely causing misleading summaries")
             return
         self.n_coq += 1
-        self.t_coq += t1_coq - self.t0_coq
-        self.t0_coq = -1.0
+        self.t_coq_receive += t1_coq_receive - self.t0_coq_receive
+        self.t0_coq_receive = -1.0
 
     @contextmanager
     def measure_t_predict(self):
@@ -196,7 +203,7 @@ class LoggingCounters:
         self.n_predict = 0
         self.max_t_predict = 0.0
         self.argmax_t_predict = -1
-        self.t_coq = 0.0
+        self.t_coq_receive = 0.0
         self.n_coq = 0
 
     def update_process_stats(self):
@@ -228,8 +235,10 @@ class LoggingCounters:
                 f"{self.t_predict/self.n_predict:.6f}" if self.n_predict else "NA",
             "Predict|Max predict time (s/msg)" : f"{self.max_t_predict:.6f}",
             "Predict|Max time predict msg ix" : f"{self.argmax_t_predict}",
-            "Predict|Avg Coq wait time (s/msg)":
-                f"{self.t_coq/self.n_coq:.6f}" if self.n_coq else "NA",
+            "Predict|Avg Coq time (send) (s/msg)":
+                f"{self.t_coq_send/self.n_coq:.6f}" if self.n_coq else "NA",
+            "Predict|Avg Coq time (iter) (s/msg)":
+                f"{self.t_coq_receive/self.n_coq:.6f}" if self.n_coq else "NA",
             "Memory|Total memory (MB)": f"{self.total_mem/10**6:.3f}",
             "Memory|Physical memory (MB)": f"{self.physical_mem/10**6:.3f}",
             "Memory|Total mem diff (MB)": f"{self.total_mem_diff/10**6:.3f}",
@@ -609,10 +618,9 @@ class PredictServer:
 
                     self.response_history.record_response(response)
 
-                    # sending response back to coq
-                    context.prediction_requests.send(response)
-
-                    self.log_cnts.measure_t_coq_start()
+                    with self.log_cnts.measure_t_coq_send():
+                        # sending response back to coq
+                        context.prediction_requests.send(response)
 
                 elif isinstance(msg, CheckAlignmentMessage):
                     logger.info("checkAlignment request")
