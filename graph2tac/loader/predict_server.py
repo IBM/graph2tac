@@ -822,7 +822,7 @@ def load_model(config: argparse.Namespace, log_levels: dict) -> Predict:
     return model
 
 def main() -> ResponseHistory:
-
+    sys.setrecursionlimit(10000)
     config = parse_args()
 
     if config.record is not None:
