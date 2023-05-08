@@ -19,6 +19,104 @@ from graph2tac.predict import Predict, predict_api_debugging, cartesian_product,
 from graph2tac.tfgnn.graph_schema import vectorized_definition_graph_spec, proofstate_graph_spec, batch_graph_spec
 from graph2tac.tfgnn.stack_graph_tensors import stack_graph_tensors
 
+
+from official.nlp.modeling.ops import beam_search
+
+@tf.function
+def token_probability_fn(
+    partial_seqs: tf.Tensor,  # [batch*beam_size, seq_length]
+    pos: int,
+    cache: dict[str, tf.Tensor]  # value shapes: [batch*beam_size, ...]
+) -> tuple[tf.Tensor, dict[str, tf.Tensor]]:  # output shapes [batch*beam_size, vocab], dict of [batch*beam_size, ...]
+    
+    #tf.print("partial_seqs", tf.shape(partial_seqs)) # [batch*beam_size, seq_length]
+    #tf.print("pos", pos)  # position
+    #tf.print("cache", {k:tf.shape(v) for k,v in cache.items()})  # cache values: [batch*beam_size, ...]
+    
+    # cache contains the following:
+    arg_lengths = cache["arg_lengths"]  # [batch*beam_size]
+    global_arg_logits = cache["arg_logits"]  # [batch*beam_size, arg_pos, cxt]
+
+    # return logits and new cache
+    cxt_size = tf.shape(global_arg_logits)[-1]  # scalar
+    logits = tf.pad(global_arg_logits[:,pos,:], paddings=[[0,0], [1, 0]], constant_values=-np.inf)  # [batch*beam_size, 1+cxt]
+    # TODO: Can speed up by not recalculating this giant array each time
+    eos_logits = tf.pad(tf.zeros([tf.shape(arg_lengths)[0], 1]), paddings=[[0,0], [0, cxt_size]], constant_values=-np.inf)  # [batch*beam_size, 1+cxt]
+    not_at_end = tf.expand_dims(tf.cast(pos, tf.float32) < arg_lengths, axis=-1)  # [batch*beam_size]
+    logits = tf.where(not_at_end, logits, eos_logits)  # [batch*beam_size, 1+cxt]
+    return logits, cache
+
+def select_best_results(
+        tactics: tf.Tensor,  # [tactics] dtype:int
+        arg_counts: tf.Tensor,  # [tactics] dtype:int 
+        tactic_logits: tf.Tensor,  # [tactics]
+        local_arg_logits: tf.RaggedTensor,  # [tactics, args, global_cxt] 
+        global_arg_logits: tf.RaggedTensor,  # [tactics, args, local_cxt] 
+        beam_width: int,
+    ) -> tuple[
+        tf.Tensor,  # log_probs [results]
+        tf.Tensor,  # tactics [results]  dtype:int
+        tf.Tensor,  # local_args [total_results, args]  dtype:int  (-1 if not local)
+        tf.Tensor,  # global_args [total_results, args]  dtype:int  (-1 if not global)
+    ]:
+    arg_logits = tf.concat([global_arg_logits, local_arg_logits], axis=-1)
+    GLOBAL_IX_START = 1 
+    LOCAL_IX_START = GLOBAL_IX_START + tf.shape(global_arg_logits)[-1]
+    VOCAB_SIZE = tf.shape(arg_logits)[-1] + 1
+    SEQ_LENGTH = tf.shape(arg_logits)[-2]
+    PAD = 0
+    
+    sequences, log_probs = beam_search.sequence_beam_search(
+        symbols_to_logits_fn=token_probability_fn,
+        initial_ids=tf.constant(1+tf.range(tf.shape(tactic_logits)[0]), tf.int32),
+        initial_cache={"arg_logits": arg_logits, "arg_lengths": tf.cast(arg_counts, tf.float32)},
+        vocab_size=VOCAB_SIZE,
+        beam_size=beam_width,
+        max_decode_length=SEQ_LENGTH,
+        eos_id=PAD,
+        padded_decode=False,
+        dtype=tf.float32,
+        alpha=0.0
+    )
+
+    sequences = tf.reshape(sequences, shape=[tf.shape(log_probs)[0]*tf.shape(log_probs)[1], -1])
+    tactic_log_probs = tf.nn.log_softmax(tactic_logits)
+    log_probs = log_probs + tf.expand_dims(tactic_log_probs, axis=-1)
+    log_probs = tf.reshape(log_probs, shape=[tf.shape(log_probs)[0]*tf.shape(log_probs)[1]])
+    selected = tf.argsort(log_probs, direction="DESCENDING")[:beam_width]
+    best_sequences = tf.gather(sequences, selected)
+    best_log_probs = tf.gather(log_probs, selected)
+    
+    # Filter out any which are -np.inf or tactic index is -1
+    is_bad_tactic = (best_sequences[:, 0] == 0) | (best_log_probs == -np.inf)
+    best_sequences = tf.boolean_mask(best_sequences, ~is_bad_tactic, axis=0)
+    best_log_probs = tf.boolean_mask(best_log_probs, ~is_bad_tactic, axis=0)
+
+    best_base_tactic_ix = best_sequences[:, 0] - 1
+    best_base_tactic = tf.gather(tactics, tf.maximum(0, best_base_tactic_ix))
+    best_arg_ixs = best_sequences[:, 1:]
+    best_arg_is_padding = (best_arg_ixs == PAD)
+    best_arg_is_global = (best_arg_ixs >= GLOBAL_IX_START) & (best_arg_ixs < LOCAL_IX_START)
+    best_arg_is_local = (best_arg_ixs >= LOCAL_IX_START)
+
+    # output style 1
+    best_global_arg_true_ix = tf.where(best_arg_is_global, best_arg_ixs-GLOBAL_IX_START, -1)
+    best_local_arg_true_ix = tf.where(best_arg_is_local, best_arg_ixs-LOCAL_IX_START, -1)
+    
+    # output style 2
+    best_arg_seq = tf.where(best_arg_is_local, best_arg_ixs-LOCAL_IX_START, tf.where(best_arg_is_global, best_arg_ixs-GLOBAL_IX_START, -1))
+    best_arg_type = tf.where(best_arg_is_local, 0, tf.where(best_arg_is_global, 1, -1))
+    best_seq = tf.concat([tf.expand_dims(best_base_tactic, axis=1), best_arg_seq], axis=1)
+    best_type = tf.concat([tf.expand_dims(best_base_tactic, axis=1), best_arg_type], axis=1)
+    best_seq = tf.RaggedTensor.from_tensor(best_seq, padding=-1, ragged_rank=1)
+    best_type = tf.RaggedTensor.from_tensor(best_type, padding=-1, ragged_rank=1)
+    best = tf.stack([best_type, best_seq], axis=2)
+    
+    return best_log_probs, best_base_tactic, best_local_arg_true_ix, best_global_arg_true_ix, best
+
+
+
+
 class Inference:
     """
     Container class for a single inference for a given proof-state.
@@ -424,6 +522,29 @@ class TFGNNPredict(Predict):
             raise NotImplementedError('available_global is not supported yet')
 
         inference_output = self._inference_model(state, allowed_model_tactics)
+        tactics = inference_output["tactic"] # [top_k_tactics, batch]
+        tactic_logits = inference_output["tactic_logits"] # [top_k_tactics, batch]
+        local_argument_logits = inference_output["local_arguments_logits"] # [top_k_tactics, batch, args, local_cxt]
+        global_argument_logits = inference_output["global_arguments_logits"] # [top_k_tactics, batch, args, global_cxt]
+
+        # remove batch dim since it is 1
+        tactics = tf.squeeze(tactics, axis=1) # [top_k_tactics]
+        tactic_logits = tf.squeeze(tactic_logits, axis=1) # [top_k_tactics]
+        local_arguments_logits = tf.squeeze(local_argument_logits, axis=1) # [top_k_tactics, args, local_cxt]
+        global_arguments_logits = tf.squeeze(global_argument_logits, axis=1) # [top_k_tactics, args, global_cxt]
+
+        arg_counts = tf.gather(tf.constant(self.graph_constants.tactic_index_to_numargs), tactics) # [top_k_tactics]
+
+        best_results = select_best_results(
+            tactics=tactics,
+            arg_counts=arg_counts,
+            tactic_logits=tactic_logits,
+            local_arg_logits=local_arguments_logits,
+            global_arg_logits=global_arguments_logits,
+            beam_width=total_expand_bound
+        )
+        return (best_results[-1].numpy(), tf.math.exp(best_results[0]).numpy())
+
         predict_output = PredictOutput(state=None, predictions=[])
 
         # go over the tactic_expand_bound batches

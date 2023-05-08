@@ -609,7 +609,7 @@ class PredictServer:
 
         actions, confidences = self.model.ranked_predictions(
             state=proof_state_graph,
-            total_expand_bound=self.config.total_expand_bound,
+            total_expand_bound=self.config.search_expand_bound,
             allowed_model_tactics=self.current_allowed_tactics,
             available_global=None
         )
