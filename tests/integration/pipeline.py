@@ -138,7 +138,7 @@ class Pipeline:
         ]
         # use context manager to pass command line arguments to our main method
         with patch.object(sys, 'argv', [str(a) for a in training_args]):
-            history = graph2tac.tfgnn.train.main()
+            history = graph2tac.tfgnn.train.main_with_return_value()
         
         # remove results which are not stable or not serializable
         results = {k:v for k,v in history.history.items() if k not in ["epoch_duration", "learning_rate"]}
@@ -165,7 +165,7 @@ class Pipeline:
 
         # use context manager to pass command line arguments to our main method
         with patch.object(sys, 'argv', [str(a) for a in training_args]):
-            model_results = graph2tac.loader.hmodel.main()
+            model_results = graph2tac.loader.hmodel.main_with_return_value()
         
         # sample first 10 hashs (lexicographically) and format actions in JSON compatible format
         hashes = sorted(model_results["data"].keys())[:10]
@@ -283,7 +283,6 @@ class Pipeline:
 
         # use context manager to pass command line arguments to our main method
         with patch.object(sys, 'argv', [str(a) for a in server_args]):
-            history = graph2tac.loader.predict_server.main()
+            history = graph2tac.loader.predict_server.main_with_return_value()
         return history.data
-
 
