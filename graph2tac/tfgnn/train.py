@@ -355,7 +355,7 @@ class Trainer:
         return history
 
 
-def main():
+def main_with_return_value():
     parser = argparse.ArgumentParser(description="Train")
 
     # dataset specification
@@ -444,5 +444,7 @@ def main():
         # return history for tests
         return history
 
+def main():
+    main_with_return_value()
 if __name__ == "__main__":
     main()

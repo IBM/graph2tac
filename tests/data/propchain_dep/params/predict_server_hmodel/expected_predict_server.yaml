@@ -1,4 +1,3 @@
-responses:
 - _type: CheckAlignmentResponse
   contents:
     unknown_definitions:
@@ -52,65 +51,65 @@ responses:
   contents:
     predictions:
     - arguments:
-      - node-1-2-propchain_dep.th0
-      confidence: 0.5
-      ident: 5294290463909144854
-    - arguments:
       - node-1-0-propchain_dep.start
       confidence: 0.5
       ident: 5294290463909144854
-- _type: TacticPredictionsGraph
-  contents:
-    predictions:
     - arguments:
       - node-1-2-propchain_dep.th0
       confidence: 0.5
       ident: 5294290463909144854
+- _type: TacticPredictionsGraph
+  contents:
+    predictions:
     - arguments:
       - node-1-0-propchain_dep.start
       confidence: 0.5
       ident: 5294290463909144854
-- _type: TacticPredictionsGraph
-  contents:
-    predictions:
     - arguments:
       - node-1-2-propchain_dep.th0
       confidence: 0.5
       ident: 5294290463909144854
+- _type: TacticPredictionsGraph
+  contents:
+    predictions:
     - arguments:
       - node-1-0-propchain_dep.start
       confidence: 0.5
       ident: 5294290463909144854
-- _type: TacticPredictionsGraph
-  contents:
-    predictions:
     - arguments:
-      - node-1-3-propchain_dep.th0
-      confidence: 0.5
-      ident: 5294290463909144854
-    - arguments:
-      - node-1-1-propchain_dep.start
+      - node-1-2-propchain_dep.th0
       confidence: 0.5
       ident: 5294290463909144854
 - _type: TacticPredictionsGraph
   contents:
     predictions:
     - arguments:
-      - node-1-3-propchain_dep.th0
+      - node-1-1-propchain_dep.start
       confidence: 0.5
       ident: 5294290463909144854
     - arguments:
-      - node-1-1-propchain_dep.start
+      - node-1-3-propchain_dep.th0
       confidence: 0.5
       ident: 5294290463909144854
 - _type: TacticPredictionsGraph
   contents:
     predictions:
     - arguments:
-      - node-1-3-propchain_dep.th0
+      - node-1-1-propchain_dep.start
       confidence: 0.5
       ident: 5294290463909144854
     - arguments:
+      - node-1-3-propchain_dep.th0
+      confidence: 0.5
+      ident: 5294290463909144854
+- _type: TacticPredictionsGraph
+  contents:
+    predictions:
+    - arguments:
       - node-1-1-propchain_dep.start
+      confidence: 0.5
+      ident: 5294290463909144854
+    - arguments:
+      - node-1-3-propchain_dep.th0
       confidence: 0.5
       ident: 5294290463909144854

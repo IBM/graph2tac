@@ -821,7 +821,7 @@ def load_model(config: argparse.Namespace, log_levels: dict) -> Predict:
     logger.info(f"initializing predict network from {Path(config.model).expanduser().absolute()}")
     return model
 
-def main() -> ResponseHistory:
+def main_with_return_value() -> ResponseHistory:
     sys.setrecursionlimit(10000)
     config = parse_args()
 
@@ -891,6 +891,9 @@ def main() -> ResponseHistory:
             predict_server.start_prediction_loop(capnp_socket, record_file)
     
     return response_history  # return for testing purposes
+
+def main():
+    main_with_return_value()
 
 if __name__ == '__main__':
     main()

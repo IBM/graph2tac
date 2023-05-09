@@ -230,7 +230,7 @@ class HPredict(Predict):
 
         return np.array(result_pred), result_val
 
-def main():
+def main_with_return_value():
     parser = argparse.ArgumentParser()
 
     parser.add_argument('data_dir', type=Path,
@@ -269,6 +269,10 @@ def main():
     )
 
     return trainer.train()
+
+
+def main():
+    main_with_return_value()
 
 
 if __name__ == '__main__':

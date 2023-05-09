@@ -138,7 +138,7 @@ class Pipeline:
         ]
         # use context manager to pass command line arguments to our main method
         with patch.object(sys, 'argv', [str(a) for a in training_args]):
-            history = graph2tac.tfgnn.train.main()
+            history = graph2tac.tfgnn.train.main_with_return_value()
         
         # remove results which are not stable or not serializable
         results = {k:v for k,v in history.history.items() if k not in ["epoch_duration", "learning_rate"]}
@@ -165,7 +165,7 @@ class Pipeline:
 
         # use context manager to pass command line arguments to our main method
         with patch.object(sys, 'argv', [str(a) for a in training_args]):
-            model_results = graph2tac.loader.hmodel.main()
+            model_results = graph2tac.loader.hmodel.main_with_return_value()
         
         # sample first 10 hashs (lexicographically) and format actions in JSON compatible format
         hashes = sorted(model_results["data"].keys())[:10]
@@ -283,7 +283,21 @@ class Pipeline:
 
         # use context manager to pass command line arguments to our main method
         with patch.object(sys, 'argv', [str(a) for a in server_args]):
-            history = graph2tac.loader.predict_server.main()
-        return history.data
+            history = graph2tac.loader.predict_server.main_with_return_value()
+        
+        # clean up the results to be standardized and easy for the testing system
+        responses =  history.data["responses"]
+        for response in responses:
+            if response["_type"] == "TacticPredictionsGraph":
+                # sort the predictions in the response into a standard order:
+                # first sort by confidence (higher first)
+                # then sort by the base tactic ident
+                # then sort by arguments to the tactic
+                response["contents"]["predictions"] = sorted(
+                    response["contents"]["predictions"],
+                    key=lambda p: (-p["confidence"], p["ident"], p["arguments"])
+                )
+
+        return history.data["responses"]
 
 
