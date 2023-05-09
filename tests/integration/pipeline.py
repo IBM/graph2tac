@@ -284,5 +284,20 @@ class Pipeline:
         # use context manager to pass command line arguments to our main method
         with patch.object(sys, 'argv', [str(a) for a in server_args]):
             history = graph2tac.loader.predict_server.main_with_return_value()
-        return history.data
+        
+        # clean up the results to be standardized and easy for the testing system
+        responses =  history.data["responses"]
+        for response in responses:
+            if response["_type"] == "TacticPredictionsGraph":
+                # sort the predictions in the response into a standard order:
+                # first sort by confidence (higher first)
+                # then sort by the base tactic ident
+                # then sort by arguments to the tactic
+                response["contents"]["predictions"] = sorted(
+                    response["contents"]["predictions"],
+                    key=lambda p: (-p["confidence"], p["ident"], p["arguments"])
+                )
+
+        return history.data["responses"]
+
 
