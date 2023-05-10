@@ -22,16 +22,19 @@ from graph2tac.tfgnn.stack_graph_tensors import stack_graph_tensors
 
 from official.nlp.modeling.ops import beam_search
 
-@tf.function
+@tf.function(input_signature=[
+    tf.TensorSpec(shape=[None, None], dtype=tf.int32),
+    tf.TensorSpec(shape=[], dtype=tf.int32),
+    {
+        "arg_lengths": tf.TensorSpec(shape=[None], dtype=tf.float32),
+        "arg_logits": tf.TensorSpec(shape=[None, None, None], dtype=tf.float32),
+    },
+])
 def token_probability_fn(
-    partial_seqs: tf.Tensor,  # [batch*beam_size, seq_length]
-    pos: int,
-    cache: dict[str, tf.Tensor]  # value shapes: [batch*beam_size, ...]
+    partial_seqs: tf.Tensor,  # [batch*beam_size, seq_length] dtype: int
+    pos: tf.Tensor,  # scalar dtype: int,
+    cache: dict[str, tf.Tensor],  # value shapes: [batch*beam_size, ...]
 ) -> tuple[tf.Tensor, dict[str, tf.Tensor]]:  # output shapes [batch*beam_size, vocab], dict of [batch*beam_size, ...]
-    
-    #tf.print("partial_seqs", tf.shape(partial_seqs)) # [batch*beam_size, seq_length]
-    #tf.print("pos", pos)  # position
-    #tf.print("cache", {k:tf.shape(v) for k,v in cache.items()})  # cache values: [batch*beam_size, ...]
     
     # cache contains the following:
     arg_lengths = cache["arg_lengths"]  # [batch*beam_size]
@@ -46,6 +49,67 @@ def token_probability_fn(
     logits = tf.where(not_at_end, logits, eos_logits)  # [batch*beam_size, 1+cxt]
     return logits, cache
 
+@tf.function(input_signature=[
+    tf.TensorSpec(shape=[None], dtype=tf.int32),
+    tf.TensorSpec(shape=[None], dtype=tf.float32),
+    tf.TensorSpec(shape=[None, None, None], dtype=tf.int32),
+    tf.TensorSpec(shape=[None, None], dtype=tf.float32),
+    tf.TensorSpec(shape=[], dtype=tf.int32),
+    tf.TensorSpec(shape=[], dtype=tf.int32),
+    tf.TensorSpec(shape=[], dtype=tf.int32),
+    #tf.TensorSpec(shape=[], dtype=tf.int32),
+    tf.TensorSpec(shape=[None, None, None], dtype=tf.int32),
+])
+def decode(
+        tactics: tf.Tensor,  # [tactics]  int32
+        tactic_logits: tf.Tensor,  # [tactics]  float32
+        sequences: tf.Tensor,  # [tactics, beam_size, seq_length] dtype: int32
+        log_probs: tf.Tensor,  # [tactics, beam_size] dtype: float32
+        beam_width: tf.Tensor,  # scalar int32
+        GLOBAL_IX_START: tf.Tensor,  # scalar int32
+        LOCAL_IX_START: tf.Tensor,  # scalar int32
+        #GLOBAL_OFFSET: tf.Tensor,  # scalar int32
+        sorted_arg_ixs: tf.Tensor, # [tactics, max(args), cxt_short_list]  int32
+    ) -> tuple[
+        tf.Tensor,
+        tf.RaggedTensor
+    ]:
+    sequences = tf.reshape(sequences, shape=[tf.shape(log_probs)[0]*tf.shape(log_probs)[1], -1])  # [tactics*beam_size, seq_length]
+    tactic_log_probs = tf.nn.log_softmax(tactic_logits)
+    log_probs = log_probs + tf.expand_dims(tactic_log_probs, axis=-1)
+    log_probs = tf.reshape(log_probs, shape=[tf.shape(log_probs)[0]*tf.shape(log_probs)[1]])
+    selected = tf.argsort(log_probs, direction="DESCENDING")[:beam_width]
+    best_sequences = tf.gather(sequences, selected)
+    best_log_probs = tf.gather(log_probs, selected)
+    
+    # Filter out any which are -np.inf or tactic index is -1
+    is_bad_tactic = (best_sequences[:, 0] == 0) | (best_log_probs == -np.inf)
+    best_sequences = tf.boolean_mask(best_sequences, ~is_bad_tactic, axis=0)
+    best_log_probs = tf.boolean_mask(best_log_probs, ~is_bad_tactic, axis=0)
+
+    best_base_tactic_ix = best_sequences[:, 0] - 1
+    best_base_tactic = tf.gather(tactics, best_base_tactic_ix)
+    best_arg_ixs = best_sequences[:, 1:]  # [top_k, max(args)]
+    best_arg_is_padding = (best_arg_ixs == 0)
+
+    # find the argument used
+    sorted_arg_ixs = tf.gather(sorted_arg_ixs, best_base_tactic_ix)  # [top_k, max(args), best_cxt]
+    best_arg_ixs = tf.where(best_arg_is_padding, 0, tf.gather(sorted_arg_ixs, tf.maximum(best_arg_ixs-1, 0), batch_dims=2))  # [top_k, max(args)]
+
+    best_arg_is_global = (best_arg_ixs >= GLOBAL_IX_START) & (best_arg_ixs < LOCAL_IX_START)
+    best_arg_is_local = (best_arg_ixs >= LOCAL_IX_START)
+
+    # output style 2
+    best_arg_seq = tf.where(best_arg_is_local, best_arg_ixs-LOCAL_IX_START, tf.where(best_arg_is_global, best_arg_ixs-GLOBAL_IX_START, -1))
+    best_arg_type = tf.where(best_arg_is_local, 0, tf.where(best_arg_is_global, 1, -1))
+    best_seq = tf.concat([tf.expand_dims(best_base_tactic, axis=1), best_arg_seq], axis=1)
+    best_type = tf.concat([tf.expand_dims(best_base_tactic, axis=1), best_arg_type], axis=1)
+    best_seq = tf.RaggedTensor.from_tensor(best_seq, padding=-1, ragged_rank=1)
+    best_type = tf.RaggedTensor.from_tensor(best_type, padding=-1, ragged_rank=1)
+    best = tf.stack([best_type, best_seq], axis=2)
+    
+    return best_log_probs, best
+
 def select_best_results(
         tactics: tf.Tensor,  # [tactics] dtype:int
         arg_counts: tf.Tensor,  # [tactics] dtype:int 
@@ -55,11 +119,16 @@ def select_best_results(
         beam_width: int,
     ) -> tuple[
         tf.Tensor,  # log_probs [results]
-        tf.Tensor,  # tactics [results]  dtype:int
-        tf.Tensor,  # local_args [total_results, args]  dtype:int  (-1 if not local)
-        tf.Tensor,  # global_args [total_results, args]  dtype:int  (-1 if not global)
+        tf.RaggedTensor,  # TODO
     ]:
+    #GLOBAL_OFFSET = tf.maximum(0, tf.shape(global_arg_logits)[2] - beam_width)
+    #global_arg_logits = global_arg_logits[:, :, GLOBAL_OFFSET:]
+
     arg_logits = tf.concat([global_arg_logits, local_arg_logits], axis=-1)
+
+    # restrict to the best arguments
+    arg_logits, sorted_arg_ixs = tf.math.top_k(arg_logits, k=tf.minimum(beam_width, tf.shape(arg_logits)[-1]))
+
     GLOBAL_IX_START = 1 
     LOCAL_IX_START = GLOBAL_IX_START + tf.shape(global_arg_logits)[-1]
     VOCAB_SIZE = tf.shape(arg_logits)[-1] + 1
@@ -79,42 +148,17 @@ def select_best_results(
         alpha=0.0
     )
 
-    sequences = tf.reshape(sequences, shape=[tf.shape(log_probs)[0]*tf.shape(log_probs)[1], -1])
-    tactic_log_probs = tf.nn.log_softmax(tactic_logits)
-    log_probs = log_probs + tf.expand_dims(tactic_log_probs, axis=-1)
-    log_probs = tf.reshape(log_probs, shape=[tf.shape(log_probs)[0]*tf.shape(log_probs)[1]])
-    selected = tf.argsort(log_probs, direction="DESCENDING")[:beam_width]
-    best_sequences = tf.gather(sequences, selected)
-    best_log_probs = tf.gather(log_probs, selected)
-    
-    # Filter out any which are -np.inf or tactic index is -1
-    is_bad_tactic = (best_sequences[:, 0] == 0) | (best_log_probs == -np.inf)
-    best_sequences = tf.boolean_mask(best_sequences, ~is_bad_tactic, axis=0)
-    best_log_probs = tf.boolean_mask(best_log_probs, ~is_bad_tactic, axis=0)
-
-    best_base_tactic_ix = best_sequences[:, 0] - 1
-    best_base_tactic = tf.gather(tactics, tf.maximum(0, best_base_tactic_ix))
-    best_arg_ixs = best_sequences[:, 1:]
-    best_arg_is_padding = (best_arg_ixs == PAD)
-    best_arg_is_global = (best_arg_ixs >= GLOBAL_IX_START) & (best_arg_ixs < LOCAL_IX_START)
-    best_arg_is_local = (best_arg_ixs >= LOCAL_IX_START)
-
-    # output style 1
-    best_global_arg_true_ix = tf.where(best_arg_is_global, best_arg_ixs-GLOBAL_IX_START, -1)
-    best_local_arg_true_ix = tf.where(best_arg_is_local, best_arg_ixs-LOCAL_IX_START, -1)
-    
-    # output style 2
-    best_arg_seq = tf.where(best_arg_is_local, best_arg_ixs-LOCAL_IX_START, tf.where(best_arg_is_global, best_arg_ixs-GLOBAL_IX_START, -1))
-    best_arg_type = tf.where(best_arg_is_local, 0, tf.where(best_arg_is_global, 1, -1))
-    best_seq = tf.concat([tf.expand_dims(best_base_tactic, axis=1), best_arg_seq], axis=1)
-    best_type = tf.concat([tf.expand_dims(best_base_tactic, axis=1), best_arg_type], axis=1)
-    best_seq = tf.RaggedTensor.from_tensor(best_seq, padding=-1, ragged_rank=1)
-    best_type = tf.RaggedTensor.from_tensor(best_type, padding=-1, ragged_rank=1)
-    best = tf.stack([best_type, best_seq], axis=2)
-    
-    return best_log_probs, best_base_tactic, best_local_arg_true_ix, best_global_arg_true_ix, best
-
-
+    return decode(
+        tactics=tactics,
+        tactic_logits=tactic_logits,
+        sequences=sequences,
+        log_probs=log_probs,
+        beam_width=beam_width,
+        GLOBAL_IX_START=GLOBAL_IX_START,
+        LOCAL_IX_START=LOCAL_IX_START,
+        #GLOBAL_OFFSET=GLOBAL_OFFSET,
+        sorted_arg_ixs=sorted_arg_ixs,
+    )
 
 
 class Inference:
