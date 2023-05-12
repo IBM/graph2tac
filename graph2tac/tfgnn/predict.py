@@ -2,6 +2,7 @@ from typing import Tuple, List, Union, Iterable, Callable, Optional
 
 import re
 import yaml
+import json
 import numpy as np
 import tensorflow as tf
 import tensorflow_gnn as tfgnn
@@ -157,11 +158,26 @@ class TFGNNPredict(Predict):
         self._allocation_reserve = allocation_reserve
 
         # create dummy dataset for pre-processing purposes
-        graph_constants_filepath = log_dir / 'config' / 'graph_constants.yaml'
-        with graph_constants_filepath.open('r') as yml_file:
-            graph_constants_d = yaml.load(yml_file, Loader=yaml.UnsafeLoader)
-            graph_constants_d['data_config'] = DataConfig(**graph_constants_d['data_config'])
-            graph_constants = GraphConstants(**graph_constants_d)
+        graph_constants_filepath_yaml = log_dir / 'config' / 'graph_constants.yaml'
+        graph_constants_filepath_json = log_dir / 'config' / 'graph_constants.json'
+        if not graph_constants_filepath_json.exists():
+            logger.info(f'no json graph_constants file, trying to load yaml')
+            with graph_constants_filepath_yaml.open('r') as yml_file:
+                graph_constants_d = yaml.load(yml_file, Loader=yaml.UnsafeLoader)
+            if "global_context" in graph_constants_d:
+                global_context = graph_constants_d["global_context"]
+                assert global_context == list(range(len(global_context)))
+                del graph_constants_d["global_context"]
+            with graph_constants_filepath_json.open('w') as json_file:
+                json.dump(graph_constants_d, json_file)
+        else:
+            logger.info(f'loading json graph_constants file')
+            with graph_constants_filepath_json.open('r') as json_file:
+                graph_constants_d = json.load(json_file)
+
+        graph_constants_d['data_config'] = DataConfig(**graph_constants_d['data_config'])
+        graph_constants = GraphConstants(**graph_constants_d)
+            
 
         # call to parent constructor to defines self.graph_constants
         super().__init__(

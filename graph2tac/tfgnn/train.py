@@ -4,6 +4,7 @@ from typing import Optional, Dict, Tuple
 import graph2tac.loader.data_server # import capnp before tensorflow
 
 import yaml
+import json
 import argparse
 import atexit
 import tensorflow as tf
@@ -135,7 +136,7 @@ class Trainer:
             graph_constants = data_server.graph_constants()
             graph_constants_d = dict(graph_constants.__dict__)
             graph_constants_d['data_config'] = graph_constants.data_config.__dict__
-            self._to_yaml_config(directory=config_dir,
+            self._to_json_config(directory=config_dir,
                                  filename='graph_constants',
                                  config=graph_constants_d)
 
@@ -152,6 +153,21 @@ class Trainer:
                                      filename='definition',
                                      config=definition_task.get_config())
 
+    def _get_config_path(self, directory: Path, filename: str, ext: str):
+        """
+        Gets YAML / JSON file for a configuration dict, renaming according to the current run number if necessary.
+
+        @param directory: the directory where the YAML file should be created
+        @param filename: the target filename (without extension)
+        @param ext: file extension
+        """
+        filepath = directory / f'{filename}.{ext}'
+        if filepath.is_file():
+            new_filepath = directory / f'{filename}-{self.run_counter.value()}.{ext}'
+            logger.info(f'{filepath} already exists, renaming to {new_filepath}')
+            filepath.rename(new_filepath)
+        return filepath
+
     def _to_yaml_config(self, directory: Path, filename: str, config: Dict) -> None:
         """
         Exports a YAML file for a configuration dict, renaming according to the current run number if necessary.
@@ -160,12 +176,18 @@ class Trainer:
         @param filename: the target filename (without extension)
         @param config: the dict to export
         """
-        filepath = directory / f'{filename}.yaml'
-        if filepath.is_file():
-            new_filepath = directory / f'{filename}-{self.run_counter.value()}.yaml'
-            logger.info(f'{filepath} already exists, renaming to {new_filepath}')
-            filepath.rename(new_filepath)
-        filepath.write_text(yaml.dump(config))
+        self._get_config_path(directory, filename, 'yaml').write_text(yaml.dump(config))
+
+    def _to_json_config(self, directory: Path, filename: str, config: Dict) -> None:
+        """
+        Exports a JSON file for a configuration dict, renaming according to the current run number if necessary.
+
+        @param directory: the directory where the YAML file should be created
+        @param filename: the target filename (without extension)
+        @param config: the dict to export
+        """
+        with self._get_config_path(directory, filename, 'json').open('w') as f:
+            json.dump(config, f)
 
     def get_config(self):
         config = {
