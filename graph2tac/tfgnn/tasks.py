@@ -859,7 +859,10 @@ class QueryKeyMulGlobal(tf.keras.layers.Layer):
     ) -> tf.Tensor: # [batch, max(args), context]        
         if self._cosine_similarity:
             # normalize embeddings before taking inner product
-            keys = self.unit_normalize_ragged(keys)
+            if training:
+                # the key embeddings are unit normalized already,
+                # but this ensures they stay normalized during training
+                keys = self.unit_normalize_ragged(keys) 
             queries = self.unit_normalize_ragged(queries)
             
         logits = self.query_key_mul(queries, keys)
@@ -1231,7 +1234,7 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
         
         # [batch, None(args), hdim]
         global_hidden_state_sequences = self.global_arguments_head(hidden_state_sequences)
-        # [batch, context, hdim]
+        # [batch, None(context), hdim]
         global_embeddings = self.global_embeddings(scalar_proofstate_graph.context['global_context_ids'])
         # [batch, None(args), None(context)]
         global_arguments_logits = self.global_logits(queries=global_hidden_state_sequences, keys=global_embeddings)
@@ -1285,38 +1288,44 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
 
         tactic = tf.reshape(tf.transpose(top_k_indices), shape=(tf.size(top_k_indices),))
 
+        # [batch_size, None(context), hdim]
+        global_embeddings = self.global_embeddings(
+            scalar_proofstate_graph.context['global_context_ids'],
+            inference=True
+        )
+
         repeat_scalar_graph = RepeatScalarGraph(num_repetitions=tactic_expand_bound)
         scalar_proofstate_graph = repeat_scalar_graph(scalar_proofstate_graph)  # noqa [ PyCallingNonCallable ]
         hidden_graph = repeat_scalar_graph(hidden_graph)  # noqa [ PyCallingNonCallable ]
 
         hidden_state_sequences = self._hidden_state_sequences(hidden_graph=hidden_graph, tactic=tactic)
-        # [batch, None(args), hdim]
+        # [tactic_expand_bound*batch, None(args), hdim]
         local_hidden_state_sequences = self.local_arguments_head(hidden_state_sequences)
-        # [batch, None(context), hdim]
+        # [tactic_expand_bound*batch, None(context), hdim]
         local_context_hidden = self._local_context_hidden(
             scalar_proofstate_graph,
             hidden_graph,
         )
-        # [batch, None(args), None(context)]
+        # [tactic_expand_bound*batch, None(args), None(context)]
         local_arguments_logits = QueryKeyMul()(local_hidden_state_sequences, local_context_hidden)
         
-        # [batch, None(args), hdim]
+        # [tactic_expand_bound*batch, None(args), hdim]
         global_hidden_state_sequences = self.global_arguments_head(hidden_state_sequences)
-        # [batch, context, hdim]
-        global_embeddings = self.global_embeddings(
-            scalar_proofstate_graph.context['global_context_ids'],
-            inference=True
+        # [tactic_expand_bound*batch, None(context), hdim]
+        global_embeddings = tf.RaggedTensor.from_row_lengths(
+            values=tf.tile(global_embeddings.values, multiples=[tactic_expand_bound, 1]),
+            row_lengths=tf.tile(global_embeddings.row_lengths(), multiples=[tactic_expand_bound])
         )
-        # [batch, None(args), None(context)]
+        # [tactic_expand_bound*batch, None(args), None(context)]
         global_arguments_logits = self.global_logits(queries=global_hidden_state_sequences, keys=global_embeddings)
         
-        # [batch, None(args), None(context)], [batch, None(args), None(context)]
+        # [tactic_expand_bound*batch, None(args), None(context)], [batch, None(args), None(context)]
         normalized_local_arguments_logits, normalized_global_arguments_logits = self._log_softmax_logits(
             local_arguments_logits=local_arguments_logits,
             global_arguments_logits=global_arguments_logits)
         
         # TODO: Temporary
-        # [batch, max(args), max(context)]
+        # [tactic_expand_bound*batch, max(args), max(context)]
         normalized_local_arguments_logits = convert_ragged_logits_to_dense(normalized_local_arguments_logits)
         normalized_global_arguments_logits = convert_ragged_logits_to_dense(normalized_global_arguments_logits)
 
