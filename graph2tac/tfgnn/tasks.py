@@ -793,7 +793,6 @@ class QueryKeyMul(tf.keras.layers.Layer):
         then compute inner product on value tensors directly.
         """
         tf.assert_equal(tf.shape(keys)[0], 1)
-        tf.print("SINGLETON")
 
         query_values = queries.values  # [args, hdim]
         key_values = keys.values  # [context, hdim]
