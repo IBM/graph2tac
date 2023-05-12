@@ -783,6 +783,28 @@ class QueryKeyMul(tf.keras.layers.Layer):
         logits = logits_part_ragged.with_values(logits_values)
         return logits
 
+    @staticmethod
+    def _mul_singleton_batch(
+        queries : tf.RaggedTensor,  # shape: # [1, None(args), hdim]
+        keys : tf.RaggedTensor,  # shape: # [1, None(context), hdim]
+    ) -> tf.RaggedTensor:  # shape: # [1, None(args), None(context)]
+        """
+        If outer batch dim is 1 (which is often the case during inference),
+        then compute inner product on value tensors directly.
+        """
+        tf.assert_equal(tf.shape(keys)[0], 1)
+        tf.print("SINGLETON")
+
+        query_values = queries.values  # [args, hdim]
+        key_values = keys.values  # [context, hdim]
+#
+        # multiply inner values
+        logits_tensor = tf.einsum("ik,jk->ij", query_values, key_values)  # [args, context]
+        logits_tensor = tf.expand_dims(logits_tensor, axis=0)  # [1, args, context]
+        
+        # reshape back into a ragged tensor
+        return tf.RaggedTensor.from_tensor(logits_tensor, ragged_rank=2)  # [1, None(args), None(context)]
+    
     def call(
         self, 
         queries: tf.RaggedTensor, # [batch, None(args), hdim]
@@ -801,12 +823,12 @@ class QueryKeyMul(tf.keras.layers.Layer):
         # TODO(jrute): Clean up row split types to be consistent across model code
         queries = queries.with_row_splits_dtype(tf.int64)
         keys = keys.with_row_splits_dtype(tf.int64)
-        if self.method == "map_fn":
+        if tf.shape(queries)[0] == 1:
+            return self._mul_singleton_batch(queries, keys)
+        elif self.method == "map_fn":
             return self._mul_map_fn(queries, keys)
         elif self.method == "broadcast_ragged":
             return self._mul_broadcast_ragged(queries, keys)
-        elif self.method == "broadcast_ragged2":
-            return self._mul_broadcast_ragged2(queries, keys)
         elif self.method == "ragged_to_dense_to_ragged":
             return self._mul_ragged_to_dense_to_ragged(queries, keys)
         else:
