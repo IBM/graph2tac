@@ -17,6 +17,8 @@ import contextlib
 import yaml
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
+import tensorflow as tf
+
 from pytact.data_reader import (capnp_message_generator, capnp_message_generator_from_file,
                                 TacticPredictionGraph, TacticPredictionsGraph,
                                 GlobalContextMessage, CheckAlignmentMessage, CheckAlignmentResponse,
@@ -82,6 +84,42 @@ class ResponseHistory:
     def record_response(self, msg: CheckAlignmentResponse | TacticPredictionsGraph):
         if self._recording_on:
             self.data["responses"].append(self.convert_msg_to_dict(msg))
+
+class Profiler:
+    """
+    Controls the tensorflow profiler for both profiling predictions and definitions
+    """
+    logdir: dict[str, Path]
+    start: dict[str, int]
+    end: dict[str, int]
+    cnt: dict[str, int]
+
+    def __init__(self, logdir: dict[str, Optional[Path]], start: dict[str, int], end: dict[str, int]):
+        self.logdir = {k: v for k,v in logdir.items() if v is not None}
+        self.start = start
+        self.end = end
+        self.cnt = {k: 0 for k in self.logdir.keys()}
+
+    def step(self, key: str):
+        """
+        Increment counter and start/stop profiler.
+        """
+        if key not in self.logdir:
+            # not profiling this key
+            return 
+
+        if self.cnt[key] == self.start[key]:
+            options = tf.profiler.experimental.ProfilerOptions(
+                host_tracer_level = 3,
+                python_tracer_level = 1,
+                device_tracer_level = 1
+            )
+            tf.profiler.experimental.start(str(self.logdir[key]), options)
+        elif self.cnt[key] == self.end[key]:
+            tf.profiler.experimental.stop()
+        
+        self.cnt[key] += 1
+        
 
 @dataclass
 class LoggingCounters:
@@ -452,6 +490,7 @@ class PredictServer:
                  model: Predict,
                  config: argparse.Namespace,
                  log_cnts: LoggingCounters,
+                 profiler: Profiler,
                  response_history: ResponseHistory,
     ):
         self.data_server = DynamicDataServer(
@@ -461,6 +500,7 @@ class PredictServer:
         self.model = model
         self.config = config
         self.log_cnts = log_cnts
+        self.profiler = profiler
         self.current_allowed_tactics = None
         self.response_history = response_history
         self.msg_stack = []
@@ -540,6 +580,7 @@ class PredictServer:
                     def_clusters_for_update = tqdm.tqdm(def_clusters_for_update)
 
                 for cluster in def_clusters_for_update:
+                    self.profiler.step("def")
                     cluster_graph = self.data_server.cluster_to_graph(cluster)
                     sanity_check(cluster_graph)
                     self.model.compute_new_definitions([cluster_graph])
@@ -605,6 +646,7 @@ class PredictServer:
                         self.log_cnts.measure_t_coq_receive_finish()
 
                     with self.log_cnts.measure_t_predict():
+                        self.profiler.step("pred")
                         response = self.predict(msg) # prediction with a network
                     self.log_cnts.msg_idx += 1
 
@@ -766,6 +808,30 @@ def parse_args() -> argparse.Namespace:
                         default=0,
                         help="number of cpu threads to use tensorflow to use (automatic by default)")
     
+    parser.add_argument('--pred-profiler-logdir', '--pred_profiler_logdir',
+                        type=Path, default=None,
+                        help='Supply logdir to profile the predict steps')
+
+    parser.add_argument('--pred-profiler-start', '--pred_profiler_start',
+                        type=int, default=10,
+                        help='Prediction step to start profiling (default: 10).')
+    
+    parser.add_argument('--pred-profiler-end', '--pred_profiler_end',
+                        type=int, default=15,
+                        help='Prediction step to stop profiling (exclusive) (default: 15).')
+
+    parser.add_argument('--def-profiler-logdir', '--def_profiler_logdir',
+                        type=Path, default=None,
+                        help='Supply logdir to profile the definition steps')
+
+    parser.add_argument('--def-profiler-start', '--def_profiler_start',
+                        type=int, default=10,
+                        help='Defintion step to start profiling (default: 10).')
+    
+    parser.add_argument('--def-profiler-end', '--def_profiler_end',
+                        type=int, default=15,
+                        help='Definition step to stop profiling (exclusive) (default: 15).')
+    
     return parser.parse_args()
 
 def load_model(config: argparse.Namespace, log_levels: dict) -> Predict:
@@ -847,10 +913,15 @@ def main_with_return_value() -> ResponseHistory:
     logger.info(f"UUID: {process_uuid}")
 
     log_cnts = LoggingCounters(process_uuid=process_uuid)
+    profiler = Profiler(
+        logdir={"pred": config.pred_profiler_logdir, "def": config.def_profiler_logdir},
+        start={"pred": config.pred_profiler_start, "def": config.def_profiler_start},
+        end={"pred": config.pred_profiler_end, "def": config.def_profiler_end},
+    )
     with log_cnts.measure_build_network_time():
         model = load_model(config, log_levels)
     response_history = ResponseHistory(recording_on=(config.replay_file is not None))  # only record response history if replay is on
-    predict_server = PredictServer(model, config, log_cnts, response_history)
+    predict_server = PredictServer(model, config, log_cnts, profiler, response_history)
 
     if config.record is not None:
         record_context = open(config.record, 'wb')
