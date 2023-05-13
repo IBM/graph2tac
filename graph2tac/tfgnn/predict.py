@@ -49,13 +49,22 @@ def build_search():
         logits = tf.where(not_at_end, logits, eos_logits)  # [batch, beam_size, 1+cxt]
         return logits, cache
 
-    @tf.function
+    @tf.function(input_signature=[
+        tf.TensorSpec(shape=[None, None, None], dtype=tf.int32),
+        tf.TensorSpec(shape=[None, None], dtype=tf.float32),
+        {
+            "arg_lengths": tf.TensorSpec(shape=[None, None], dtype=tf.float32),
+            "arg_logits": tf.TensorSpec(shape=[None, None, None, None], dtype=tf.float32),
+        },
+        tf.TensorSpec(shape=[], dtype=tf.int32),
+        tf.TensorSpec(shape=[], dtype=tf.int32),
+    ])
     def one_beam_step(
         ids: tf.Tensor,  # [batch_size, beam_size0, seq_length]
         scores: tf.Tensor,  # [batch_size, beam_size0]
         cache: dict[str, tf.Tensor],  # dict with values: [batch_size, beam_size0, ...]
         i: tf.Tensor,  # int32
-        beam_size: int,
+        beam_size: tf.Tensor,  # int32
     ) -> tuple[
         tf.Tensor,  # ids: [batch_size, beam_size, seq_length+1]
         tf.Tensor,  # scores: [batch_size, beam_size]
