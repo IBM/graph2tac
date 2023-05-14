@@ -971,9 +971,42 @@ class LocalArgumentPrediction(TacticPrediction):
         return tf.gather(hidden_graph.node_sets['node']['hidden_state'],
                                                local_context_ids).with_row_splits_dtype(tf.int64)
 
-    def _hidden_state_sequences(self, hidden_graph: tfgnn.GraphTensor, tactic: tf.Tensor) -> tf.RaggedTensor:
+    def _hidden_state_sequences(
+            self,
+            hidden_graph: tfgnn.GraphTensor,  # [batch]
+            tactic: tf.Tensor,  # [batch]
+        ) -> tf.RaggedTensor:  # [batch, None(args), hdim]
+        # [batch]
         num_arguments = tf.gather(tf.constant(self._graph_constants.tactic_index_to_numargs, dtype=tf.int64), tactic)
-        return self.arguments_head((hidden_graph, self.tactic_embedding(tactic), num_arguments))
+        # [batch, hdim]
+        hidden_state = hidden_graph.context["hidden_state"]
+        # [batch, tactic_hdim]
+        tactic_embedding = self.tactic_embedding(tactic)
+        # [batch, None(args), hdim]
+        return self.arguments_head((hidden_state, tactic_embedding, num_arguments))
+
+    def _hidden_state_sequences_inference(
+        self, 
+        hidden_graph: tfgnn.GraphTensor,  # [batch] 
+        tactic: tf.Tensor,  # [batch, tactic_expand_bound]
+    ) -> tf.RaggedTensor:  # [batch*tactic_expand_bound, None(args), hdim]
+        batch_size = tf.shape(tactic)[0]
+        tactic_expand_bound = tf.shape(tactic)[1]
+
+        tactic = tf.reshape(tactic, shape=[batch_size*tactic_expand_bound])  # [batch*tactic_expand_bound]
+        
+        # [batch*tactic_expand_bound]
+        num_arguments = tf.gather(tf.constant(self._graph_constants.tactic_index_to_numargs, dtype=tf.int64), tactic)
+        
+        hidden_state = hidden_graph.context["hidden_state"]  # [batch, hdim]
+        hidden_state = tf.expand_dims(hidden_state, axis=1)  # [batch, 1, hdim] 
+        hidden_state = tf.tile(hidden_state, multiples=[1, tactic_expand_bound, 1])  # [batch, tactic_expand_bound, hdim]
+        hidden_state = tf.reshape(hidden_state, shape=[batch_size*tactic_expand_bound, tf.shape(hidden_state)[2]])  # [batch*tactic_expand_bound, hdim]
+
+        # [batch*tactic_expand_bound, tactic_hdim]
+        tactic_embedding = self.tactic_embedding(tactic)
+        # [batch*tactic_expand_bound, None(args), hdim]
+        return self.arguments_head((hidden_state, tactic_embedding, num_arguments))
 
     @staticmethod
     def _reshape_inference_logits(
@@ -1231,37 +1264,6 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
 
         return local_logits, global_logits
 
-    @staticmethod
-    def transpose_ragged_first_dim(
-        x: tf.RaggedTensor,  # [outer*inner, None(ragged), ...]
-        outer_dim: int,
-        inner_dim: int,
-    ) -> tf.RaggedTensor:  # [inner*outer, None(ragged), ...]
-        """
-        Convert a ragged tensor of shape `[outer*inner, None(ragged), ...]`
-        to one of shape `[inner*outer, None(ragged), ...]`
-        by permuting the inner values.
-        """
-        inner_dim = tf.cast(inner_dim, dtype=tf.int64)
-        outer_dim = tf.cast(outer_dim, dtype=tf.int64)
-
-        # calculate new row ids
-        rowids = x.value_rowids()  # [outer-inner-ragged]
-        batch1_rowids = rowids // inner_dim  # [outer-inner-ragged]
-        batch2_rowids = rowids % inner_dim   # [outer-inner-ragged]
-        new_rowids = batch2_rowids * outer_dim + batch1_rowids  # [outer-inner-ragged]
-        
-        # reorder the elements according to the new row ids
-        new_order = tf.argsort(new_rowids)  # [inner-outer-ragged]
-        new_rowids = tf.sort(new_rowids)  # [inner-outer-ragged]
-
-        # [inner*outer, None(ragged), ...]
-        return tf.RaggedTensor.from_value_rowids(
-            values=tf.gather(x.values, new_order),  # [inner-outer-ragged, ...]
-            value_rowids=new_rowids,  # [inner-outer-ragged]
-            nrows=inner_dim * outer_dim
-        )
-
     def create_train_model(self) -> tf.keras.Model:
         """
         Combines a GNN component with a tactic head and an arguments head to produce an end-to-end model for the
@@ -1338,11 +1340,9 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
                                           tf.expand_dims(no_argument_tactics_mask, axis=0),
                                           tf.expand_dims(all_tactics_mask, axis=0))
         # [batch_size, tactic_expand_bound], [batch_size, tactic_expand_bound] 
-        top_k_indices, top_k_values = self._top_k_tactics(tactic_logits=tactic_logits,
+        tactic, top_k_values = self._top_k_tactics(tactic_logits=tactic_logits,
                                                           tactic_mask=proofstate_tactic_mask & tactic_mask,
                                                           tactic_expand_bound=tactic_expand_bound)
-        # [tactic_expand_bound*batch_size]
-        tactic = tf.reshape(tf.transpose(top_k_indices), shape=(tf.size(top_k_indices),))
 
         # [batch_size, None(context), hdim]
         local_context_hidden = self._local_context_hidden(
@@ -1355,19 +1355,10 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
             inference=True
         )
         
-        batch_size = tf.shape(top_k_indices)[0]
+        batch_size = tf.shape(tactic)[0]
 
-        repeat_scalar_graph = RepeatScalarGraph(num_repetitions=tactic_expand_bound)
-        # dimension of component features: [tactic_expand_bound*batch, ...]
-        hidden_graph = repeat_scalar_graph(hidden_graph)  # noqa [ PyCallingNonCallable ]
-        # [tactic_expand_bound*batch, None(args), hdim]
-        hidden_state_sequences = self._hidden_state_sequences(hidden_graph=hidden_graph, tactic=tactic)
         # [batch*tactic_expand_bound, None(args), hdim]
-        hidden_state_sequences = self.transpose_ragged_first_dim(
-            hidden_state_sequences, 
-            outer_dim=tactic_expand_bound, 
-            inner_dim=batch_size
-        )
+        hidden_state_sequences = self._hidden_state_sequences_inference(hidden_graph=hidden_graph, tactic=tactic)
         # [batch*tactic_expand_bound]
         tactic_arg_cnt = hidden_state_sequences.row_lengths()
         # [batch]
@@ -1421,7 +1412,7 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
                                                                            tactic_expand_bound=tactic_expand_bound)
 
         return tf.keras.Model(inputs={self.PROOFSTATE_GRAPH: proofstate_graph, self.TACTIC_MASK: tactic_mask},
-                              outputs={self.TACTIC: tf.transpose(top_k_indices),
+                              outputs={self.TACTIC: tf.transpose(tactic),
                                        self.TACTIC_LOGITS: tf.transpose(top_k_values),
                                        self.LOCAL_ARGUMENTS_LOGITS: tf.transpose(normalized_local_arguments_logits, perm=[1, 0, 2, 3]),
                                        self.GLOBAL_ARGUMENTS_LOGITS: tf.transpose(normalized_global_arguments_logits, perm=[1, 0, 2, 3])})
