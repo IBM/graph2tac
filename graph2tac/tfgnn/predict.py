@@ -163,7 +163,7 @@ class TFGNNPredict(Predict):
         if not graph_constants_filepath_json.exists():
             logger.info(f'no json graph_constants file, trying to load yaml')
             with graph_constants_filepath_yaml.open('r') as yml_file:
-                graph_constants_d = yaml.load(yml_file, Loader=yaml.UnsafeLoader)
+                graph_constants_d = yaml.load(yml_file, Loader=yaml.SafeLoader)
             if "global_context" in graph_constants_d:
                 global_context = graph_constants_d["global_context"]
                 assert global_context == list(range(len(global_context)))
