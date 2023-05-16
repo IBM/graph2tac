@@ -21,14 +21,20 @@ from graph2tac.tfgnn.stack_graph_tensors import stack_graph_tensors
 
 
 class BeamSearch(tf.keras.layers.Layer):
-    def __init__(self, logits_fn, stopping_fn, eos_id: int, max_decode_length: int):
+    def __init__(self, logits_fn, stopping_fn, eos_id: int):
         super().__init__()
         self.logits_fn = logits_fn
         self.stopping_fn = stopping_fn
         self.eos_id = eos_id
         #self.max_beam_size = max_beam_size,
         # this needs to be a python int to make sure that the beam search knows how many steps of the loop to compile
-        self.max_decode_length = int(max_decode_length)  
+    
+    @staticmethod
+    def expand_dims_none(x: tf.Tensor, axis: int):
+        "Like tf.expand_dims, but sets the new axis dimension to be None instead of 1"
+        x = tf.expand_dims(x, axis=axis)
+        # set axis to None with this trick
+        return tf.reshape(x, shape=tf.tensor_scatter_nd_update(tf.shape(x), [[axis % tf.rank(x)]], [-1]))
     
     def one_beam_step(
         self,
@@ -73,9 +79,10 @@ class BeamSearch(tf.keras.layers.Layer):
         }
 
         return ids, top_k_scores, cache
-
+    
     def one_beam_step_with_early_stopping(
         self,
+        is_finished: tf.Tensor, # bool
         ids: tf.Tensor,  # [batch_size, beam_size0, seq_length]
         scores: tf.Tensor,  # [batch_size, beam_size0]
         cache: dict[str, tf.Tensor],  # dict with values: [batch_size, beam_size0, ...]
@@ -87,14 +94,18 @@ class BeamSearch(tf.keras.layers.Layer):
         tf.Tensor,  # scores: [batch_size, beam_size]
         dict[str, tf.Tensor],  # cache with values: [batch_size, beam_size, ...]
     ]:
+        if is_finished:
+            return (is_finished, (ids, scores, cache))
+        
         # check which are finished
         is_finished, cache = self.stopping_fn(ids, i, cache, static_data)  # [batch_size, beam_size0]
+        is_finished = tf.reduce_all(is_finished)
 
         # wait until all are finished
-        if tf.reduce_all(is_finished):
-            return (ids, scores, cache)
-        else:
-            return self.one_beam_step(ids, scores, cache, static_data, i, max_beam_size)
+        if is_finished:
+            return (is_finished, (ids, scores, cache))
+        
+        return (is_finished, self.one_beam_step(ids, scores, cache, static_data, i, max_beam_size))
 
     def call(
         self,
@@ -102,24 +113,27 @@ class BeamSearch(tf.keras.layers.Layer):
         initial_cache: dict[str, tf.Tensor],  # [batch_size, ...]
         static_data: dict[str, tf.Tensor | tf.RaggedTensor],
         beam_size: tf.Tensor,  # int32
+        max_decode_length: tf.Tensor,  # int32
     ) -> tuple[tf.Tensor, tf.Tensor]:
         batch_size = tf.shape(initial_ids)[0]
-        init_seq_length = tf.shape(initial_ids)[1]
         
         # start with a beam_size of 1 for the input to the first step first step
-        ids = tf.expand_dims(initial_ids, axis=1)  # batch_size, 1, initial_seq_length
+        ids = self.expand_dims_none(initial_ids, axis=1)  # batch_size, beam_size0, initial_seq_length
+        ids = tf.reshape(ids, shape=[tf.shape(ids)[0], tf.shape(ids)[1], -1])  # make sure sequence length is None
         cache = {
-            k: tf.expand_dims(v, axis=1)  # [batch_size, 1, ...]
+            k: self.expand_dims_none(v, axis=1)  # [batch_size, beam_size0, ...]
             for k, v in initial_cache.items()  # v: [batch_size, ...]
         }
-        scores = tf.zeros(shape=[batch_size, 1])  # [batch_size, 1]
+        scores = self.expand_dims_none(tf.zeros(shape=[batch_size]), axis=-1)  # [batch_size, beam_size0]
 
         # iterate over the sequence
-        for i in range(self.max_decode_length):
+        is_finished = False
+        # this loop is automatically converted into tf.while_loop
+        for i in range(max_decode_length):
             # ids: [batch_size, beam_size, initial_seq_length]
             # scores: [batch_size, beam_size]
             # cache: dict with values [batch_size, beam_size, ...]
-            ids, scores, cache = self.one_beam_step_with_early_stopping(ids, scores, cache, static_data, i, beam_size)
+            is_finished, (ids, scores, cache) = self.one_beam_step_with_early_stopping(is_finished, ids, scores, cache, static_data, i, beam_size)
 
         return ids, scores
 
@@ -132,8 +146,7 @@ class Selection():
         self.beam_search = BeamSearch(
             logits_fn=self.token_probability_fn,
             stopping_fn=self.stopping_fn,
-            eos_id=self.eos_id,
-            max_decode_length=max(self.tactic_index_to_numargs),  
+            eos_id=self.eos_id,  
         )
 
         @tf.function(input_signature=[
@@ -263,6 +276,7 @@ class Selection():
             initial_cache={"arg_logits": arg_logits, "arg_lengths": tf.cast(arg_counts, tf.float32)},
             static_data={},
             beam_size=beam_width,
+            max_decode_length=tf.reduce_max(arg_counts)
         )
 
         return self.decode(
@@ -302,7 +316,6 @@ class Selection():
             local_arg_logits=local_arguments_logits, 
             beam_width=search_expand_bound
         )
-
 
 
 class Inference:
