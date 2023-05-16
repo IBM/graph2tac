@@ -29,7 +29,14 @@ class TestQueryKeyMul:
         self.queries_empty = tf.ragged.constant([[], [], [], []], ragged_rank=1, inner_shape=(2,))  
         # it is possible to have completely empty keys where the local context is empty for the whole batch
         # [batch, None(context), hdim]
-        self.keys_empty = tf.ragged.constant([[], [], [], []], ragged_rank=1, inner_shape=(2,))  
+        self.keys_empty = tf.ragged.constant([[], [], [], []], ragged_rank=1, inner_shape=(2,)) 
+
+        # during inference we often have singleton queries with a batch dimension of 1
+        # [1, None(args), hdim]
+        self.queries_singleton = tf.ragged.constant([[[4.0, 5.0], [6.0, 7.0]]], ragged_rank=1, inner_shape=(2,))  
+        # it is possible to have completely empty keys where the local context is empty for the whole batch
+        # [1, None(context), hdim]
+        self.keys_singleton = tf.ragged.constant([[[1.0, 2.0]]], ragged_rank=1, inner_shape=(2,))  
 
     def query_key_logit_is_correct_value(self, query_key_mul_layer: QueryKeyMul):
         logits = query_key_mul_layer(queries=self.queries, keys=self.keys)
@@ -56,11 +63,17 @@ class TestQueryKeyMul:
         logits = query_key_mul_layer(queries=self.queries_empty, keys=self.keys_empty)
         correct = tf.ragged.constant([[], [], [], []], ragged_rank=2)
         assert logits.to_list() == correct.to_list()
+    
+    def singleton_query_singleton_key_logit_is_correct_value(self, query_key_mul_layer: QueryKeyMul):
+        logits = query_key_mul_layer(queries=self.queries_singleton, keys=self.keys_singleton)
+        correct = tf.ragged.constant([[[14.0], [20.0]]], ragged_rank=2)
+        assert logits.to_list() == correct.to_list()
 
     def all_logits_are_correct_values(self, query_key_mul_layer: QueryKeyMul):
         self.build_queries_and_keys()
         self.query_key_logit_is_correct_value(query_key_mul_layer)
         self.empty_query_key_logit_is_correct_value(query_key_mul_layer)
+        self.singleton_query_singleton_key_logit_is_correct_value(query_key_mul_layer)
 
     def test_default_method(self):
         self.all_logits_are_correct_values(QueryKeyMul())
