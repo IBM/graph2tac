@@ -19,7 +19,85 @@ from graph2tac.predict import Predict, predict_api_debugging, cartesian_product,
 from graph2tac.tfgnn.graph_schema import vectorized_definition_graph_spec, proofstate_graph_spec, batch_graph_spec
 from graph2tac.tfgnn.stack_graph_tensors import stack_graph_tensors
 
+class BeamSearch(tf.keras.Layer):
+    def __init__(self, logits_fn, eos_id: int, max_decode_length: int):
+        self.logits_fn = logits_fn
+        self.eos_id = eos_id
+        #self.max_beam_size = max_beam_size
+        self.max_decode_length = max_decode_length
+    
+    def one_beam_step(
+        self,
+        ids: tf.Tensor,  # [batch_size, beam_size0, seq_length]
+        scores: tf.Tensor,  # [batch_size, beam_size0]
+        cache: dict[str, tf.Tensor],  # dict with values: [batch_size, beam_size0, ...]
+        i: tf.Tensor,  # int32
+        max_beam_size: tf.Tensor,  # int32
+    ) -> tuple[
+        tf.Tensor,  # ids: [batch_size, beam_size, seq_length+1]
+        tf.Tensor,  # scores: [batch_size, beam_size]
+        dict[str, tf.Tensor],  # cache with values: [batch_size, beam_size, ...]
+    ]:
+        batch_size = tf.shape(ids)[0]
+        beam_size0 = tf.shape(ids)[1]
 
+        # [batch, beam_size0, vocabulary], dict of [batch_size, beam_size0, ...]
+        token_scores, cache = self.logits_fn(ids, i, cache)
+        vocabulary = tf.shape(token_scores)[2]
+        
+        # don't return full beam_size if not enough vocabulary to support it yet
+        beam_size = tf.minimum(max_beam_size, beam_size0 * vocabulary)
+
+        all_scores = tf.expand_dims(scores, axis=-1) + token_scores  # [batch_size, beam_size0, vocabulary]
+        all_scores = tf.reshape(all_scores, shape=[batch_size, beam_size0*vocabulary])  # [batch_size, beam_size0*vocabulary]
+        
+        top_k = tf.math.top_k(all_scores, k=beam_size, sorted=True)
+        top_k_scores = top_k.values  # [batch_size, beam_size]
+        top_k_ixs = top_k.indices  # [batch_size, beam_size]
+        top_k_beams = top_k_ixs // vocabulary  # [batch_size, beam_size]
+        top_k_tokens = top_k_ixs % vocabulary  # [batch_size, beam_size]
+
+        # reorder the beams and add on the new tokens
+        ids = tf.gather(ids, top_k_beams, batch_dims=1)  # [batch_size, beam_size, seq_length]
+        ids = tf.concat([ids, tf.expand_dims(top_k_tokens, axis=-1)], axis=-1)  # [batch_size, beam_size, seq_length+1]
+        
+        # reorder cache
+        cache = {
+            k: tf.gather(v, top_k_beams, batch_dims=1)  # [batch_size, beam_size, ...]}
+            for k, v in cache.items()  # v: [batch_size, beam_size0, ...]
+        }
+
+        return ids, top_k_scores, cache
+                
+    def call(
+        self,
+        initial_ids: tf.Tensor,  # [batch_size, initial_seq_length]
+        initial_cache: dict[str, tf.Tensor],  # [batch_size, ...]
+        beam_size: tf.Tensor,  # int32
+    ) -> tuple[tf.Tensor, tf.Tensor]:
+        batch_size = tf.shape(initial_ids)[0]
+        init_seq_length = tf.shape(initial_ids)[1]
+
+        for k, v in initial_cache.items():
+            assert tf.shape(v)[0] == batch_size, (k, tf.shape(v)[0], batch_size) 
+        
+        # start with a beam_size of 1 for the input to the first step first step
+        ids = tf.expand_dims(initial_ids, axis=1)  # batch_size, 1, initial_seq_length
+        cache = {
+            k: tf.expand_dims(v, axis=1)  # [batch_size, 1, ...]
+            for k, v in initial_cache.items()  # v: [batch_size, ...]
+        }
+        scores = tf.zeros(shape=[batch_size, 1])  # [batch_size, 1]
+
+        # iterate over the sequence
+        for i in range(self.max_decode_length):
+            # ids: [batch_size, beam_size, initial_seq_length]
+            # scores: [batch_size, beam_size]
+            # cache: dict with values [batch_size, beam_size, ...]
+            ids, scores, cache = self.one_beam_step(ids, scores, cache, i, beam_size)
+
+        return ids, scores
+    
 def build_search():
     # fast beam search
     @tf.function(input_signature=[
@@ -49,90 +127,11 @@ def build_search():
         logits = tf.where(not_at_end, logits, eos_logits)  # [batch, beam_size, 1+cxt]
         return logits, cache
 
-    @tf.function(input_signature=[
-        tf.TensorSpec(shape=[None, None, None], dtype=tf.int32),
-        tf.TensorSpec(shape=[None, None], dtype=tf.float32),
-        {
-            "arg_lengths": tf.TensorSpec(shape=[None, None], dtype=tf.float32),
-            "arg_logits": tf.TensorSpec(shape=[None, None, None, None], dtype=tf.float32),
-        },
-        tf.TensorSpec(shape=[], dtype=tf.int32),
-        tf.TensorSpec(shape=[], dtype=tf.int32),
-    ])
-    def one_beam_step(
-        ids: tf.Tensor,  # [batch_size, beam_size0, seq_length]
-        scores: tf.Tensor,  # [batch_size, beam_size0]
-        cache: dict[str, tf.Tensor],  # dict with values: [batch_size, beam_size0, ...]
-        i: tf.Tensor,  # int32
-        beam_size: tf.Tensor,  # int32
-    ) -> tuple[
-        tf.Tensor,  # ids: [batch_size, beam_size, seq_length+1]
-        tf.Tensor,  # scores: [batch_size, beam_size]
-        dict[str, tf.Tensor],  # cache with values: [batch_size, beam_size, ...]
-    ]:
-        batch_size = tf.shape(ids)[0]
-        beam_size0 = tf.shape(ids)[1]
-
-        # [batch, beam_size0, vocabulary], dict of [batch_size, beam_size0, ...]
-        token_scores, cache = token_probability_fn2(ids, i, cache)
-        vocabulary = tf.shape(token_scores)[2]
-        
-        # don't return full beam_size if not enough vocabulary to support it yet
-        beam_size = tf.minimum(beam_size, beam_size0 * vocabulary)
-
-        all_scores = tf.expand_dims(scores, axis=-1) + token_scores  # [batch_size, beam_size0, vocabulary]
-        all_scores = tf.reshape(all_scores, shape=[batch_size, beam_size0*vocabulary])  # [batch_size, beam_size0*vocabulary]
-        
-        top_k = tf.math.top_k(all_scores, k=beam_size, sorted=True)
-        top_k_scores = top_k.values  # [batch_size, beam_size]
-        top_k_ixs = top_k.indices  # [batch_size, beam_size]
-        top_k_beams = top_k_ixs // vocabulary  # [batch_size, beam_size]
-        top_k_tokens = top_k_ixs % vocabulary  # [batch_size, beam_size]
-
-        # reorder the beams and add on the new tokens
-        ids = tf.gather(ids, top_k_beams, batch_dims=1)  # [batch_size, beam_size, seq_length]
-        ids = tf.concat([ids, tf.expand_dims(top_k_tokens, axis=-1)], axis=-1)  # [batch_size, beam_size, seq_length+1]
-        
-        # reorder cache
-        cache = {
-            k: tf.gather(v, top_k_beams, batch_dims=1)  # [batch_size, beam_size, ...]}
-            for k, v in cache.items()  # v: [batch_size, beam_size0, ...]
-        }
-
-        return ids, top_k_scores, cache
-                
-    def beam_search(
-        #symbols_to_logits_fn,  # TODO: Move into class
-        initial_ids: tf.Tensor,  # [batch_size, initial_seq_length]
-        initial_cache: dict[str, tf.Tensor],  # [batch_size, ...]
-        #vocab_size: int,  # TODO: Move into class
-        beam_size: int,  # TODO: Move into class
-        max_decode_length: int,
-        eos_id: int,  # TODO: Move into class
-    ) -> tuple[tf.Tensor, tf.Tensor]:
-        batch_size = tf.shape(initial_ids)[0]
-        init_seq_length = tf.shape(initial_ids)[1]
-
-        for k, v in initial_cache.items():
-            assert tf.shape(v)[0] == batch_size, (k, tf.shape(v)[0], batch_size) 
-        
-        # start with a beam_size of 1 for the input to the first step first step
-        ids = tf.expand_dims(initial_ids, axis=1)  # batch_size, 1, initial_seq_length
-        cache = {
-            k: tf.expand_dims(v, axis=1)  # [batch_size, 1, ...]
-            for k, v in initial_cache.items()  # v: [batch_size, ...]
-        }
-        scores = tf.zeros(shape=[batch_size, 1])  # [batch_size, 1]
-
-        # iterate over the sequence
-        for i in range(max_decode_length):
-            # ids: [batch_size, beam_size, initial_seq_length]
-            # scores: [batch_size, beam_size]
-            # cache: dict with values [batch_size, beam_size, ...]
-            ids, scores, cache = one_beam_step(ids, scores, cache, i, beam_size)
-
-        return ids, scores
-
+    beam_search = BeamSearch(
+        logits_fn=token_probability_fn2,
+        eos_id=0,
+        max_beam_size=100,
+    )
 
     @tf.function(input_signature=[
         tf.TensorSpec(shape=[None], dtype=tf.int32),
@@ -224,8 +223,8 @@ def build_search():
             initial_ids=tf.constant(tf.expand_dims(1+tf.range(tf.shape(tactic_logits)[0]), axis=-1), tf.int32),
             initial_cache={"arg_logits": arg_logits, "arg_lengths": tf.cast(arg_counts, tf.float32)},
             beam_size=beam_width,
-            max_decode_length=SEQ_LENGTH,
-            eos_id=PAD,
+            #decode_length=SEQ_LENGTH,
+            #eos_id=PAD,
         )
 
         return decode(
@@ -239,8 +238,6 @@ def build_search():
             #GLOBAL_OFFSET=GLOBAL_OFFSET,
             sorted_arg_ixs=sorted_arg_ixs,
         )
-
-
 
     return select_best_results
 
