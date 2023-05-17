@@ -1395,9 +1395,11 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
         )
         
         # [batch*tactic_expand_bound, None(args), None(context)], [batch*tactic_expand_bound, None(args), None(context)]
-        normalized_local_arguments_logits, normalized_global_arguments_logits = self._log_softmax_logits(
-            local_arguments_logits=local_arguments_logits,
-            global_arguments_logits=global_arguments_logits)
+        #normalized_local_arguments_logits, normalized_global_arguments_logits = self._log_softmax_logits(
+        #    local_arguments_logits=local_arguments_logits,
+        #    global_arguments_logits=global_arguments_logits)
+        normalized_local_arguments_logits = local_arguments_logits
+        normalized_global_arguments_logits = global_arguments_logits
         
         # TODO: Temporary
         # [batch*tactic_expand_bound, max(args), max(context)]

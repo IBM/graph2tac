@@ -71,7 +71,7 @@ class LogitsFromEmbeddings(tf.keras.layers.Layer):
             # since cosine similarity is between -1.0 and 1.0
             # we add a learned temperature parameter
             # so logits can be in a wider or narrower range -1/temp to 1/temp
-            self._temp = tf.Variable(initial_value=1.0, trainable=True)
+            self._temp = tf.Variable(initial_value=0.008, trainable=True)
         
         self._embedding_matrix = embedding_matrix
         super().__init__(name=name, **kwargs)
