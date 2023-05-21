@@ -133,6 +133,7 @@ class HPredict(Predict):
     def __init__(self,
                  checkpoint_dir: Path,
                  tactic_expand_bound: int = 20,
+                 search_expand_bound: int = 1000,
                  debug_dir: Optional[Path] = None
     ):
         loaded_model = pickle.load(open(checkpoint_dir/'hmodel.sav', 'rb'))
@@ -141,6 +142,7 @@ class HPredict(Predict):
         super().__init__(
             graph_constants=loaded_model['graph_constants'],
             tactic_expand_bound=tactic_expand_bound,
+            search_expand_bound=search_expand_bound,
             debug_dir=debug_dir,
         )
 
@@ -166,7 +168,6 @@ class HPredict(Predict):
                            state: LoaderProofstate,
                            allowed_model_tactics: List[int],
                            available_global: Optional[np.ndarray] = None,
-                           total_expand_bound: int = 1000000,
                            annotation: str = "",
                            debug: bool = False,
                            ) -> Tuple[np.ndarray, List]:
@@ -228,7 +229,7 @@ class HPredict(Predict):
             result_pred.append(pred)
             result_val.append(val)
 
-        return np.array(result_pred), result_val
+        return np.array(result_pred)[:self._search_expand_bound], result_val[:self._search_expand_bound]
 
 def main_with_return_value():
     parser = argparse.ArgumentParser()

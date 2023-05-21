@@ -116,7 +116,9 @@ class BeamSearch(tf.keras.layers.Layer):
         max_decode_length: tf.Tensor,  # int32
     ) -> tuple[tf.Tensor, tf.Tensor]:
         batch_size = tf.shape(initial_ids)[0]
-        
+        print("initial_ids", initial_ids)
+        tf.print("initial_ids", tf.shape(initial_ids))
+
         # start with a beam_size of 1 for the input to the first step first step
         ids = self.expand_dims_none(initial_ids, axis=1)  # batch_size, beam_size0, initial_seq_length
         ids = tf.reshape(ids, shape=[tf.shape(ids)[0], tf.shape(ids)[1], -1])  # make sure sequence length is None
@@ -129,7 +131,16 @@ class BeamSearch(tf.keras.layers.Layer):
         # iterate over the sequence
         is_finished = False
         # this loop is automatically converted into tf.while_loop
+        shape_invariants = [
+            (ids, tf.TensorShape([None, None, None])),
+            (scores, tf.TensorShape([None, None])),
+            (cache, {k: tf.TensorShape([None, None] + [None for i in range(len(tf.shape(v)) - 2)]) for k,v in cache.items()}),
+        ]
         for i in range(max_decode_length):
+            # the sizes of beam_size and seq_length can change during the loop and we need to let TF know this
+            tf.autograph.experimental.set_loop_options(
+                shape_invariants=shape_invariants
+            )
             # ids: [batch_size, beam_size, initial_seq_length]
             # scores: [batch_size, beam_size]
             # cache: dict with values [batch_size, beam_size, ...]
@@ -138,30 +149,18 @@ class BeamSearch(tf.keras.layers.Layer):
         return ids, scores
 
 
-class Selection:
-    def __init__(self, tactic_index_to_numargs: list[int]):
+class SelectBestResults(tf.keras.layers.Layer):
+    def __init__(self, tactic_index_to_numargs: list[int], search_expand_bound: int):
+        super().__init__()
         self.tactic_index_to_numargs = tf.cast(tf.constant(tactic_index_to_numargs), tf.int32)
+        self.search_expand_bound = search_expand_bound
         self.eos_id = 0
 
         self.beam_search = BeamSearch(
             logits_fn=self.token_probability_fn,
             stopping_fn=self.stopping_fn,
-            eos_id=self.eos_id,  
+            eos_id=self.eos_id,
         )
-
-        @tf.function(input_signature=[
-            {
-                "tactic": tf.TensorSpec(shape=[None, None], dtype=tf.int32),
-                "tactic_logits": tf.TensorSpec(shape=[None, None], dtype=tf.float32),
-                "local_arguments_logits": tf.RaggedTensorSpec(shape=[None, None, None], dtype=tf.float32),
-                "global_arguments_logits": tf.RaggedTensorSpec(shape=[None, None, None], dtype=tf.float32),
-            },
-            tf.TensorSpec(shape=[], dtype=tf.int32),
-        ])
-        def select_results(inference_output, search_expand_bound):
-            return self._select_results(inference_output, search_expand_bound)
-    
-        self.select_results = select_results
 
     def token_probability_fn(
         self,
@@ -358,7 +357,7 @@ class Selection:
         if batch_size == 1:
             # the size of the cxt is constant so we can use tf.shape to make it a tensor
             logits_values_size = tf.cast(tf.shape(logits.values)[0], tf.int64)
-            cxt_size = tf.maximum(tf.reduce_max(logits.values.row_lengths()), 0)  # 0 is in case logits.values is empty
+            cxt_size = tf.maximum(tf.reduce_max(logits.values.row_lengths()), 0)
             # [1-top_k_tactics-args, cxt]
             logits_values = tf.reshape(logits.values.values, shape=[logits_values_size, cxt_size])
             # [1-top_k_tactics, None(args), cxt]
@@ -366,14 +365,13 @@ class Selection:
                 logits_values
             )
         else:
-            # [batch * top_k_tactics, None(args), cxt]    
+            # [batch * top_k_tactics, None(args), cxt]             
             logits = logits.with_values(logits.values.to_tensor(default_value=-np.inf))
         return logits
 
-    def _select_results(
+    def call(
         self,
         inference_output: dict[str, tf.Tensor | tf.RaggedTensor],
-        search_expand_bound: tf.Tensor, # int32
     ):
         tactics = inference_output["tactic"]  # [batch, top_k_tactics]
         tactic_logits = inference_output["tactic_logits"]  # [batch, top_k_tactics]
@@ -396,7 +394,7 @@ class Selection:
             tactic_logits=tactic_logits, 
             global_arg_logits=global_arguments_logits, 
             local_arg_logits=local_arguments_logits, 
-            beam_width=search_expand_bound
+            beam_width=self.search_expand_bound
         )
         return log_probs, actions
 
@@ -520,6 +518,7 @@ class TFGNNPredict(Predict):
     def __init__(self,
                  log_dir: Path,
                  tactic_expand_bound: int,
+                 search_expand_bound: int,
                  debug_dir: Optional[Path] = None,
                  checkpoint_number: Optional[int] = None,
                  exclude_tactics: Optional[List[str]] = None,
@@ -528,7 +527,8 @@ class TFGNNPredict(Predict):
                  ):
         """
         @param log_dir: the directory for the checkpoint that is to be loaded (as passed to the Trainer class)
-        @param total_expand_bound:
+        @param tactic_expand_bound: the number of top base tactics to consider
+        @param search_expand_bound: the max number of results to return
         @param debug_dir: set to a directory to dump pickle files for every API call that is made
         @param checkpoint_number: the checkpoint number we want to load (use `None` for the latest checkpoint)
         @param exclude_tactics: a list of tactic names to exclude from all predictions
@@ -565,6 +565,7 @@ class TFGNNPredict(Predict):
         super().__init__(
             graph_constants=graph_constants,
             tactic_expand_bound=tactic_expand_bound,
+            search_expand_bound=search_expand_bound,
             debug_dir=debug_dir,
         )
 
@@ -584,6 +585,12 @@ class TFGNNPredict(Predict):
         self.prediction_task = PredictionTask.from_yaml_config(graph_constants=graph_constants,
                                                                yaml_filepath=prediction_yaml_filepath)
         self.prediction_task_type = self.prediction_task.get_config()['prediction_task_type']
+
+        # create task to select best results from prediction task
+        self.select_best_results_task = SelectBestResults(
+            tactic_index_to_numargs=self.graph_constants.tactic_index_to_numargs,
+            search_expand_bound=self._search_expand_bound
+        )
 
         # create definition task
         definition_yaml_filepath = log_dir / 'config' / 'definition.yaml'
@@ -622,9 +629,6 @@ class TFGNNPredict(Predict):
         extra_label_num = round(self._allocation_reserve*node_label_num)
         if extra_label_num > 0: self._allocate_definitions(node_label_num + extra_label_num)
         
-        self._select_best_results = Selection(
-            tactic_index_to_numargs=self.graph_constants.tactic_index_to_numargs,
-        ).select_results
         self._compile_network()
 
     def _allocate_definitions(self, new_node_label_num) -> None: # explicit change of the network array
@@ -708,7 +712,7 @@ class TFGNNPredict(Predict):
                 self.prediction_task.PROOFSTATE_GRAPH: graph_tensor_stacked,
                 self.prediction_task.TACTIC_MASK: tf.expand_dims(tactic_mask, axis=0),
             })
-            return inference_output
+            return self.select_best_results_task(inference_output)
         self._inference_model = inference_model
 
         dummy_graph = LoaderGraph(
@@ -732,8 +736,7 @@ class TFGNNPredict(Predict):
         )
         
         # run on a dummy input to force precompilation
-        output = self._inference_model(dummy_loader_proofstate, np.zeros([1], dtype = int))
-        self._select_best_results(output, 1)
+        self._inference_model(dummy_loader_proofstate, np.zeros([1], dtype = int))
         
     # Currently not used
     def _make_proofstate_batch(self, datapoints : Iterable[LoaderProofstate]):
@@ -801,7 +804,6 @@ class TFGNNPredict(Predict):
     @predict_api_debugging
     def ranked_predictions(self,
                            state: LoaderProofstate,
-                           total_expand_bound: int,
                            available_global: Optional[np.ndarray] = None,
                            allowed_model_tactics: Optional[Iterable[int]] = None
                            ) -> Union[PredictOutput, Tuple[np.ndarray, np.ndarray]]:
@@ -811,9 +813,7 @@ class TFGNNPredict(Predict):
         if available_global is not None:
             raise NotImplementedError('available_global is not supported yet')
 
-        search_expand_bound = total_expand_bound  # temporary co-opting this value
-        inference_output = self._inference_model(state, allowed_model_tactics)
-        best_log_probs, best_tactics = self._select_best_results(inference_output, search_expand_bound)
+        best_log_probs, best_tactics = self._inference_model(state, allowed_model_tactics)
         return (best_tactics.numpy()[0], np.exp(best_log_probs.numpy()[0]))
 
         predict_output = PredictOutput(state=None, predictions=[])

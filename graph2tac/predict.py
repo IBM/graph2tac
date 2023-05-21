@@ -64,17 +64,20 @@ class Predict:
     def __init__(self,
                  graph_constants: GraphConstants,
                  tactic_expand_bound: int,
+                 search_expand_bound: int,
                  debug_dir: Optional[Path] = None,
     ):
         """
 
         @param graph_constants: the graph constants seen during training
-        @param total_expand_bound:
+        @param total_expand_bound: how many base tactics to select (may be ignored by the subclass)
+        @param search_expand_bound: how many total tactics to return
         @param debug_dir: a directory where all api calls will be logged for debugging purposes
         """
         self.graph_constants = graph_constants 
         self._debug_dir = debug_dir
         self._tactic_expand_bound = tactic_expand_bound
+        self._search_expand_bound = search_expand_bound
         self._timings = {}
         assert self.graph_constants is not None
 
@@ -105,7 +108,6 @@ class Predict:
                            state: LoaderProofstate,
                            allowed_model_tactics: List[int],
                            available_global: Optional[np.ndarray],
-                           total_expand_bound: int
                            ) -> Tuple[np.ndarray, List]:
         """
         [ Public API ] Returns actions ordered by their corresponding probabilities, as computed by the model.
@@ -116,7 +118,6 @@ class Predict:
         @param state: (graph, root, context)
         @param allowed_model_tactics:
         @param available_global: np.array of indices into global_context
-        @param total_expand_bound:
         @return: a pair (ranked_actions, ranked_values)
         """
         raise NotImplementedError('ranked_predictions should be implemented by sub-classes')
