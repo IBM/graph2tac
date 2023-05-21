@@ -116,8 +116,6 @@ class BeamSearch(tf.keras.layers.Layer):
         max_decode_length: tf.Tensor,  # int32
     ) -> tuple[tf.Tensor, tf.Tensor]:
         batch_size = tf.shape(initial_ids)[0]
-        print("initial_ids", initial_ids)
-        tf.print("initial_ids", tf.shape(initial_ids))
 
         # start with a beam_size of 1 for the input to the first step first step
         ids = self.expand_dims_none(initial_ids, axis=1)  # batch_size, beam_size0, initial_seq_length
