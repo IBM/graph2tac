@@ -153,8 +153,8 @@ class Selection:
             {
                 "tactic": tf.TensorSpec(shape=[None, None], dtype=tf.int32),
                 "tactic_logits": tf.TensorSpec(shape=[None, None], dtype=tf.float32),
-                "local_arguments_logits": tf.TensorSpec(shape=[None, None, None, None], dtype=tf.float32),
-                "global_arguments_logits": tf.TensorSpec(shape=[None, None, None, None], dtype=tf.float32),
+                "local_arguments_logits": tf.RaggedTensorSpec(shape=[None, None, None], dtype=tf.float32),
+                "global_arguments_logits": tf.RaggedTensorSpec(shape=[None, None, None], dtype=tf.float32),
             },
             tf.TensorSpec(shape=[], dtype=tf.int32),
         ])
@@ -349,37 +349,45 @@ class Selection:
         
         return log_probs, decodings
     
+    @staticmethod
+    def make_context_dense(
+        logits: tf.RaggedTensor,  # [batch * top_k_tactics, None(args), None(cxt)]
+        batch_size: tf.Tensor,  #int 
+    ) -> tf.Tensor:  # [batch * top_k_tactics, None(args), max(cxt)]
+        # the cxt size is a function of the batch dim, so if the batch size is one, we can optimize this step
+        if batch_size == 1:
+            # the size of the cxt is constant so we can use tf.shape to make it a tensor
+            logits_values_size = tf.cast(tf.shape(logits.values)[0], tf.int64)
+            cxt_size = tf.maximum(tf.reduce_max(logits.values.row_lengths()), 0)  # 0 is in case logits.values is empty
+            # [1-top_k_tactics-args, cxt]
+            logits_values = tf.reshape(logits.values.values, shape=[logits_values_size, cxt_size])
+            # [1-top_k_tactics, None(args), cxt]
+            logits = logits.with_values(
+                logits_values
+            )
+        else:
+            # [batch * top_k_tactics, None(args), cxt]    
+            logits = logits.with_values(logits.values.to_tensor(default_value=-np.inf))
+        return logits
+
     def _select_results(
         self,
-        inference_output: dict[str, tf.Tensor],
+        inference_output: dict[str, tf.Tensor | tf.RaggedTensor],
         search_expand_bound: tf.Tensor, # int32
     ):
-        tactics = inference_output["tactic"]  # [top_k_tactics, 1]
-        tactic_logits = inference_output["tactic_logits"]  # [top_k_tactics, 1]
-        local_arguments_logits = inference_output["local_arguments_logits"]  # [top_k_tactics, 1, args, local_cxt]
-        global_arguments_logits = inference_output["global_arguments_logits"]  # [top_k_tactics, 1, args, global_cxt]
-
-        # transpose back to batch first
-        tactics = tf.transpose(tactics)  # [1, top_k_tactics]
-        tactic_logits = tf.transpose(tactic_logits)  # [1, top_k_tactics]
-        local_arguments_logits = tf.transpose(local_arguments_logits, perm=[1, 0, 2, 3] )  # [1, top_k_tactics, args, local_cxt]
-        global_arguments_logits = tf.transpose(global_arguments_logits, perm=[1, 0, 2, 3] )  # [1, top_k_tactics, args, global_cxt]
+        tactics = inference_output["tactic"]  # [batch, top_k_tactics]
+        tactic_logits = inference_output["tactic_logits"]  # [batch, top_k_tactics]
+        local_arguments_logits = inference_output["local_arguments_logits"]  # [batch * top_k_tactics, None(args), None(local_cxt)]
+        global_arguments_logits = inference_output["global_arguments_logits"]  # [batch * top_k_tactics, None(args), None(global_cxt)]
 
         # find arg counts
         arg_counts = tf.gather(self.tactic_index_to_numargs, tactics) # [batch, top_k_tactics]
-
-        # combine batch and top_k_tactics dimensions in prep for making ragged
-        shape = [-1, tf.shape(local_arguments_logits)[2], tf.shape(local_arguments_logits)[3]]
-        local_arguments_logits = tf.reshape(local_arguments_logits, shape)  # [batch * top_k_tactics, args, local_cxt]
-        shape = [-1, tf.shape(global_arguments_logits)[2], tf.shape(global_arguments_logits)[3]]
-        global_arguments_logits = tf.reshape(global_arguments_logits, shape)  # [batch * top_k_tactics, args, global_cxt]
         
-        # make ragged
-        lengths = tf.reshape(arg_counts, shape=[-1])  # [batch * top_k_tactics]                      
-        # [batch * top_k_tactics, None(args), local_cxt]             
-        local_arguments_logits = tf.RaggedTensor.from_tensor(local_arguments_logits, lengths=lengths)
-        # [batch * top_k_tactics, None(args), global_cxt]
-        global_arguments_logits = tf.RaggedTensor.from_tensor(global_arguments_logits, lengths=lengths)
+        # make last dimension dense
+        # [batch * top_k_tactics, None(args), max(local_cxt)]             
+        local_arguments_logits = self.make_context_dense(local_arguments_logits, batch_size=tf.shape(tactics)[0])
+        # [batch * top_k_tactics, None(args), max(global_cxt)]
+        global_arguments_logits = self.make_context_dense(global_arguments_logits, batch_size=tf.shape(tactics)[0])
 
         # [batch, None(results)], [batch, None(results), None(args)]
         log_probs, actions = self._select_best_results(
@@ -390,7 +398,7 @@ class Selection:
             local_arg_logits=local_arguments_logits, 
             beam_width=search_expand_bound
         )
-        return log_probs[0], actions[0]
+        return log_probs, actions
 
 
 class Inference:
@@ -805,8 +813,8 @@ class TFGNNPredict(Predict):
 
         search_expand_bound = total_expand_bound  # temporary co-opting this value
         inference_output = self._inference_model(state, allowed_model_tactics)
-        best_results = self._select_best_results(inference_output, search_expand_bound)
-        return (best_results[-1].numpy(), tf.math.exp(best_results[0]).numpy())
+        best_log_probs, best_tactics = self._select_best_results(inference_output, search_expand_bound)
+        return (best_tactics.numpy()[0], np.exp(best_log_probs.numpy()[0]))
 
         predict_output = PredictOutput(state=None, predictions=[])
 
