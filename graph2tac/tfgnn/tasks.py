@@ -1393,31 +1393,12 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
             values=global_arguments_logits.values,  # [batch-tactic-arg, None(context)]
             row_lengths=tactic_arg_cnt
         )
-        
-        # [batch*tactic_expand_bound, None(args), None(context)], [batch*tactic_expand_bound, None(args), None(context)]
-        #normalized_local_arguments_logits, normalized_global_arguments_logits = self._log_softmax_logits(
-        #    local_arguments_logits=local_arguments_logits,
-        #    global_arguments_logits=global_arguments_logits)
-        normalized_local_arguments_logits = local_arguments_logits
-        normalized_global_arguments_logits = global_arguments_logits
-        
-        # TODO: Temporary
-        # [batch*tactic_expand_bound, max(args), max(context)]
-        normalized_local_arguments_logits = convert_ragged_logits_to_dense(normalized_local_arguments_logits)
-        normalized_global_arguments_logits = convert_ragged_logits_to_dense(normalized_global_arguments_logits)
-
-        # [batch, tactic_expand_bound, max(args), max(local_context)]
-        normalized_local_arguments_logits = self._reshape_inference_logits(logits=normalized_local_arguments_logits,
-                                                                           tactic_expand_bound=tactic_expand_bound)
-        # [batch, tactic_expand_bound, max(args), dynamic_global_context]
-        normalized_global_arguments_logits = self._reshape_inference_logits(logits=normalized_global_arguments_logits,
-                                                                           tactic_expand_bound=tactic_expand_bound)
 
         return tf.keras.Model(inputs={self.PROOFSTATE_GRAPH: proofstate_graph, self.TACTIC_MASK: tactic_mask},
-                              outputs={self.TACTIC: tf.transpose(tactic),
-                                       self.TACTIC_LOGITS: tf.transpose(top_k_values),
-                                       self.LOCAL_ARGUMENTS_LOGITS: tf.transpose(normalized_local_arguments_logits, perm=[1, 0, 2, 3]),
-                                       self.GLOBAL_ARGUMENTS_LOGITS: tf.transpose(normalized_global_arguments_logits, perm=[1, 0, 2, 3])})
+                              outputs={self.TACTIC: tactic,  # [batch, tactic_expand_bound]
+                                       self.TACTIC_LOGITS: top_k_values,  # [batch, tactic_expand_bound]
+                                       self.LOCAL_ARGUMENTS_LOGITS: local_arguments_logits,  # [batch*tactic_expand_bound, None(args), None(context)]
+                                       self.GLOBAL_ARGUMENTS_LOGITS: global_arguments_logits})  # [batch*tactic_expand_bound, None(args), None(context)]
 
     @staticmethod
     def create_input_output(graph_tensor: tfgnn.GraphTensor) -> Tuple[
