@@ -552,13 +552,16 @@ class TacticPrediction(PredictionTask):
         self.checkpoint.tactic_logits_from_embeddings = self.tactic_logits_from_embeddings
 
     @staticmethod
-    def _top_k_tactics(tactic_logits: tf.Tensor,
-                       tactic_mask: tf.Tensor,
+    def _top_k_tactics(tactic_logits: tf.Tensor,  # [batch, tactics]
+                       tactic_mask: tf.Tensor,  # [batch, tactics]
                        tactic_expand_bound: int
-                       ) -> Tuple[tf.Tensor, tf.Tensor]:
+                       ) -> Tuple[tf.Tensor, tf.Tensor]:  #([batch, top_k_tactics], [batch, top_k_tactics])
         tactic_logits = tf.math.log_softmax(tactic_logits + tf.math.log(tf.cast(tactic_mask, tf.float32)), axis=-1)
 
-        top_k = tf.math.top_k(tactic_logits, k=tactic_expand_bound)
+        # Sometimes the number of tactics is less than the tactic_expand_bound
+        # In that case return only the number of tactics.  It is ok if some have probability 0.
+        top_k = tf.math.top_k(tactic_logits, k=tf.minimum(tactic_expand_bound, tf.shape(tactic_logits)[1]))
+        # ([batch, top_k_tactics], [batch, top_k_tactics])
         return top_k.indices, top_k.values
 
     def _tactic_logits_and_hidden_graph(self,
@@ -1322,8 +1325,10 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
                                                  name=self.PROOFSTATE_GRAPH)
         scalar_proofstate_graph = proofstate_graph.merge_batch_to_components()
 
+        # [tactic_num]
         tactic_mask = tf.keras.Input(shape=(graph_constants.tactic_num,), dtype=tf.bool, name=self.TACTIC_MASK)
 
+        # [batch_size, tactic_num]
         tactic_logits, hidden_graph = self._tactic_logits_and_hidden_graph(scalar_proofstate_graph)
 
         # [tactic_num, ]
@@ -1339,7 +1344,7 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
         proofstate_tactic_mask = tf.where(tf.expand_dims(no_context_proofstates, axis=-1),
                                           tf.expand_dims(no_argument_tactics_mask, axis=0),
                                           tf.expand_dims(all_tactics_mask, axis=0))
-        # [batch_size, tactic_expand_bound], [batch_size, tactic_expand_bound] 
+        # [batch_size, top_k_tactics], [batch_size, top_k_tactics] 
         tactic, top_k_values = self._top_k_tactics(tactic_logits=tactic_logits,
                                                           tactic_mask=proofstate_tactic_mask & tactic_mask,
                                                           tactic_expand_bound=tactic_expand_bound)
@@ -1356,49 +1361,50 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
         )
         
         batch_size = tf.shape(tactic)[0]
+        top_k_tactics_cnt = tf.shape(tactic)[1]  # this may be less than tactic_expand_bound
 
-        # [batch*tactic_expand_bound, None(args), hdim]
+        # [batch*top_k_tactics, None(args), hdim]
         hidden_state_sequences = self._hidden_state_sequences_inference(hidden_graph=hidden_graph, tactic=tactic)
-        # [batch*tactic_expand_bound]
+        # [batch*top_k_tactics]
         tactic_arg_cnt = hidden_state_sequences.row_lengths()
         # [batch]
-        batch_arg_cnt = tf.reduce_sum(tf.reshape(tactic_arg_cnt, shape=[batch_size, tactic_expand_bound]), axis=-1)
+        batch_arg_cnt = tf.reduce_sum(tf.reshape(tactic_arg_cnt, shape=[batch_size, top_k_tactics_cnt]), axis=-1)
         
-        # [batch*tactic_expand_bound, None(args), hdim]
+        # [batch*top_k_tactics, None(args), hdim]
         local_hidden_state_sequences = self.local_arguments_head(hidden_state_sequences)
-        # [batch, None(tactic_expand_bound*args), hdim]
+        # [batch, None(top_k_tactics*args), hdim]
         local_hidden_state_sequences = tf.RaggedTensor.from_row_lengths(
             values=local_hidden_state_sequences.values,  # [batch-tactic-arg, hdim]
             row_lengths=batch_arg_cnt
         )
-        # [batch, None(tactic_expand_bound*args), None(context)]
+        # [batch, None(top_k_tactics*args), None(context)]
         local_arguments_logits = QueryKeyMul()(local_hidden_state_sequences, local_context_hidden)
-        # [batch*tactic_expand_bound, None(args), None(context)]
+        # [batch*top_k_tactics, None(args), None(context)]
         local_arguments_logits = tf.RaggedTensor.from_row_lengths(
             values=local_arguments_logits.values,  # [batch-tactic-arg, None(context)]
             row_lengths=tactic_arg_cnt
         )
         
-        # [batch*tactic_expand_bound, None(args), hdim]
+        # [batch*top_k_tactics, None(args), hdim]
         global_hidden_state_sequences = self.global_arguments_head(hidden_state_sequences)
-        # [batch, None(tactic_expand_bound*args), hdim]
+        # [batch, None(top_k_tactics*args), hdim]
         global_hidden_state_sequences = tf.RaggedTensor.from_row_lengths(
             values=global_hidden_state_sequences.values,  # [batch-tactic-arg, None(context)]
             row_lengths=batch_arg_cnt
         )
-        # [batch, None(tactic_expand_bound*args), None(context)]
+        # [batch, None(top_k_tactics*args), None(context)]
         global_arguments_logits = self.global_logits(queries=global_hidden_state_sequences, keys=global_embeddings)
-        # [batch*tactic_expand_bound, None(args), None(context)]
+        # [batch*top_k_tactics, None(args), None(context)]
         global_arguments_logits = tf.RaggedTensor.from_row_lengths(
             values=global_arguments_logits.values,  # [batch-tactic-arg, None(context)]
             row_lengths=tactic_arg_cnt
         )
 
         return tf.keras.Model(inputs={self.PROOFSTATE_GRAPH: proofstate_graph, self.TACTIC_MASK: tactic_mask},
-                              outputs={self.TACTIC: tactic,  # [batch, tactic_expand_bound]
-                                       self.TACTIC_LOGITS: top_k_values,  # [batch, tactic_expand_bound]
-                                       self.LOCAL_ARGUMENTS_LOGITS: local_arguments_logits,  # [batch*tactic_expand_bound, None(args), None(context)]
-                                       self.GLOBAL_ARGUMENTS_LOGITS: global_arguments_logits})  # [batch*tactic_expand_bound, None(args), None(context)]
+                              outputs={self.TACTIC: tactic,  # [batch, top_k_tactics]
+                                       self.TACTIC_LOGITS: top_k_values,  # [batch, top_k_tactics]
+                                       self.LOCAL_ARGUMENTS_LOGITS: local_arguments_logits,  # [batch*top_k_tactics, None(args), None(context)]
+                                       self.GLOBAL_ARGUMENTS_LOGITS: global_arguments_logits})  # [batch*top_k_tactics, None(args), None(context)]
 
     @staticmethod
     def create_input_output(graph_tensor: tfgnn.GraphTensor) -> Tuple[
