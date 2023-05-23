@@ -70,7 +70,7 @@ class Predict:
         """
 
         @param graph_constants: the graph constants seen during training
-        @param total_expand_bound: how many base tactics to select (may be ignored by the subclass)
+        @param tactic_expand_bound: how many base tactics to select (may be ignored by the subclass)
         @param search_expand_bound: how many total tactics to return
         @param debug_dir: a directory where all api calls will be logged for debugging purposes
         """
