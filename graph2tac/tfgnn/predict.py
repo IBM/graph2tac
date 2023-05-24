@@ -378,7 +378,7 @@ class SelectBestResults(tf.keras.layers.Layer):
         # arg encoding step: restrict to the top-k arguments
         # [batch-tactic-args, small_cxt], [batch-tactic-args, small_cxt]
         arg_logits_values, pre_topk_arg_indices = \
-            tf.math.top_k(arg_logits.values, k=tf.minimum(beam_width, tf.shape(arg_logits)[-1]))
+            tf.math.top_k(arg_logits.values, k=tf.minimum(beam_width, tf.shape(arg_logits)[-1]), sorted=False)
         pre_topk_arg_indices = arg_logits.with_values(pre_topk_arg_indices)  # [batch*tactic, None(args), small_cxt]
         arg_logits = arg_logits.with_values(arg_logits_values)  # [batch*tactic, None(args), small_cxt]
 
