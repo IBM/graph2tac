@@ -11,12 +11,10 @@ from pathlib import Path
 
 from graph2tac.loader.data_classes import DataConfig, GraphConstants, LoaderGraph, ProofstateMetadata, ProofstateContext, LoaderAction, LoaderActionSpec, LoaderProofstate, LoaderProofstateSpec, LoaderDefinition, LoaderDefinitionSpec
 from graph2tac.loader.data_server import DataToTFGNN
-from graph2tac.tfgnn.tasks import PredictionTask, TacticPrediction, DefinitionTask, GLOBAL_ARGUMENT_PREDICTION
-from graph2tac.tfgnn.models import GraphEmbedding, LogitsFromEmbeddings
+from graph2tac.tfgnn.tasks import PredictionTask, DefinitionTask, GLOBAL_ARGUMENT_PREDICTION
 from graph2tac.tfgnn.train import Trainer
 from graph2tac.common import logger
-from graph2tac.predict import Predict, predict_api_debugging, cartesian_product, NUMPY_NDIM_LIMIT
-from graph2tac.tfgnn.graph_schema import vectorized_definition_graph_spec, proofstate_graph_spec, batch_graph_spec
+from graph2tac.predict import Predict, predict_api_debugging, NUMPY_NDIM_LIMIT
 from graph2tac.tfgnn.stack_graph_tensors import stack_graph_tensors
 
 
@@ -514,121 +512,6 @@ class SelectBestResults(tf.keras.layers.Layer):
         return log_probs, actions
 
 
-class Inference:
-    """
-    Container class for a single inference for a given proof-state.
-    Subclasses should implement the following methods:
-        - `numpy`: converts the inference into numpy format for Vasily's evaluation framework
-        - `evaluate`: returns whether the inference is correct or not
-    """
-    value: float
-    numpy: Callable[[], np.ndarray]
-    evaluate: Callable[[int, tf.Tensor, tf.Tensor], bool]
-
-
-@dataclass
-class TacticInference(Inference):
-    """
-    Container class for a single base tactic inference for a given proof-state.
-    """
-    value: float
-    tactic_id: int
-
-    def numpy(self) -> np.ndarray:
-        return np.array([[self.tactic_id, self.tactic_id]], dtype=np.uint32)
-
-    def evaluate(self, tactic_id: int, local_arguments: tf.Tensor, global_arguments: tf.Tensor) -> bool:
-        return tactic_id == self.tactic_id
-
-
-@dataclass
-class LocalArgumentInference(Inference):
-    """
-    Container class for a single base tactic and local arguments inference for a given proof-state.
-    """
-    value: float
-    tactic_id: int
-    local_arguments: tf.Tensor
-
-    def numpy(self) -> np.ndarray:
-        top_row = np.insert(np.zeros_like(self.local_arguments), 0, self.tactic_id)
-        bottom_row = np.insert(self.local_arguments, 0, self.tactic_id)
-        return np.stack([top_row, bottom_row], axis=-1).astype(np.uint32)
-
-    def evaluate(self, tactic_id: int, local_arguments: tf.Tensor, global_arguments: tf.Tensor) -> bool:
-        return tactic_id == self.tactic_id and tf.reduce_all(local_arguments == self.local_arguments)
-
-
-@dataclass
-class GlobalArgumentInference(Inference):
-    """
-    Container class for a single base tactic and local+global arguments inference for a given proof-state.
-    """
-    value: float
-    tactic_id: int
-    local_arguments: tf.Tensor
-    global_arguments: tf.Tensor
-
-    def numpy(self) -> np.ndarray:
-        top_row = np.insert(np.where(self.global_arguments == -1, 0, 1), 0, self.tactic_id)
-        bottom_row = np.insert(np.where(self.global_arguments == -1, self.local_arguments, self.global_arguments), 0, self.tactic_id)
-        return np.stack([top_row, bottom_row], axis=-1).astype(np.uint32)
-
-    def evaluate(self, tactic_id: int, local_arguments: tf.Tensor, global_arguments: tf.Tensor) -> bool:
-        return tactic_id == self.tactic_id and tf.reduce_all(local_arguments == self.local_arguments) and tf.reduce_all(global_arguments == self.global_arguments)
-
-
-@dataclass
-class PredictOutput:
-    """
-    Container class for a list of predictions for a given proof-state.
-    """
-    state: Optional[LoaderProofstate]
-    predictions: List[Inference]
-
-    def p_total(self) -> float:
-        """
-        Computes the total probability captured by all the predictions for this proof-state.
-        """
-        return sum(np.exp(pred.value) for pred in self.predictions)
-
-    def sort(self) -> None:
-        """
-        Sorts all the predictions in descending order according to their value (log of probability).
-        """
-        self.predictions.sort(key=lambda prediction: -prediction.value)
-
-    def numpy(self) -> Tuple[List[np.ndarray], np.ndarray]:
-        """
-        Converts all predictions to numpy format for interaction with Vasily's evaluation framework.
-        """
-        self.sort()
-        return [pred.numpy() for pred in self.predictions], np.array([np.exp(pred.value) for pred in self.predictions])
-
-    def _evaluate(self,
-                  tactic_id: int,
-                  local_arguments: tf.Tensor,
-                  global_arguments: tf.Tensor,
-                  search_expand_bound: Optional[int] = None):
-        self.sort()
-        predictions = self.predictions[:search_expand_bound] if search_expand_bound is not None else self.predictions
-        return any(inference.evaluate(tactic_id, local_arguments, global_arguments) for inference in predictions)
-
-    def evaluate(self, action: LoaderAction, search_expand_bound: Optional[int] = None) -> bool:
-        """
-        Evaluate an action in the loader format
-        """
-        local_context_ids = self.state.context.local_context
-        local_context_length = tf.shape(local_context_ids, out_type=tf.int64)[0]
-
-        tactic_id = tf.cast(action.tactic_id, dtype=tf.int64)
-        arguments_array = tf.cast(action.args, dtype=tf.int64)
-        local_args = tf.cast(action.local_args, dtype=tf.int64)
-        global_args = tf.cast(action.global_args, dtype=tf.int64)
-
-        return self._evaluate(tactic_id, local_args, global_args, search_expand_bound=search_expand_bound)
-
-
 class TFGNNPredict(Predict):
     def __init__(self,
                  log_dir: Path,
@@ -860,68 +743,12 @@ class TFGNNPredict(Predict):
             for x in datapoints
         ])
 
-    @staticmethod
-    def _logits_decoder(logits: tf.Tensor, total_expand_bound: int) -> Tuple[np.ndarray, np.ndarray]:
-        """
-        Decoding mechanism
-        """
-        num_arguments = tf.shape(logits)[0]
-        if num_arguments == 0:
-            return np.array([[]], dtype=np.uint32), np.array([0], dtype=np.float32)
-
-        logits = tf.math.log_softmax(logits).numpy()
-
-        expand_bound = int(total_expand_bound**(1/num_arguments))
-
-        sorted_indices = np.argsort(-logits).astype(dtype=np.uint32)
-        restricted_indices = sorted_indices[:, :expand_bound]
-        arg_combinations = cartesian_product(*restricted_indices)
-        first_index = np.tile(np.arange(num_arguments), (arg_combinations.shape[0], 1))
-        combination_values = np.sum(logits[first_index, arg_combinations], axis=1)
-        return arg_combinations, combination_values
-
-    @classmethod
-    def _expand_arguments_logits(cls,
-                                 total_expand_bound: int,
-                                 num_arguments: int,
-                                 local_context_size: int,
-                                 global_context_size: int,
-                                 tactic: tf.Tensor,
-                                 tactic_logits: tf.Tensor,
-                                 local_arguments_logits: Optional[tf.Tensor] = None,
-                                 global_arguments_logits: Optional[tf.Tensor] = None
-                                 ) -> List[Inference]:
-        if local_arguments_logits is None:
-            # this is a base tactic prediction
-            return [TacticInference(value=float(tactic_logits.numpy()), tactic_id=int(tactic.numpy()))]
-        elif global_arguments_logits is None:
-            # this is a base tactic plus local arguments prediction
-            logits = local_arguments_logits[:num_arguments, :local_context_size]
-            arg_combinations, combination_values = cls._logits_decoder(logits=logits,
-                                                                       total_expand_bound=total_expand_bound)
-            combination_values += tactic_logits.numpy()
-            return [LocalArgumentInference(value=float(value),
-                                           tactic_id=int(tactic.numpy()),
-                                           local_arguments=local_arguments)
-                    for local_arguments, value in zip(tf.cast(arg_combinations, dtype=tf.int64), combination_values)]
-        else:
-            # this is a base tactic plus local and global arguments prediction
-            combined_arguments_logits = tf.concat([global_arguments_logits[:num_arguments, :], local_arguments_logits[:num_arguments, :local_context_size]], axis=-1)
-            arg_combinations, combination_values = cls._logits_decoder(logits=combined_arguments_logits,
-                                                                       total_expand_bound=total_expand_bound)
-            combination_values += tactic_logits.numpy()
-            return [GlobalArgumentInference(value=float(value),
-                                            tactic_id=int(tactic.numpy()),
-                                            local_arguments=tf.where(arguments < global_context_size, -1, arguments - global_context_size),
-                                            global_arguments=tf.where(arguments < global_context_size, arguments, -1))
-                    for arguments, value in zip(tf.cast(arg_combinations, dtype=tf.int64), combination_values)]
-
     @predict_api_debugging
     def ranked_predictions(self,
                            state: LoaderProofstate,
                            available_global: Optional[np.ndarray] = None,
                            allowed_model_tactics: Optional[Iterable[int]] = None
-                           ) -> Union[PredictOutput, Tuple[np.ndarray, np.ndarray]]:
+                           ) -> Tuple[np.ndarray, np.ndarray]:  # 
         """
         Produces predictions for a single proof-state.
         """
@@ -930,67 +757,6 @@ class TFGNNPredict(Predict):
 
         best_log_probs, best_tactics = self._inference_model(state, allowed_model_tactics)
         return (best_tactics.numpy()[0], np.exp(best_log_probs.numpy()[0]))
-
-        predict_output = PredictOutput(state=None, predictions=[])
-
-        # go over the tactic_expand_bound batches
-        for proofstate_batch_output in zip(*inference_output.values()):
-            # go over the individual proofstates in a batch
-            inference_data = {
-                output_name: output_value[0]
-                for output_name, output_value in zip(inference_output.keys(), proofstate_batch_output)
-            }
-
-            num_arguments = self.graph_constants.tactic_index_to_numargs[inference_data[TacticPrediction.TACTIC]]
-            predictions = self._expand_arguments_logits(total_expand_bound=total_expand_bound,
-                                                        num_arguments=num_arguments,
-                                                        local_context_size=len(state.context.local_context),
-                                                        global_context_size=len(state.context.global_context),
-                                                        **inference_data)
-            predict_output.predictions.extend(filter(lambda inference: inference.value > -float('inf'), predictions))
-
-        # fill in the states in loader format
-        predict_output.state = state
-
-        # return predictions in the appropriate format
-        return predict_output.numpy()
-
-    # (!) NOT MAINTAINED
-    def _batch_ranked_predictions(self,
-                                  proofstate_graph: tfgnn.GraphTensor,
-                                  tactic_expand_bound: int,
-                                  total_expand_bound: int,
-                                  tactic_mask: tf.Tensor
-                                  ) -> List[PredictOutput]:
-
-        raise Exception("Running unmaintained code. Delete this line at your own risk.")
-        
-        inference_model = self._inference_model(tactic_expand_bound)
-
-        inference_output = inference_model({self.prediction_task.PROOFSTATE_GRAPH: proofstate_graph,
-                                            self.prediction_task.TACTIC_MASK: tactic_mask})
-
-        _, local_context_sizes = proofstate_graph.context['local_context_ids'].nested_row_lengths()
-
-        batch_size = int(proofstate_graph.total_num_components.numpy())
-
-        predict_outputs = [PredictOutput(state=None, predictions=[]) for _ in range(batch_size)]
-
-        # go over the tactic_expand_bound batches
-        for proofstate_batch_output in zip(*inference_output.values()):
-            # go over the individual proofstates in a batch
-            for predict_output, proofstate_output, local_context_size in zip(predict_outputs,
-                                                                             zip(*proofstate_batch_output),
-                                                                             local_context_sizes):
-                inference_data = {output_name: output_value for output_name, output_value in zip(inference_output.keys(), proofstate_output)}
-                num_arguments = self.graph_constants.tactic_index_to_numargs[inference_data[TacticPrediction.TACTIC]]
-                predictions = self._expand_arguments_logits(total_expand_bound=total_expand_bound,
-                                                            num_arguments=num_arguments,
-                                                            local_context_size=local_context_size,
-                                                            global_context_size=global_context_size,
-                                                            **inference_data)
-                predict_output.predictions.extend(filter(lambda inference: inference.value > -float('inf'), predictions))
-        return predict_outputs
 
     
     # (!) NOT MAINTAINED
@@ -1001,42 +767,6 @@ class TFGNNPredict(Predict):
                   total_expand_bound: int,
                   search_expand_bound: Optional[int] = None,
                   allowed_model_tactics: Optional[Iterable[int]] = None
-                  ) -> Tuple[float, float]:
+                  ) -> Tuple[float, float]:  # per_proofstate_passrate, per_lemma_passrate
 
-        raise Exception("Running unmaintained code. Delete this line at your own risk.")
-
-        tactic_mask = self._tactic_mask_from_allowed_model_tactics(allowed_model_tactics)
-
-        predictions = []
-        tactic = []
-        local_arguments = []
-        global_arguments = []
-        names = []
-        for proofstate_graph in iter(proofstate_graph_dataset.batch(batch_size)):
-            scalar_proofstate_graph = proofstate_graph.merge_batch_to_components()
-            batch_tactic_mask = tf.repeat(tf.expand_dims(tactic_mask, axis=0), repeats=proofstate_graph.total_num_components, axis=0)
-            batch_predict_output = self._batch_ranked_predictions(proofstate_graph=proofstate_graph,
-                                                                  tactic_expand_bound=tactic_expand_bound,
-                                                                  total_expand_bound=total_expand_bound,
-                                                                  tactic_mask=batch_tactic_mask)
-            predictions.extend(batch_predict_output)
-            tactic.append(scalar_proofstate_graph.context['tactic'])
-            local_arguments.append(scalar_proofstate_graph.context['local_arguments'])
-            global_arguments.append(scalar_proofstate_graph.context['global_arguments'])
-            names.append(scalar_proofstate_graph.context['name'])
-
-        tactic = tf.concat(tactic, axis=0)
-        local_arguments = tf.concat(local_arguments, axis=0)
-        global_arguments = tf.concat(global_arguments, axis=0)
-        names = tf.concat(names, axis=0).numpy()
-
-        per_proofstate = []
-        per_lemma = {}
-        for action, name, predict_output in zip(zip(tactic, local_arguments, global_arguments), names, predictions):
-            result = predict_output._evaluate(*action, search_expand_bound=search_expand_bound)
-            per_proofstate.append(result)
-
-            per_lemma[name] = (per_lemma.get(name, True) and result)
-        per_proofstate_result = np.array(per_proofstate).mean()
-        per_lemma_result = np.array(list(per_lemma.values())).mean()
-        return per_proofstate_result, per_lemma_result
+        raise NotImplemented("Running unmaintained code. Delete this line at your own risk.")
