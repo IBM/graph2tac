@@ -741,7 +741,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--total-expand-bound', '--total_expand_bound',
                         type=int,
                         default=2048,
-                        help="(depricated)")
+                        help="(deprecated)")
 
     parser.add_argument('--tactic-expand-bound', '--tactic_expand_bound',
                         type=int,

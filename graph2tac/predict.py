@@ -8,23 +8,10 @@ from pathlib import Path
 from graph2tac.common import logger
 from graph2tac.loader.data_classes import GraphConstants, LoaderProofstate, LoaderDefinition
 
-
+# TODO(jrute): This probably isn't needed now
+# but I haven't measured the timings without it.
+# It prevents tactics with too many arguments from being used.
 NUMPY_NDIM_LIMIT = 32
-
-
-def cartesian_product(*arrays):
-    """
-    using the code from  https://stackoverflow.com/questions/11144513/cartesian-product-of-x-and-y-array-points-into-single-array-of-2d-points
-    """
-    la = len(arrays)
-
-    if la > 32:
-        print(arrays)
-    dtype = np.result_type(*arrays)
-    arr = np.empty([len(a) for a in arrays] + [la], dtype=dtype)
-    for i, a in enumerate(np.ix_(*arrays)):
-        arr[...,i] = a
-    return arr.reshape(-1, la)
 
 RT = TypeVar('RT')  # return type
 
@@ -70,7 +57,7 @@ class Predict:
         """
 
         @param graph_constants: the graph constants seen during training
-        @param total_expand_bound: how many base tactics to select (may be ignored by the subclass)
+        @param tactic_expand_bound: how many base tactics to select (may be ignored by the subclass)
         @param search_expand_bound: how many total tactics to return
         @param debug_dir: a directory where all api calls will be logged for debugging purposes
         """
