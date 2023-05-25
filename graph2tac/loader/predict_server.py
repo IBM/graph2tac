@@ -612,7 +612,7 @@ class PredictServer:
             allowed_model_tactics=self.current_allowed_tactics,
             available_global=None
         )
-        confidences = apply_temperature(confidences, self.config.temperature)
+        #confidences = apply_temperature(confidences, self.config.temperature)
 
         # use only top-k
         actions = actions[:self.config.search_expand_bound]
