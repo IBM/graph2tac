@@ -39,6 +39,25 @@ def apply_temperature(confidences: ArrayLike, temperature: float) -> NDArray[np.
     res /= res.sum() + (1-confidences.sum())**(1/temperature)
     return res
 
+def clean_results(confidences: ArrayLike, results: ArrayLike, sample_prob=False) -> NDArray[np.float64]:
+    results = np.array(results)
+    b_resp = np.array([xi.tobytes() for xi in results])
+    
+    _, unique_ixs, counts = np.unique(b_resp, return_index=True, return_counts=True)
+    results = results[unique_ixs]
+    if sample_prob:
+        confidences = np.array(counts, np.float64)
+        confidences = confidences / np.sum(confidences)
+    else:
+        confidences = np.array(confidences, np.float64)
+        confidences = confidences[unique_ixs]
+    
+    sort_ix = np.argsort(-confidences)
+    confidences = confidences[sort_ix]
+    results = results[sort_ix]
+
+    return confidences, results
+
 class ResponseHistory:
     """Records response history for testing."""
     data: dict
@@ -612,7 +631,7 @@ class PredictServer:
             allowed_model_tactics=self.current_allowed_tactics,
             available_global=None
         )
-        #confidences = apply_temperature(confidences, self.config.temperature)
+        confidences, actions = clean_results(confidences, actions, sample_prob=self.config.sample_prob)
 
         # use only top-k
         actions = actions[:self.config.search_expand_bound]
@@ -781,6 +800,11 @@ def parse_args() -> argparse.Namespace:
                         type=float,
                         default=1.0,
                         help="temperature to apply to the probability distributions returned by the model")
+    
+    parser.add_argument('--sample-prob', '--sample_prob',
+                        default=False,
+                        action='store_true',
+                        help="use sampling probability instead of the probability from the model")
 
     parser.add_argument('--debug-predict', '--debug_predict',
                         type=Path,

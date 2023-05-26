@@ -18,6 +18,154 @@ from graph2tac.predict import Predict, predict_api_debugging, NUMPY_NDIM_LIMIT
 from graph2tac.tfgnn.stack_graph_tensors import stack_graph_tensors
 
 
+class SampleSearch(tf.keras.layers.Layer):
+    """Beam search layer
+
+    :param token_log_prob_fn: A tensorflow function which returns log probabilities for all the tokens.
+        It also takes as input a cache dictionary which is stores hidden information for each partial sequence
+        which can be used to compute the log probabilities, and it returns an updated version.  (The beam search
+        will use gather to reorder this cache after each beam search step.)  Another dictionary static_data
+        is used to pass in other tensorflow tensorflow objects which can be used in the computation.
+        Inputs:  - partial sequences: [batch, beam_size, seq_length]
+                 - beam_search_step: int32
+                 - cache: dict of [batch, beam_size, ...]
+                 - static_data: dict of tensors of any shape
+        Outputs: - token_log_probs: [batch, beam_size, vocabulary]
+                 - updated_cache: dict of [batch, beam_size, ...]
+    :param stopping_fn: A tensorflow function which returns whether a beam ray is finished.
+        It takes inputs and outputs similar to token_log_prob_fn.
+        Inputs:  - partial sequences: [batch, beam_size, seq_length]
+                 - beam_search_step: int32
+                 - cache: dict of [batch, beam_size, ...]
+                 - static_data: dict of tensors of any shape
+        Outputs: - is_finished: [batch, beam_size, vocabulary]
+                 - updated_cache: dict of [batch, beam_size, ...]
+    """
+    def __init__(
+        self, 
+        token_log_prob_fn: Callable[
+            [tf.Tensor, tf.Tensor, dict[str, tf.Tensor], dict[str, tf.Tensor | tf.RaggedTensor]],
+            tuple[tf.Tensor, dict[str, tf.Tensor]]
+        ], 
+        stopping_fn: Callable[
+            [tf.Tensor, tf.Tensor, dict[str, tf.Tensor], dict[str, tf.Tensor | tf.RaggedTensor]],
+            tuple[tf.Tensor, dict[str, tf.Tensor]]
+        ],
+    ):
+        super().__init__()
+        self.token_log_prob_fn = token_log_prob_fn
+        self.stopping_fn = stopping_fn
+    
+    def one_beam_step(
+        self,
+        ids: tf.Tensor,  # [batch_size, beam_size0, seq_length]
+        scores: tf.Tensor,  # [batch_size, beam_size0]
+        cache: dict[str, tf.Tensor],  # dict with values: [batch_size, beam_size0, ...]
+        static_data: dict[str, tf.Tensor | tf.RaggedTensor],
+        i: tf.Tensor,  # int32
+        max_beam_size: tf.Tensor,  # int32
+    ) -> tuple[
+        tf.Tensor,  # ids: [batch_size, beam_size, seq_length+1]
+        tf.Tensor,  # scores: [batch_size, beam_size]
+        dict[str, tf.Tensor],  # cache with values: [batch_size, beam_size, ...]
+    ]:
+        batch_size = tf.shape(ids)[0]
+        beam_size0 = tf.shape(ids)[1]
+
+        # [batch, beam_size0, vocabulary], dict of [batch_size, beam_size0, ...]
+        token_scores, cache = self.token_log_prob_fn(ids, i, cache, static_data)
+        vocabulary = tf.shape(token_scores)[2]
+        
+        # sample to get beam size up to full beam_size
+        if beam_size0 < max_beam_size:
+            sampled_beam_ix = tf.random.categorical(logits=scores, num_samples=max_beam_size - beam_size0)  # [batch_size, beam_size - beam_size0]
+            scores = tf.concat([scores, tf.gather(scores, sampled_beam_ix, batch_dims=1)], axis=1)  # [batch_size, beam_size]
+            token_scores = tf.concat([token_scores, tf.gather(token_scores, sampled_beam_ix, batch_dims=1)], axis=1)  # [batch_size, beam_size, vocabulary]
+            cache = {k: tf.concat([v, tf.gather(v, sampled_beam_ix, batch_dims=1)], axis=1) for k, v in cache.items()}  # dict of [batch_size, beam_size, ...]
+            ids = tf.concat([ids, tf.gather(ids, sampled_beam_ix, batch_dims=1)], axis=1)  # [batch_size, beam_size]
+        
+        # sample new tokens
+        token_scores = tf.reshape(token_scores, shape=[batch_size*max_beam_size, vocabulary])  # [batch_size * beam_size, vocabulary]
+        new_token = tf.random.categorical(logits=token_scores, num_samples=1)  # [batch_size * beam_size, 1]
+        new_token_score = tf.gather(token_scores, new_token, batch_dims=1)  # [batch_size*beam_size, 1]
+        new_token = tf.reshape(new_token, shape=[batch_size, max_beam_size, 1])  # [batch_size, beam_size, 1]
+        new_token_score = tf.squeeze(new_token_score, axis=[1])  # [batch_size*beam_size]
+        new_token_score = tf.reshape(new_token_score, shape=[batch_size, max_beam_size])  # [batch_size, beam_size]
+        
+        ids = tf.concat([ids, tf.cast(new_token, tf.int32)], axis=-1)  # [batch_size, beam_size, seq_length+1]
+        scores = scores + new_token_score  # [batch_size, beam_size]
+
+        return ids, scores, cache
+    
+    def one_beam_step_with_early_stopping(
+        self,
+        is_finished: tf.Tensor, # bool
+        ids: tf.Tensor,  # [batch_size, beam_size0, seq_length]
+        scores: tf.Tensor,  # [batch_size, beam_size0]
+        cache: dict[str, tf.Tensor],  # dict with values: [batch_size, beam_size0, ...]
+        static_data: dict[str, tf.Tensor | tf.RaggedTensor],
+        i: tf.Tensor,  # int32
+        max_beam_size: tf.Tensor,  # int32                           
+    ) -> tuple[
+        tf.Tensor,  # ids: [batch_size, beam_size, seq_length+1]
+        tf.Tensor,  # scores: [batch_size, beam_size]
+        dict[str, tf.Tensor],  # cache with values: [batch_size, beam_size, ...]
+    ]:
+        if is_finished:
+            return (is_finished, (ids, scores, cache))
+        
+        # check which are finished
+        is_finished, cache = self.stopping_fn(ids, i, cache, static_data)  # [batch_size, beam_size0]
+        is_finished = tf.reduce_all(is_finished)
+
+        # wait until all are finished
+        if is_finished:
+            return (is_finished, (ids, scores, cache))
+        
+        return (is_finished, self.one_beam_step(ids, scores, cache, static_data, i, max_beam_size))
+
+    def call(
+        self,
+        initial_ids: tf.Tensor,  # [batch_size, initial_seq_length]
+        initial_cache: dict[str, tf.Tensor],  # [batch_size, ...]
+        static_data: dict[str, tf.Tensor | tf.RaggedTensor],
+        beam_size: tf.Tensor,  # int32
+        max_decode_length: tf.Tensor,  # int32
+    ) -> tuple[tf.Tensor, tf.Tensor]:
+        batch_size = tf.shape(initial_ids)[0]
+
+        # start with a beam_size of 1 for the input to the first step first step
+        ids = tf.expand_dims(initial_ids, axis=1)  # [batch_size, beam_size0, initial_seq_length]
+        cache = {
+            k: tf.expand_dims(v, axis=1)  # [batch_size, beam_size0, ...]
+            for k, v in initial_cache.items()  # v: [batch_size, ...]
+        }
+        scores = tf.expand_dims(tf.zeros(shape=[batch_size]), axis=-1)  # [batch_size, beam_size0]
+
+        # iterate over the sequence
+        is_finished = False
+        # this loop is automatically converted into tf.while_loop
+        shape_invariants = [
+            (ids, tf.TensorShape([None, None, None])),
+            (scores, tf.TensorShape([None, None])),
+            (cache, {k: tf.TensorShape([None, None] + [None for i in range(len(tf.shape(v)) - 2)]) for k,v in cache.items()}),
+        ]
+        for i in range(max_decode_length):
+            # the sizes of beam_size and seq_length can change during the loop and we need to let TF know this
+            tf.autograph.experimental.set_loop_options(
+                shape_invariants=shape_invariants
+            )
+            # ids: [batch_size, beam_size, seq_length]
+            # scores: [batch_size, beam_size]
+            # cache: dict with values [batch_size, beam_size, ...]
+            is_finished, (ids, scores, cache) = self.one_beam_step_with_early_stopping(is_finished, ids, scores, cache, static_data, i, beam_size)
+
+        # sort by scores
+        ix = tf.argsort(scores, axis=-1, direction="DESCENDING")  # [batch_size, beam_size]
+        scores = tf.gather(scores, ix, batch_dims=1)  # [batch_size, beam_size]
+        ids = tf.gather(ids, ix, batch_dims=1)  # [batch_size, beam_size, seq_length]
+        return ids, scores
+
 class BeamSearch(tf.keras.layers.Layer):
     """Beam search layer
 
@@ -189,7 +337,7 @@ class SelectBestResults(tf.keras.layers.Layer):
         self.tactic_index_to_numargs = tf.cast(tf.constant(tactic_index_to_numargs), tf.int32)
         self.search_expand_bound = search_expand_bound
 
-        self.beam_search = BeamSearch(
+        self.beam_search = SampleSearch(
             token_log_prob_fn=self.token_log_prob_fn,
             stopping_fn=self.stopping_fn,
         )
