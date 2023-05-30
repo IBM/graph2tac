@@ -251,6 +251,7 @@ class Pipeline:
                 checkpoint_number=None,
                 exclude_tactics=None,
                 tactic_expand_bound=20,
+                search_expand_bound=20
             )
             return True
 

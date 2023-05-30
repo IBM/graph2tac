@@ -8,8 +8,7 @@ import numpy as np
 
 from graph2tac.loader.data_classes import GraphConstants
 from graph2tac.tfgnn.graph_schema import proofstate_graph_spec, batch_graph_spec, strip_graph
-from graph2tac.tfgnn.models import (RepeatScalarGraph,
-                                    GraphEmbedding,
+from graph2tac.tfgnn.models import (GraphEmbedding,
                                     LogitsFromEmbeddings,
                                     get_gnn_constructor,
                                     get_arguments_head_constructor,
@@ -22,88 +21,9 @@ LOCAL_ARGUMENT_PREDICTION = 'local_argument_prediction'
 GLOBAL_ARGUMENT_PREDICTION = 'global_argument_prediction'
 
 
-def arguments_filter(y_true: tf.RaggedTensor, y_pred: tf.Tensor) -> Tuple[tf.Tensor, tf.Tensor]:
-    """
-    Extracts the local arguments which are not None from the ground truth and predictions
-
-    @param y_true: the labels for the arguments, with shape [batch_size, 1, None(num_arguments)]
-    @param y_pred: the logits for the arguments, with shape [batch_size, max(num_arguments), context_size]
-    @return: a tuple whose first element contains the not-None arguments, the second element being the logits corresponding to each not-None argument
-    """
-    # convert y_true to a dense tensor padding with -1 values (also used for None arguments);
-    # remove spurious dimension (y_true was created from a non-scalar graph)
-    # [ batch_size, max(num_arguments) ]
-    arguments_tensor = tf.squeeze(y_true.to_tensor(default_value=-1), axis=1)
-
-    # we want to compute only go over the positions that are not None
-    positions = tf.where(arguments_tensor != -1)
-
-    # keep only these positions in the both y_true and y_pred
-    arguments_true = tf.gather_nd(arguments_tensor, positions)
-    arguments_pred = tf.gather_nd(y_pred, positions)
-    return arguments_true, arguments_pred
-
-@tf.function
-def ragged_logits(y_true: tf.RaggedTensor, y_pred: tf.Tensor) -> Tuple[tf.RaggedTensor]:
-    """
-    Extracts the logits for valid argument positions using the shape of y_true
-
-    @param y_true: the labels for the arguments, with shape [batch_size, 1, None(num_arguments)]
-    @param y_pred: the logits for the arguments, with shape [batch_size, max(num_arguments), context_size]
-    @return: a ragged tensor of logits, with shape [batch_size, None(num_arguments), context_size]
-    """
-    y_true = tf.squeeze(y_true, 1).with_row_splits_dtype(tf.int64) # [batch_size, None(num_arguments)]
-
-    if tf.shape(y_pred)[-1] == 0:
-        # no context
-        # return new tensor with a dummy context of 1
-        # shape: [batch_size, None(num_arguments), 1]
-        logits = tf.expand_dims(tf.math.log(tf.zeros_like(y_true, tf.float32)), axis=-1)
-    else:
-        #shape: [batch_size, None(num_arguments), context_size]
-        logits = tf.RaggedTensor.from_tensor(y_pred, lengths=y_true.row_lengths())
-    return logits
-
-def convert_ragged_logits_to_dense(logits: tf.RaggedTensor, context_size=None) -> tf.Tensor:
-    # logits shape: [batch, None(args), None(context)]
-
-    # expand context (replacing unused context element logits with -inf)
-    # shape: [batch, None(args), max(context)]
-    logits = logits.with_values(logits.values.to_tensor(default_value=-np.inf, shape=[None, context_size]))
-
-    # expand args (replacing unused arg position logits with 0.0)
-    # shape: [batch, max(args), max(context)]
-    logits = logits.to_tensor(default_value=0.0)
-
-    return logits
-
 @tf.function
 def _local_arguments_pred(y_true: tf.Tensor, y_pred: tf.Tensor) -> tf.Tensor:
     return tf.argmax(y_pred, axis=-1) if tf.shape(y_pred)[-1] > 0 else tf.zeros_like(y_true)
-
-
-class LocalArgumentSparseCategoricalCrossentropy(tf.keras.losses.Loss):
-    """
-    Used to compute the sparse categorical crossentropy loss for the local argument prediction task.
-
-    NOTES:
-        - `-1` arguments correspond to `None`
-        - logits **are not** assumed to be normalized
-    """
-    def call(self, y_true, y_pred):
-        """
-        @param y_true: ids for the arguments, with shape [ batch_size, 1, None(num_arguments) ]
-        @param y_pred: logits for each argument position, with shape [ batch_size, None(num_arguments), num_categories ]
-        @return: a vector of length equal to the total number of not-None arguments within this batch
-        """
-        arguments_true, arguments_pred = arguments_filter(y_true, y_pred)
-
-        if tf.size(arguments_pred) == 0:
-            # deal with the edge case where there is no local context or no local arguments to predict in the batch
-            return tf.zeros_like(arguments_true, dtype=tf.float32)
-        else:
-            # the local context is non-empty and we have at least one argument, so the following doesn't fail
-            return tf.nn.sparse_softmax_cross_entropy_with_logits(arguments_true, arguments_pred)
 
 
 class ArgumentSparseCategoricalCrossentropy(tf.keras.losses.Loss):
@@ -552,13 +472,16 @@ class TacticPrediction(PredictionTask):
         self.checkpoint.tactic_logits_from_embeddings = self.tactic_logits_from_embeddings
 
     @staticmethod
-    def _top_k_tactics(tactic_logits: tf.Tensor,
-                       tactic_mask: tf.Tensor,
+    def _top_k_tactics(tactic_logits: tf.Tensor,  # [batch, tactics]
+                       tactic_mask: tf.Tensor,  # [batch, tactics]
                        tactic_expand_bound: int
-                       ) -> Tuple[tf.Tensor, tf.Tensor]:
+                       ) -> Tuple[tf.Tensor, tf.Tensor]:  #([batch, top_k_tactics], [batch, top_k_tactics])
         tactic_logits = tf.math.log_softmax(tactic_logits + tf.math.log(tf.cast(tactic_mask, tf.float32)), axis=-1)
 
-        top_k = tf.math.top_k(tactic_logits, k=tactic_expand_bound)
+        # Sometimes the number of tactics is less than the tactic_expand_bound
+        # In that case return only the number of tactics.  It is ok if some have probability 0.
+        top_k = tf.math.top_k(tactic_logits, k=tf.minimum(tactic_expand_bound, tf.shape(tactic_logits)[1]))
+        # ([batch, top_k_tactics], [batch, top_k_tactics])
         return top_k.indices, top_k.values
 
     def _tactic_logits_and_hidden_graph(self,
@@ -587,63 +510,22 @@ class TacticPrediction(PredictionTask):
         return config
 
     def create_train_model(self) -> tf.keras.Model:
-        """
-        Combines a GNN component with a tactic head to produce an end-to-end model for the base tactic prediction task.
-        The resulting model is for training purposes, and produces tactic logits.
-
-        @return: a keras model consuming proof-state graphs and producing tactic logits
-        """
-
-        proofstate_graph = tf.keras.layers.Input(type_spec=batch_graph_spec(proofstate_graph_spec),
-                                                 name=self.PROOFSTATE_GRAPH)
-        scalar_proofstate_graph = proofstate_graph.merge_batch_to_components()
-
-        tactic_logits, _ = self._tactic_logits_and_hidden_graph(scalar_proofstate_graph)
-
-        return tf.keras.Model(inputs=proofstate_graph, outputs={TacticPrediction.TACTIC_LOGITS: tactic_logits})
+        raise NotImplemented("Use GlobalArgumentPrediction instead")
 
     def create_inference_model(self, tactic_expand_bound: int, graph_constants: GraphConstants) -> tf.keras.Model:
-        """
-        Combines a GNN component with a tactic head to produce an end-to-end model for the base tactic prediction task.
-        The resulting model is for inference purposes, and produces tactic predictions and logits.
-
-        @warning: we do not use the GraphConstants saved in this task since during inference these may not be up-to-date
-        @tactic_expand_bound: the number of base tactic predictions to produce for each proofstate
-        @graph_constants: the graph constants to use during inference (with a possibly updated global context)
-        @return: a keras model consuming proof-state graphs and producing tactic predictions and logits
-        """
-        proofstate_graph = tf.keras.layers.Input(type_spec=batch_graph_spec(proofstate_graph_spec),
-                                                 name=self.PROOFSTATE_GRAPH)
-        scalar_proofstate_graph = proofstate_graph.merge_batch_to_components()
-
-        tactic_mask = tf.keras.Input(shape=(graph_constants.tactic_num,), dtype=tf.bool, name=self.TACTIC_MASK)
-
-        tactic_logits, _ = self._tactic_logits_and_hidden_graph(scalar_proofstate_graph)
-
-        # [tactic_num, ]
-        no_argument_tactics_mask = tf.constant(graph_constants.tactic_index_to_numargs, dtype = tf.int64) == 0
-
-        # [batch_size, tactic_num]
-        proofstate_tactic_mask = tf.repeat(tf.expand_dims(no_argument_tactics_mask, axis=0), proofstate_graph.total_num_components, axis=0)
-
-        top_k_indices, top_k_values = self._top_k_tactics(tactic_logits=tactic_logits,
-                                                          tactic_mask=proofstate_tactic_mask & tactic_mask,
-                                                          tactic_expand_bound=tactic_expand_bound)
-        return tf.keras.Model(inputs={self.PROOFSTATE_GRAPH: proofstate_graph, self.TACTIC_MASK: tactic_mask},
-                              outputs={self.TACTIC: tf.transpose(top_k_indices),
-                                       self.TACTIC_LOGITS: tf.transpose(top_k_values)})
+        raise NotImplemented("Use GlobalArgumentPrediction instead")
 
     @staticmethod
     def create_input_output(graph_tensor: tfgnn.GraphTensor) -> Tuple[tfgnn.GraphTensor, Dict[str, tf.Tensor]]:
-        return graph_tensor, {TacticPrediction.TACTIC_LOGITS: graph_tensor.context['tactic']}
+        raise NotImplemented("Use GlobalArgumentPrediction instead")
 
     @staticmethod
     def loss() -> Dict[str, tf.keras.losses.Loss]:
-        return {TacticPrediction.TACTIC_LOGITS: tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True)}
+        raise NotImplemented("Use GlobalArgumentPrediction instead")
 
     @staticmethod
     def metrics() -> Dict[str, List[tf.keras.metrics.Metric]]:
-        return {TacticPrediction.TACTIC_LOGITS: [tf.keras.metrics.SparseCategoricalAccuracy(name="accuracy")]}
+        raise NotImplemented("Use GlobalArgumentPrediction instead")
 
 
 class GlobalEmbeddings(tf.keras.layers.Layer):
@@ -1008,119 +890,29 @@ class LocalArgumentPrediction(TacticPrediction):
         # [batch*tactic_expand_bound, None(args), hdim]
         return self.arguments_head((hidden_state, tactic_embedding, num_arguments))
 
-    @staticmethod
-    def _reshape_inference_logits(
-        logits: tf.Tensor,  # [batch*tactic_expand_bound, max(args), max(cxt)]
-        tactic_expand_bound: int  
-    ) -> tf.Tensor:  # [batch, tactic_expand_bound, max(args), max(cxt)]
-        num_arguments = tf.shape(logits)[1]
-        num_logits = tf.shape(logits)[2]
-        # [batch, tactic_expand_bound, max(args), max(cxt)]
-        return tf.reshape(logits, shape=(-1, tactic_expand_bound, num_arguments, num_logits))
-
     def create_train_model(self) -> tf.keras.Model:
-        """
-        Combines a GNN component with a tactic head and an arguments head to produce an end-to-end model for the
-        local argument prediction task. The resulting model is weakly autoregressive and for training purposes only,
-        producing both tactic logits and argument logits for each local context node and argument position.
-
-        @return: a keras model consuming graphs and producing tactic logits and local arguments logits
-        """
-        proofstate_graph = tf.keras.layers.Input(type_spec=batch_graph_spec(proofstate_graph_spec),
-                                                 name=self.PROOFSTATE_GRAPH)
-        scalar_proofstate_graph = proofstate_graph.merge_batch_to_components()
-
-        tactic_logits, hidden_graph = self._tactic_logits_and_hidden_graph(scalar_proofstate_graph)
-
-        hidden_state_sequences = self._hidden_state_sequences(hidden_graph=hidden_graph,
-                                                              tactic=scalar_proofstate_graph.context['tactic'])
-
-        local_arguments_logits = self._local_arguments_logits(scalar_proofstate_graph=scalar_proofstate_graph,
-                                                              hidden_graph=hidden_graph,
-                                                              hidden_state_sequences=hidden_state_sequences)
-        local_arguments_logits_output = self.local_arguments_logits_output(local_arguments_logits)
-
-        return LocalArgumentModel(inputs=proofstate_graph,
-                                  outputs={self.TACTIC_LOGITS: tactic_logits,
-                                           self.LOCAL_ARGUMENTS_LOGITS: local_arguments_logits_output})
+        raise NotImplemented("Use GlobalArgumentPrediction instead")
 
     def create_inference_model(self, tactic_expand_bound: int, graph_constants: GraphConstants) -> tf.keras.Model:
-        """
-        Combines a GNN component with a tactic head and an arguments head to produce an end-to-end model for the
-        local argument prediction task. The resulting model is weakly autoregressive and for inference purposes only,
-        producing base tactic, their logits and argument logits for each local context node and argument position.
-
-        @warning: we do not use the GraphConstants saved in this task since during inference these may not be up-to-date
-        @param tactic_expand_bound: the number of base tactic predictions to produce for each proofstate
-        @param graph_constants: the graph constants to use during inference (with a possibly updated global context)
-        @return: a keras model consuming graphs and producing tactic logits and local arguments logits
-        """
-        proofstate_graph = tf.keras.layers.Input(type_spec=batch_graph_spec(proofstate_graph_spec),
-                                                 name=self.PROOFSTATE_GRAPH)
-        scalar_proofstate_graph = proofstate_graph.merge_batch_to_components()
-
-        tactic_mask = tf.keras.Input(shape=(graph_constants.tactic_num,), dtype=tf.bool, name=self.TACTIC_MASK)
-
-        tactic_logits, hidden_graph = self._tactic_logits_and_hidden_graph(scalar_proofstate_graph)
-
-        # [tactic_num, ]
-        no_argument_tactics_mask = tf.constant(graph_constants.tactic_index_to_numargs, dtype = tf.int64) == 0
-        all_tactics_mask = tf.ones(graph_constants.tactic_num, dtype=tf.bool)
-
-        # [batch_size, ]
-        no_context_proofstates = scalar_proofstate_graph.context['local_context_ids'].row_lengths() == 0
-
-        # [batch_size, tactic_num]
-        proofstate_tactic_mask = tf.where(tf.expand_dims(no_context_proofstates, axis=-1),
-                                 tf.expand_dims(no_argument_tactics_mask, axis=0),
-                                 tf.expand_dims(all_tactics_mask, axis=0))
-
-        top_k_indices, top_k_values = self._top_k_tactics(tactic_logits=tactic_logits,
-                                                          tactic_mask=proofstate_tactic_mask & tactic_mask,
-                                                          tactic_expand_bound=tactic_expand_bound)
-
-        tactic = tf.reshape(tf.transpose(top_k_indices), shape=(tf.size(top_k_indices),))
-
-        repeat_scalar_graph = RepeatScalarGraph(num_repetitions=tactic_expand_bound)
-        scalar_proofstate_graph = repeat_scalar_graph(scalar_proofstate_graph) # noqa
-        hidden_graph = repeat_scalar_graph(hidden_graph) # noqa
-
-        hidden_state_sequences = self._hidden_state_sequences(hidden_graph=hidden_graph,
-                                                              tactic=tactic)
-        local_arguments_logits = self._local_arguments_logits(scalar_proofstate_graph, hidden_graph,
-                                                              hidden_state_sequences)
-
-        local_arguments_logits_output = self._reshape_inference_logits(logits=local_arguments_logits,
-                                                                       tactic_expand_bound=tactic_expand_bound)
-
-        return tf.keras.Model(inputs={self.PROOFSTATE_GRAPH: proofstate_graph, self.TACTIC_MASK: tactic_mask},
-                              outputs={self.TACTIC: tf.transpose(top_k_indices),
-                                       self.TACTIC_LOGITS: tf.transpose(top_k_values),
-                                       self.LOCAL_ARGUMENTS_LOGITS: local_arguments_logits_output
-                                       })
+        raise NotImplemented("Use GlobalArgumentPrediction instead")
 
     @staticmethod
     def create_input_output(graph_tensor: tfgnn.GraphTensor) -> Tuple[tfgnn.GraphTensor, Dict[str, Union[tf.Tensor, tf.RaggedTensor]]]:
-        outputs = {LocalArgumentPrediction.TACTIC_LOGITS: graph_tensor.context['tactic'],
-                   LocalArgumentPrediction.LOCAL_ARGUMENTS_LOGITS: graph_tensor.context['local_arguments']}
-        return graph_tensor, outputs
+        raise NotImplemented("Use GlobalArgumentPrediction instead")
 
     @staticmethod
     def loss() -> Dict[str, tf.keras.losses.Loss]:
-        return {LocalArgumentPrediction.TACTIC_LOGITS: tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True),
-                LocalArgumentPrediction.LOCAL_ARGUMENTS_LOGITS: LocalArgumentSparseCategoricalCrossentropy()}
+        raise NotImplemented("Use GlobalArgumentPrediction instead")
 
     @staticmethod
     def metrics() -> Dict[str, Iterable[tf.keras.metrics.Metric]]:
-        return {LocalArgumentPrediction.TACTIC_LOGITS: [tf.keras.metrics.SparseCategoricalAccuracy(name='accuracy')],
-                LocalArgumentPrediction.LOCAL_ARGUMENTS_LOGITS: [ArgumentSparseCategoricalAccuracy(name='accuracy')]}
+        raise NotImplemented("Use GlobalArgumentPrediction instead")
 
     def loss_weights(self) -> Dict[str, float]:
-        return {LocalArgumentPrediction.TACTIC_LOGITS: 1.0,
-                LocalArgumentPrediction.LOCAL_ARGUMENTS_LOGITS: self._arguments_loss_coefficient}
+        raise NotImplemented("Use GlobalArgumentPrediction instead")
 
     def callbacks(self) -> List[tf.keras.callbacks.Callback]:
-        return [MixedMetricsCallback()]
+        raise NotImplemented("Use GlobalArgumentPrediction instead")
 
 
 class GlobalArgumentPrediction(LocalArgumentPrediction):
@@ -1322,8 +1114,10 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
                                                  name=self.PROOFSTATE_GRAPH)
         scalar_proofstate_graph = proofstate_graph.merge_batch_to_components()
 
+        # [tactic_num]
         tactic_mask = tf.keras.Input(shape=(graph_constants.tactic_num,), dtype=tf.bool, name=self.TACTIC_MASK)
 
+        # [batch_size, tactic_num]
         tactic_logits, hidden_graph = self._tactic_logits_and_hidden_graph(scalar_proofstate_graph)
 
         # [tactic_num, ]
@@ -1339,7 +1133,7 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
         proofstate_tactic_mask = tf.where(tf.expand_dims(no_context_proofstates, axis=-1),
                                           tf.expand_dims(no_argument_tactics_mask, axis=0),
                                           tf.expand_dims(all_tactics_mask, axis=0))
-        # [batch_size, tactic_expand_bound], [batch_size, tactic_expand_bound] 
+        # [batch_size, top_k_tactics], [batch_size, top_k_tactics] 
         tactic, top_k_values = self._top_k_tactics(tactic_logits=tactic_logits,
                                                           tactic_mask=proofstate_tactic_mask & tactic_mask,
                                                           tactic_expand_bound=tactic_expand_bound)
@@ -1356,66 +1150,50 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
         )
         
         batch_size = tf.shape(tactic)[0]
+        top_k_tactics_cnt = tf.shape(tactic)[1]  # this may be less than tactic_expand_bound
 
-        # [batch*tactic_expand_bound, None(args), hdim]
+        # [batch*top_k_tactics, None(args), hdim]
         hidden_state_sequences = self._hidden_state_sequences_inference(hidden_graph=hidden_graph, tactic=tactic)
-        # [batch*tactic_expand_bound]
+        # [batch*top_k_tactics]
         tactic_arg_cnt = hidden_state_sequences.row_lengths()
         # [batch]
-        batch_arg_cnt = tf.reduce_sum(tf.reshape(tactic_arg_cnt, shape=[batch_size, tactic_expand_bound]), axis=-1)
+        batch_arg_cnt = tf.reduce_sum(tf.reshape(tactic_arg_cnt, shape=[batch_size, top_k_tactics_cnt]), axis=-1)
         
-        # [batch*tactic_expand_bound, None(args), hdim]
+        # [batch*top_k_tactics, None(args), hdim]
         local_hidden_state_sequences = self.local_arguments_head(hidden_state_sequences)
-        # [batch, None(tactic_expand_bound*args), hdim]
+        # [batch, None(top_k_tactics*args), hdim]
         local_hidden_state_sequences = tf.RaggedTensor.from_row_lengths(
             values=local_hidden_state_sequences.values,  # [batch-tactic-arg, hdim]
             row_lengths=batch_arg_cnt
         )
-        # [batch, None(tactic_expand_bound*args), None(context)]
+        # [batch, None(top_k_tactics*args), None(context)]
         local_arguments_logits = QueryKeyMul()(local_hidden_state_sequences, local_context_hidden)
-        # [batch*tactic_expand_bound, None(args), None(context)]
+        # [batch*top_k_tactics, None(args), None(context)]
         local_arguments_logits = tf.RaggedTensor.from_row_lengths(
             values=local_arguments_logits.values,  # [batch-tactic-arg, None(context)]
             row_lengths=tactic_arg_cnt
         )
         
-        # [batch*tactic_expand_bound, None(args), hdim]
+        # [batch*top_k_tactics, None(args), hdim]
         global_hidden_state_sequences = self.global_arguments_head(hidden_state_sequences)
-        # [batch, None(tactic_expand_bound*args), hdim]
+        # [batch, None(top_k_tactics*args), hdim]
         global_hidden_state_sequences = tf.RaggedTensor.from_row_lengths(
             values=global_hidden_state_sequences.values,  # [batch-tactic-arg, None(context)]
             row_lengths=batch_arg_cnt
         )
-        # [batch, None(tactic_expand_bound*args), None(context)]
+        # [batch, None(top_k_tactics*args), None(context)]
         global_arguments_logits = self.global_logits(queries=global_hidden_state_sequences, keys=global_embeddings)
-        # [batch*tactic_expand_bound, None(args), None(context)]
+        # [batch*top_k_tactics, None(args), None(context)]
         global_arguments_logits = tf.RaggedTensor.from_row_lengths(
             values=global_arguments_logits.values,  # [batch-tactic-arg, None(context)]
             row_lengths=tactic_arg_cnt
         )
-        
-        # [batch*tactic_expand_bound, None(args), None(context)], [batch*tactic_expand_bound, None(args), None(context)]
-        normalized_local_arguments_logits, normalized_global_arguments_logits = self._log_softmax_logits(
-            local_arguments_logits=local_arguments_logits,
-            global_arguments_logits=global_arguments_logits)
-        
-        # TODO: Temporary
-        # [batch*tactic_expand_bound, max(args), max(context)]
-        normalized_local_arguments_logits = convert_ragged_logits_to_dense(normalized_local_arguments_logits)
-        normalized_global_arguments_logits = convert_ragged_logits_to_dense(normalized_global_arguments_logits)
-
-        # [batch, tactic_expand_bound, max(args), max(local_context)]
-        normalized_local_arguments_logits = self._reshape_inference_logits(logits=normalized_local_arguments_logits,
-                                                                           tactic_expand_bound=tactic_expand_bound)
-        # [batch, tactic_expand_bound, max(args), dynamic_global_context]
-        normalized_global_arguments_logits = self._reshape_inference_logits(logits=normalized_global_arguments_logits,
-                                                                           tactic_expand_bound=tactic_expand_bound)
 
         return tf.keras.Model(inputs={self.PROOFSTATE_GRAPH: proofstate_graph, self.TACTIC_MASK: tactic_mask},
-                              outputs={self.TACTIC: tf.transpose(tactic),
-                                       self.TACTIC_LOGITS: tf.transpose(top_k_values),
-                                       self.LOCAL_ARGUMENTS_LOGITS: tf.transpose(normalized_local_arguments_logits, perm=[1, 0, 2, 3]),
-                                       self.GLOBAL_ARGUMENTS_LOGITS: tf.transpose(normalized_global_arguments_logits, perm=[1, 0, 2, 3])})
+                              outputs={self.TACTIC: tactic,  # [batch, top_k_tactics]
+                                       self.TACTIC_LOGITS: top_k_values,  # [batch, top_k_tactics]
+                                       self.LOCAL_ARGUMENTS_LOGITS: local_arguments_logits,  # [batch*top_k_tactics, None(args), None(context)]
+                                       self.GLOBAL_ARGUMENTS_LOGITS: global_arguments_logits})  # [batch*top_k_tactics, None(args), None(context)]
 
     @staticmethod
     def create_input_output(graph_tensor: tfgnn.GraphTensor) -> Tuple[

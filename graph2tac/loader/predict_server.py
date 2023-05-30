@@ -609,7 +609,6 @@ class PredictServer:
 
         actions, confidences = self.model.ranked_predictions(
             state=proof_state_graph,
-            total_expand_bound=self.config.total_expand_bound,
             allowed_model_tactics=self.current_allowed_tactics,
             available_global=None
         )
@@ -742,7 +741,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--total-expand-bound', '--total_expand_bound',
                         type=int,
                         default=2048,
-                        help="total_expand_bound for ranked argument search")
+                        help="(deprecated)")
 
     parser.add_argument('--tactic-expand-bound', '--tactic_expand_bound',
                         type=int,
@@ -870,6 +869,7 @@ def load_model(config: argparse.Namespace, log_levels: dict) -> Predict:
         from graph2tac.tfgnn.predict import TFGNNPredict
         model = TFGNNPredict(log_dir=Path(config.model).expanduser().absolute(),
                              tactic_expand_bound=config.tactic_expand_bound,
+                             search_expand_bound=config.search_expand_bound,
                              debug_dir=config.debug_predict,
                              checkpoint_number=config.checkpoint_number,
                              exclude_tactics=exclude_tactics)
@@ -879,6 +879,7 @@ def load_model(config: argparse.Namespace, log_levels: dict) -> Predict:
         model = HPredict(
             checkpoint_dir=Path(config.model).expanduser().absolute(),
             tactic_expand_bound=config.tactic_expand_bound,
+            search_expand_bound=config.search_expand_bound,
             debug_dir=config.debug_predict
         )
     else:
