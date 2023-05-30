@@ -754,7 +754,7 @@ class TFGNNPredict(Predict):
             raise NotImplementedError('available_global is not supported yet')
 
         best_log_probs, best_tactics = self._inference_model(state, allowed_model_tactics)
-        return (best_tactics.numpy()[0], np.exp(best_log_probs.numpy()[0]))
+        return (best_tactics.numpy()[0], best_log_probs.numpy()[0])
 
     
     # (!) NOT MAINTAINED
