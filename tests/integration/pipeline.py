@@ -77,6 +77,40 @@ class ParamSets:
 
 
 class ExpectedResults:
+    @classmethod
+    def overwritten_results(cls, old_results, old_approx_results, new_results, new_approx_results):
+        """Overwrite expected results using old results unless they differ.
+
+        This only basically matters for floating point numbers.
+        """
+        if old_approx_results == new_approx_results:
+            return old_results
+        
+        if type(old_results) != type(new_results):
+            return new_results
+        
+        if isinstance(new_results, dict):
+            shared_keys = old_results.keys() & new_results.keys()
+            new_keys = new_results.keys() - old_results.keys()
+            shared_dict = {
+                k: cls.overwritten_results(old_results[k], old_approx_results[k], new_results[k], new_approx_results[k])
+                for k in shared_keys
+            }
+            new_dict = {k: new_results[k] for k in new_keys}
+            shared_dict.update(new_dict)
+            return shared_dict
+            
+        if isinstance(new_results, list):
+            if len(new_results) != len(old_results):
+                return new_results
+            
+            return [
+                cls.overwritten_results(old, old_approx, new, new_approx)
+                for (old, old_approx, new, new_approx) in zip(old_results, old_approx_results, new_results, new_approx_results)
+            ]
+    
+        return new_results
+
     @staticmethod
     def overwrite_expected_results(results: dict, path: Path):
         warnings.warn(f"Overwriting expected results in {path}")
@@ -111,6 +145,12 @@ class ExpectedResults:
                 expected_results = cls.get_expected_results(expected_results_file)
                 approx_expected_results = cls.approximate(expected_results, rel_error_tolerance=rel_error_tolerance)
                 if approx_results != approx_expected_results:
+                    results = cls.overwritten_results(
+                        old_results=expected_results,
+                        old_approx_results=approx_expected_results,
+                        new_results=results,
+                        new_approx_results=approx_results
+                    )
                     cls.overwrite_expected_results(results, expected_results_file)
 
         assert expected_results_file.exists(), f"No {results_type} expected results file. To create one, rerun this test with `--overwrite`."
