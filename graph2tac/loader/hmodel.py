@@ -220,7 +220,7 @@ class HPredict(Predict):
 
         result = []
         for pred_hash in collapsed_pred.keys():
-            result.append((collapsed_pred[pred_hash], collapsed_val[pred_hash]))
+            result.append((collapsed_pred[pred_hash], np.log(collapsed_val[pred_hash])))
 
         sorted_result = sorted(result, key = lambda x: -x[1])
         result_pred = []
