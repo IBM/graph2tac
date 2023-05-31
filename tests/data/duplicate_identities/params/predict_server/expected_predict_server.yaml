@@ -2,55 +2,55 @@
   contents:
     predictions:
     - arguments: []
-      confidence: 0.5018404228694562
+      confidence: -0.6894730925559998
       ident: 7975258090277046354
     - arguments: []
-      confidence: 0.4981595844303076
+      confidence: -0.6968348026275634
       ident: 4249207563281686782
 - _type: TacticPredictionsGraph
   contents:
     predictions:
     - arguments: []
-      confidence: 0.5018404228694562
+      confidence: -0.6894730925559998
       ident: 7975258090277046354
     - arguments: []
-      confidence: 0.4981595844303076
+      confidence: -0.6968348026275634
       ident: 4249207563281686782
 - _type: TacticPredictionsGraph
   contents:
     predictions:
     - arguments: []
-      confidence: 0.5081784470614582
+      confidence: -0.676922619342804
       ident: 7975258090277046354
     - arguments: []
-      confidence: 0.49182156017962586
+      confidence: -0.7096393108367919
       ident: 4249207563281686782
 - _type: TacticPredictionsGraph
   contents:
     predictions:
     - arguments: []
-      confidence: 0.5018404228694562
+      confidence: -0.6894730925559998
       ident: 7975258090277046354
     - arguments: []
-      confidence: 0.4981595844303076
+      confidence: -0.6968348026275634
       ident: 4249207563281686782
 - _type: TacticPredictionsGraph
   contents:
     predictions:
     - arguments: []
-      confidence: 0.5018404228694562
+      confidence: -0.6894730925559998
       ident: 7975258090277046354
     - arguments: []
-      confidence: 0.4981595844303076
+      confidence: -0.6968348026275634
       ident: 4249207563281686782
 - _type: TacticPredictionsGraph
   contents:
     predictions:
     - arguments: []
-      confidence: 0.5081784470614582
+      confidence: -0.676922619342804
       ident: 7975258090277046354
     - arguments: []
-      confidence: 0.49182156017962586
+      confidence: -0.7096393108367919
       ident: 4249207563281686782
 - _type: CheckAlignmentResponse
   contents:
@@ -61,55 +61,55 @@
   contents:
     predictions:
     - arguments: []
-      confidence: 0.5018404228694562
+      confidence: -0.6894730925559998
       ident: 7975258090277046354
     - arguments: []
-      confidence: 0.4981595844303076
+      confidence: -0.6968348026275634
       ident: 4249207563281686782
 - _type: TacticPredictionsGraph
   contents:
     predictions:
     - arguments: []
-      confidence: 0.5018404228694562
+      confidence: -0.6894730925559998
       ident: 7975258090277046354
     - arguments: []
-      confidence: 0.4981595844303076
+      confidence: -0.6968348026275634
       ident: 4249207563281686782
 - _type: TacticPredictionsGraph
   contents:
     predictions:
     - arguments: []
-      confidence: 0.5081784470614582
+      confidence: -0.676922619342804
       ident: 7975258090277046354
     - arguments: []
-      confidence: 0.49182156017962586
+      confidence: -0.7096393108367919
       ident: 4249207563281686782
 - _type: TacticPredictionsGraph
   contents:
     predictions:
     - arguments: []
-      confidence: 0.5018404228694562
+      confidence: -0.6894730925559998
       ident: 7975258090277046354
     - arguments: []
-      confidence: 0.4981595844303076
+      confidence: -0.6968348026275634
       ident: 4249207563281686782
 - _type: TacticPredictionsGraph
   contents:
     predictions:
     - arguments: []
-      confidence: 0.5018404228694562
+      confidence: -0.6894730925559998
       ident: 7975258090277046354
     - arguments: []
-      confidence: 0.4981595844303076
+      confidence: -0.6968348026275634
       ident: 4249207563281686782
 - _type: TacticPredictionsGraph
   contents:
     predictions:
     - arguments: []
-      confidence: 0.5081784470614582
+      confidence: -0.676922619342804
       ident: 7975258090277046354
     - arguments: []
-      confidence: 0.49182156017962586
+      confidence: -0.7096393108367919
       ident: 4249207563281686782
 - _type: CheckAlignmentResponse
   contents:
@@ -120,91 +120,91 @@
   contents:
     predictions:
     - arguments: []
-      confidence: 0.5084160048586641
+      confidence: -0.6764552593231201
       ident: 4249207563281686782
     - arguments: []
-      confidence: 0.49158393280503837
+      confidence: -0.7101225852966307
       ident: 7975258090277046354
 - _type: TacticPredictionsGraph
   contents:
     predictions:
     - arguments: []
-      confidence: 0.5084160048586641
+      confidence: -0.6764552593231201
       ident: 4249207563281686782
     - arguments: []
-      confidence: 0.49158393280503837
+      confidence: -0.7101225852966307
       ident: 7975258090277046354
 - _type: TacticPredictionsGraph
   contents:
     predictions:
     - arguments: []
-      confidence: 0.5031147346839525
+      confidence: -0.6869370341300965
       ident: 4249207563281686782
     - arguments: []
-      confidence: 0.49688526561841795
+      confidence: -0.6993961334228515
       ident: 7975258090277046354
 - _type: TacticPredictionsGraph
   contents:
     predictions:
     - arguments: []
-      confidence: 0.5084160048586641
+      confidence: -0.6764552593231201
       ident: 4249207563281686782
     - arguments: []
-      confidence: 0.49158393280503837
+      confidence: -0.7101225852966307
       ident: 7975258090277046354
 - _type: TacticPredictionsGraph
   contents:
     predictions:
     - arguments: []
-      confidence: 0.5031147346839525
+      confidence: -0.6869370341300965
       ident: 4249207563281686782
     - arguments: []
-      confidence: 0.49688526561841795
+      confidence: -0.6993961334228515
       ident: 7975258090277046354
 - _type: TacticPredictionsGraph
   contents:
     predictions:
     - arguments: []
-      confidence: 0.5084160048586641
+      confidence: -0.6764552593231201
       ident: 4249207563281686782
     - arguments: []
-      confidence: 0.49158393280503837
+      confidence: -0.7101225852966307
       ident: 7975258090277046354
 - _type: TacticPredictionsGraph
   contents:
     predictions:
     - arguments: []
-      confidence: 0.5084160048586641
+      confidence: -0.6764552593231201
       ident: 4249207563281686782
     - arguments: []
-      confidence: 0.49158393280503837
+      confidence: -0.7101225852966307
       ident: 7975258090277046354
 - _type: TacticPredictionsGraph
   contents:
     predictions:
     - arguments: []
-      confidence: 0.5031147346839525
+      confidence: -0.6869370341300965
       ident: 4249207563281686782
     - arguments: []
-      confidence: 0.49688526561841795
+      confidence: -0.6993961334228515
       ident: 7975258090277046354
 - _type: TacticPredictionsGraph
   contents:
     predictions:
     - arguments: []
-      confidence: 0.5084160048586641
+      confidence: -0.6764552593231201
       ident: 4249207563281686782
     - arguments: []
-      confidence: 0.49158393280503837
+      confidence: -0.7101225852966307
       ident: 7975258090277046354
 - _type: TacticPredictionsGraph
   contents:
     predictions:
     - arguments: []
-      confidence: 0.5031147346839525
+      confidence: -0.6869370341300965
       ident: 4249207563281686782
     - arguments: []
-      confidence: 0.49688526561841795
+      confidence: -0.6993961334228515
       ident: 7975258090277046354
 - _type: CheckAlignmentResponse
   contents:
@@ -215,89 +215,89 @@
   contents:
     predictions:
     - arguments: []
-      confidence: 0.5084160048586641
+      confidence: -0.6764552593231201
       ident: 4249207563281686782
     - arguments: []
-      confidence: 0.49158393280503837
+      confidence: -0.7101225852966307
       ident: 7975258090277046354
 - _type: TacticPredictionsGraph
   contents:
     predictions:
     - arguments: []
-      confidence: 0.5084160048586641
+      confidence: -0.6764552593231201
       ident: 4249207563281686782
     - arguments: []
-      confidence: 0.49158393280503837
+      confidence: -0.7101225852966307
       ident: 7975258090277046354
 - _type: TacticPredictionsGraph
   contents:
     predictions:
     - arguments: []
-      confidence: 0.5031147346839525
+      confidence: -0.6869370341300965
       ident: 4249207563281686782
     - arguments: []
-      confidence: 0.49688526561841795
+      confidence: -0.6993961334228515
       ident: 7975258090277046354
 - _type: TacticPredictionsGraph
   contents:
     predictions:
     - arguments: []
-      confidence: 0.5084160048586641
+      confidence: -0.6764552593231201
       ident: 4249207563281686782
     - arguments: []
-      confidence: 0.49158393280503837
+      confidence: -0.7101225852966307
       ident: 7975258090277046354
 - _type: TacticPredictionsGraph
   contents:
     predictions:
     - arguments: []
-      confidence: 0.5031147346839525
+      confidence: -0.6869370341300965
       ident: 4249207563281686782
     - arguments: []
-      confidence: 0.49688526561841795
+      confidence: -0.6993961334228515
       ident: 7975258090277046354
 - _type: TacticPredictionsGraph
   contents:
     predictions:
     - arguments: []
-      confidence: 0.5084160048586641
+      confidence: -0.6764552593231201
       ident: 4249207563281686782
     - arguments: []
-      confidence: 0.49158393280503837
+      confidence: -0.7101225852966307
       ident: 7975258090277046354
 - _type: TacticPredictionsGraph
   contents:
     predictions:
     - arguments: []
-      confidence: 0.5084160048586641
+      confidence: -0.6764552593231201
       ident: 4249207563281686782
     - arguments: []
-      confidence: 0.49158393280503837
+      confidence: -0.7101225852966307
       ident: 7975258090277046354
 - _type: TacticPredictionsGraph
   contents:
     predictions:
     - arguments: []
-      confidence: 0.5031147346839525
+      confidence: -0.6869370341300965
       ident: 4249207563281686782
     - arguments: []
-      confidence: 0.49688526561841795
+      confidence: -0.6993961334228515
       ident: 7975258090277046354
 - _type: TacticPredictionsGraph
   contents:
     predictions:
     - arguments: []
-      confidence: 0.5084160048586641
+      confidence: -0.6764552593231201
       ident: 4249207563281686782
     - arguments: []
-      confidence: 0.49158393280503837
+      confidence: -0.7101225852966307
       ident: 7975258090277046354
 - _type: TacticPredictionsGraph
   contents:
     predictions:
     - arguments: []
-      confidence: 0.5031147346839525
+      confidence: -0.6869370341300965
       ident: 4249207563281686782
     - arguments: []
-      confidence: 0.49688526561841795
+      confidence: -0.6993961334228515
       ident: 7975258090277046354

@@ -34,19 +34,22 @@ def apply_temperature(confidences: ArrayLike, temperature: float) -> NDArray[np.
     assuming the truncated tail of the probability distribution
     is clustered in one unseen element
     """
+    # TODO(jrute): Temperature should probably be applied earlier in the model before beam search
+    
     # confidences are log probabilities associated with a subset of all possible responses
     log_probs = np.array(confidences, np.float64)
-    remainder_log_prob = np.log(1 - np.exp(log_probs).sum())
-    
+    remainder_log_prob = np.log(np.maximum(1.0 - np.exp(log_probs).sum(), 0.0))
+
     # apply temperature
     log_probs = log_probs / temperature
     remainder_log_prob = remainder_log_prob / temperature
-    
+
     # normalize log probabilities
     if len(log_probs):
         max_log_prob = max(log_probs.max(), remainder_log_prob)
         log_probs = log_probs - max_log_prob
         remainder_log_prob = remainder_log_prob - max_log_prob
+    
     offset = np.log(np.sum(np.exp(log_probs)) + np.exp(remainder_log_prob))
     return log_probs - offset
 
