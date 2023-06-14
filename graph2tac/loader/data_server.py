@@ -106,16 +106,18 @@ class AbstractDataServer:
     def _register_tactic(self, tactic_usage):
         ident = tactic_usage.tactic.ident
         if ident in self._tactic_to_i:
-            self._tactic_i_count[self._tactic_to_i[ident]] += 1
-            return
+            index = self._tactic_to_i[ident]
+            self._tactic_i_count[index] += 1
+            return index
         if len(tactic_usage.outcomes) == 0:
-            return
+            return None
         index = len(self._tactic_to_i)
         self._tactic_to_i[ident] = index
         self._tactic_i_count.append(1)
         self._tactic_i_to_numargs.append(len(tactic_usage.outcomes[0].tactic_arguments))
         self._tactic_i_to_string.append(tactic_usage.tactic.base_text)
         self._tactic_i_to_hash.append(ident)
+        return index
 
     # Obtaining data
 
