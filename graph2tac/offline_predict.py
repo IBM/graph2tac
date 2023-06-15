@@ -19,7 +19,7 @@ class AlignedDataServer(DataServer):
                     for line in f
                 ]
             split_method = "file_prefix"
-            split = {'prefixes_per_label': [prefixes]}
+            split = [prefixes]
             logger.info(f"Evaluating on {len(prefixes)} prefixes found in {eval_theories_fname}")
         else:
             split_method = "hash"
