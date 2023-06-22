@@ -97,7 +97,7 @@ class AlignedDataServer(DataServer):
             self._tactic_i_aligned = [False]*len(self._tactic_i_to_numargs)
             self._tactic_to_i = {
                 tactic : tactic_i
-                for tactic_i, tactic in enumerate(self._train_tactic_i_to_numargs)
+                for tactic_i, tactic in enumerate(self._train_tactic_i_to_hash)
             }
         tactic_i = AbstractDataServer._register_tactic(self, tactic_usage)
         if tactic_i is not None and tactic_i < self.num_train_tactics:
@@ -138,13 +138,13 @@ class AlignedDataServer(DataServer):
     def action_to_dict(self, action : LoaderAction):
         arguments = [None]*len(action.local_args)
         for i,arg in enumerate(action.local_args):
-            if arg is None: continue
+            if arg < 0: continue
             arguments[i] = {
                 'type' : 'local',
                 'index' : int(arg)
             }
         for i,arg in enumerate(action.global_args):
-            if arg is None: continue
+            if arg < 0: continue
             arguments[i] = {
                 'type' : 'global',
                 'index' : int(arg),
