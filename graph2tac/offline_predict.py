@@ -66,6 +66,17 @@ class AlignedDataServer(DataServer):
         logger.info(f"Unaligned tactics: {num_unaligned_tactics}")
         logger.info(f"New tactics: {num_new_tactics}")
 
+        # conversion from graph indices to filenames
+        graphid_to_fname = {
+            file_data.graph : str(fname)
+            for fname, file_data in self._data.items()
+        }
+        assert set(graphid_to_fname.keys()) == set(range(len(self._data)))
+        self._graphid_to_fname = [
+            graphid_to_fname[i]
+            for i in range(len(self._data))
+        ]
+
     def _register_definition(self, d):
         node = d.node
         if node in self._node_to_node_i:
@@ -158,6 +169,10 @@ class AlignedDataServer(DataServer):
             'tactic_hash' : self._tactic_i_to_hash[action.tactic_id],
             'arguments' : arguments,
         }
+
+    def data_index_to_fname(self, index):
+        proof_step, definition, step = self._proof_steps[index]
+        return self._graphid_to_fname[definition.node.graph]
     
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -341,6 +356,7 @@ def main():
 
             datapoint = {
                 'data_server_index' : i,
+                'filename' : data_server.data_index_to_fname(i),
                 'name' : str(proofstate.metadata.name),
                 'step' : proofstate.metadata.step,
                 'is_faithful' : proofstate.metadata.is_faithful,
