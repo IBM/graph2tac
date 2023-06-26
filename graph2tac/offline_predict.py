@@ -137,7 +137,7 @@ class AlignedDataServer(DataServer):
         global_args = []
         for arg_type, arg_index in action[1:]:
             args[arg_type].append(arg_index)
-            args[1-arg_type].append(arg_index)
+            args[1-arg_type].append(-1)
         res = self.action_to_dict(LoaderAction(
             tactic_id = tactic_i,
             local_args = args[0],
