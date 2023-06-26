@@ -131,7 +131,7 @@ class AlignedDataServer(DataServer):
         ids = self.def_cluster_indices()
         return IterableLen(map(self.def_cluster_subgraph, ids), len(ids))
 
-    def prediction_to_dict(self, action, confidence):
+    def prediction_to_dict(self, action, confidence, available_global_context):
         tactic_i = action[0,0]
         args = [[],[]]
         global_args = []
@@ -142,11 +142,11 @@ class AlignedDataServer(DataServer):
             tactic_id = tactic_i,
             local_args = args[0],
             global_args = args[1],
-        ))
+        ), available_global_context = available_global_context)
         res['confidence'] = float(confidence)
         return res
 
-    def action_to_dict(self, action : LoaderAction):
+    def action_to_dict(self, action : LoaderAction, available_global_context):
         arguments = [None]*len(action.local_args)
         for i,arg in enumerate(action.local_args):
             if arg < 0: continue
@@ -156,11 +156,13 @@ class AlignedDataServer(DataServer):
             }
         for i,arg in enumerate(action.global_args):
             if arg < 0: continue
+            label = available_global_context[arg]
             arguments[i] = {
                 'type' : 'global',
                 'index' : int(arg),
-                'name' : str(self._node_i_to_name[arg]),
-                'hash' : self._node_i_to_ident[arg],
+                'node_label' : int(label),
+                'name' : str(self._node_i_to_name[label]),
+                'hash' : self._node_i_to_ident[label],
             }
 
         return {
@@ -354,15 +356,16 @@ def main():
             actions = actions[:config.search_expand_bound]
             confidences = confidences[:config.search_expand_bound]
 
+            global_context = proofstate.context.global_context
             datapoint = {
                 'data_server_index' : i,
                 'filename' : data_server.data_index_to_fname(i),
                 'name' : str(proofstate.metadata.name),
                 'step' : proofstate.metadata.step,
                 'is_faithful' : proofstate.metadata.is_faithful,
-                'true_action': data_server.action_to_dict(true_action),
+                'true_action': data_server.action_to_dict(true_action, global_context),
                 'predictions': [
-                    data_server.prediction_to_dict(action, confidence)
+                    data_server.prediction_to_dict(action, confidence, global_context)
                     for action, confidence in zip(actions, confidences)
                 ]
             }
