@@ -962,6 +962,7 @@ class DenseDefinitionHead(tf.keras.layers.Layer):
                  hidden_layers: Iterable[dict] = (),
                  name_layer: Optional[dict] = None,
                  unit_normalize: bool = False,
+                 name_combination_strategy: str = "mix",
                  name: str = 'dense_definition_head',
                  **kwargs):
         """
@@ -976,6 +977,7 @@ class DenseDefinitionHead(tf.keras.layers.Layer):
 
         if name_layer is None:
             self._name_layer = None
+            self.keys = ["definition_embedding"]
         else:
             self._name_layer_core = tf.keras.layers.deserialize(name_layer)
             self._name_layer = tf.keras.Sequential([
@@ -987,10 +989,22 @@ class DenseDefinitionHead(tf.keras.layers.Layer):
                 self._name_layer_core,
             ])
 
+            assert name_combination_strategy in ["mix", "seperate", "name_only"], name_combination_strategy
+            self.name_combination_strategy = name_combination_strategy
+
+            if self.name_combination_strategy == "mix":
+                # return mix name and definition embedding in neural network
+                self.keys = ["definition_embedding"]      
+            elif self.name_combination_strategy == "seperate":
+                # return seperate definition and name embeddings
+                self.keys = ["definition_embedding", "name_embedding"]      
+            elif self.name_combination_strategy == "name_only":
+                # just use name to calculate embedding
+                self.keys = ["name_embedding"]
+
         self._hidden_layers = [tf.keras.layers.Dense.from_config(hidden_layer_config) for hidden_layer_config in hidden_layers]
         self._final_layer = tf.keras.layers.Dense(units=hidden_size)
         self._unit_normalize = unit_normalize
-        self.keys = ["definition_embedding"]
 
     def get_config(self) -> dict:
         config = super().get_config()
@@ -1009,29 +1023,51 @@ class DenseDefinitionHead(tf.keras.layers.Layer):
     def call(self,
              inputs: Tuple[tfgnn.GraphTensor, tf.RaggedTensor, tf.RaggedTensor],
              training: bool = False
-             ) -> tf.Tensor:
+             ) -> dict[str, tf.RaggedTensor]:
         hidden_graph, num_definitions, definition_name_vectors = inputs
 
-        cumulative_sizes = tf.expand_dims(tf.cumsum(hidden_graph.node_sets['node'].sizes, exclusive=True), axis=-1)
-        definition_nodes = tf.ragged.range(num_definitions) + tf.cast(cumulative_sizes, dtype=tf.int64)
+        outputs = {}
 
-        node_hidden_states = tf.gather(hidden_graph.node_sets['node']['hidden_state'], definition_nodes.flat_values)
-        graph_hidden_states = tf.repeat(hidden_graph.context['hidden_state'], num_definitions, axis=0)
+        # compute definition states
+        if "definition_embedding" in self.keys:
+            cumulative_sizes = tf.expand_dims(tf.cumsum(hidden_graph.node_sets['node'].sizes, exclusive=True), axis=-1)
+            definition_nodes = tf.ragged.range(num_definitions) + tf.cast(cumulative_sizes, dtype=tf.int64)
 
-        hidden_state = [node_hidden_states, graph_hidden_states]
+            node_hidden_states = tf.gather(hidden_graph.node_sets['node']['hidden_state'], definition_nodes.flat_values)
+            graph_hidden_states = tf.repeat(hidden_graph.context['hidden_state'], num_definitions, axis=0)
+
+            hidden_state = [node_hidden_states, graph_hidden_states]
+
+        # compute name embedding
         if self._name_layer is not None:
             rnn_output = self._name_layer(definition_name_vectors.values)
-            hidden_state.append(rnn_output)
-        hidden_state = tf.concat(hidden_state, axis=-1)
-
-        for hidden_layer in self._hidden_layers:
-            hidden_state = hidden_layer(hidden_state, training=training)
-
-        definition_embedding = self._final_layer(hidden_state, training=training)
+        
+            if self.name_combination_strategy == "mix":
+                hidden_state.append(rnn_output)
+            else:
+                outputs.update({"name_embedding": rnn_output})    
+        
+        if "definition_embedding" in self.keys:
+            hidden_state = tf.concat(hidden_state, axis=-1)
+            for hidden_layer in self._hidden_layers:
+                hidden_state = hidden_layer(hidden_state, training=training)
+            definition_embedding = self._final_layer(hidden_state, training=training)
+            outputs.update({"definition_embedding": definition_embedding})
+        
+        if "name_embedding" in self.keys:
+            outputs.update({"name_embedding": rnn_output})
+        
         if self._unit_normalize:
-            definition_embedding = definition_embedding / tf.norm(definition_embedding, axis=-1, keepdims=True)
+            outputs = {
+                k: definition_embedding / tf.norm(definition_embedding, axis=-1, keepdims=True)
+                for k, definition_embedding in outputs.items()
+            }
 
-        return {"definition_embedding": tf.RaggedTensor.from_row_lengths(definition_embedding, num_definitions)}
+        outputs = {
+            k: tf.RaggedTensor.from_row_lengths(definition_embedding, num_definitions)
+            for k, definition_embedding in outputs.items()
+        }
+        return outputs
 
 
 def get_gnn_constructor(gnn_type: str) -> Callable[..., tf.keras.layers.Layer]:
