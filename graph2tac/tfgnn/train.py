@@ -12,7 +12,7 @@ import tensorflow_gnn as tfgnn
 from pathlib import Path
 
 from graph2tac.loader.data_server import DataServer, TRAIN, VALID
-from graph2tac.tfgnn.tasks import PredictionTask, DefinitionTask, DefinitionNormSquaredLoss
+from graph2tac.tfgnn.tasks import PredictionTask, DefinitionTask
 from graph2tac.tfgnn.graph_schema import vectorized_definition_graph_spec, batch_graph_spec
 from graph2tac.tfgnn.train_utils import QCheckpointManager, ExtendedTensorBoard, DefinitionLossScheduler
 from graph2tac.common import logger
@@ -22,8 +22,6 @@ class Trainer:
     """
     This class encapsulates the training logic for the various tasks we can define.
     """
-
-    DEFINITION_EMBEDDING = 'definition_embedding'
 
     def __init__(self,
                  data_server: DataServer,
@@ -221,6 +219,7 @@ class Trainer:
         if definition_task_config is not None:
             definition_task = DefinitionTask.from_yaml_config(graph_embedding=prediction_task.graph_embedding,
                                                               gnn=prediction_task.gnn,
+                                                              inference_combo=None,
                                                               yaml_filepath=definition_task_config)
         else:
             definition_task = None
@@ -251,7 +250,8 @@ class Trainer:
     def _input_output_mixing(self, prediction_task_io, definition_graph):
         proofstate_graph, outputs = prediction_task_io
 
-        outputs.update({self.DEFINITION_EMBEDDING: tf.zeros(shape=(1, self.prediction_task._hidden_size))})
+        outputs.update(self.definition_task.dummy_ground_truth_outputs())
+        #outputs.update({definition_emb_key: })
 
         return (proofstate_graph, definition_graph), outputs
 
@@ -294,9 +294,9 @@ class Trainer:
             definition_id_embeddings = self.prediction_task.graph_embedding.lookup_node_embedding(defined_labels)
 
             normalization = tf.sqrt(tf.cast(definition_graph.context['num_definitions'], dtype=tf.float32))
-            embedding_difference = (definition_body_embeddings - definition_id_embeddings) / tf.expand_dims(normalization, axis=-1)
-
-            outputs.update({self.DEFINITION_EMBEDDING: tf.keras.layers.Lambda(lambda x: x, name=self.DEFINITION_EMBEDDING)(embedding_difference)})
+            for definition_emb_key, definition_emb in definition_body_embeddings.items():
+                embedding_difference = (definition_emb - definition_id_embeddings) / tf.expand_dims(normalization, axis=-1)
+                outputs.update({definition_emb_key: tf.keras.layers.Lambda(lambda x: x, name=definition_emb_key)(embedding_difference)})
 
             # make sure we construct the correct type of model
             model_constructor = type(train_model)
@@ -306,13 +306,15 @@ class Trainer:
     def _loss(self) -> Dict[str, tf.keras.losses.Loss]:
         loss = self.prediction_task.loss()
         if self.definition_task is not None:
-            loss.update({self.DEFINITION_EMBEDDING: DefinitionNormSquaredLoss()})
+            loss.update(self.definition_task.losses())
+                
         return loss
 
     def _loss_weights(self) -> Dict[str, float]:
         loss_weights = self.prediction_task.loss_weights()
         if self.definition_task is not None:
-            loss_weights.update({self.DEFINITION_EMBEDDING: self.definition_loss_coefficient})
+            loss_weights.update(self.definition_task.loss_weights(weight=self.definition_loss_coefficient))
+                
         return loss_weights
 
     def run(self,

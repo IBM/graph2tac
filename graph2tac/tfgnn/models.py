@@ -10,6 +10,7 @@ GCN_CONVOLUTION_GNN = 'gcn_convolution_gnn'
 ATTENTION_GNN = 'attention_gnn'
 DENSE_TACTIC = 'dense_tactic'
 DENSE_DEFINITION = 'dense_definition'
+NAME_ONLY_DEFINITION = 'name_only_definition'
 SIMPLE_RNN = 'simple_rnn'
 
 class RepeatScalarGraph(tf.keras.layers.Layer):
@@ -989,6 +990,7 @@ class DenseDefinitionHead(tf.keras.layers.Layer):
         self._hidden_layers = [tf.keras.layers.Dense.from_config(hidden_layer_config) for hidden_layer_config in hidden_layers]
         self._final_layer = tf.keras.layers.Dense(units=hidden_size)
         self._unit_normalize = unit_normalize
+        self.keys = ["definition_embedding"]
 
     def get_config(self) -> dict:
         config = super().get_config()
@@ -1029,7 +1031,7 @@ class DenseDefinitionHead(tf.keras.layers.Layer):
         if self._unit_normalize:
             definition_embedding = definition_embedding / tf.norm(definition_embedding, axis=-1, keepdims=True)
 
-        return tf.RaggedTensor.from_row_lengths(definition_embedding, num_definitions)
+        return {"definition_embedding": tf.RaggedTensor.from_row_lengths(definition_embedding, num_definitions)}
 
 
 def get_gnn_constructor(gnn_type: str) -> Callable[..., tf.keras.layers.Layer]:

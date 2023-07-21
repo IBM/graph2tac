@@ -1233,6 +1233,7 @@ class DefinitionTask(tf.keras.layers.Layer):
                  gnn: tf.keras.layers.Layer,
                  definition_head_type: str,
                  definition_head_config: dict,
+                 inference_combo: Optional[dict[str, float]] = None,
                  name: str = 'definition_layer',
                  **kwargs):
         """
@@ -1240,6 +1241,7 @@ class DefinitionTask(tf.keras.layers.Layer):
         @param gnn: the GNN layer from the prediction task
         @param definition_head_type: the type of definition head to use
         @param definition_head_config: the hyperparameters for the definition head
+        @param inference_combo: weight distribution for the final definition embedding used for prediction
         @param name: the name of this layer
         @param kwargs: passed on to parent constructor
         """
@@ -1248,14 +1250,31 @@ class DefinitionTask(tf.keras.layers.Layer):
 
         self._graph_embedding = graph_embedding
         self._gnn = gnn
+        self._hidden_size = graph_embedding._hidden_size
+        self._unit_normalize = graph_embedding._unit_normalize
 
         definition_head_constructor = get_definition_head_constructor(definition_head_type)
 
         self.definition_head = definition_head_constructor(
-            hidden_size=graph_embedding._hidden_size,
-            unit_normalize=graph_embedding._unit_normalize,
+            hidden_size=self._hidden_size,
+            unit_normalize=self._unit_normalize,
             **definition_head_config
         )
+
+        self.keys = self.definition_head.keys
+
+        if inference_combo is None:
+            # distribute uniformly among all embedding types
+            self.inference_combo = {key: 1.0/len(self.keys) for key in self.keys}
+        else:
+            self.inference_combo = inference_combo
+        
+        # check that combo is valid
+        assert self.inference_combo, self.inference_combo
+        for k in self.inference_combo:
+            assert k in self.keys, (k, self.inference_combo, self.keys)
+        assert sum(self.inference_combo.values()) == 1.0, self.inference_combo
+
 
     def get_checkpoint(self) -> tf.train.Checkpoint:
         """
@@ -1280,6 +1299,7 @@ class DefinitionTask(tf.keras.layers.Layer):
     def from_yaml_config(cls,
                          graph_embedding: tf.keras.layers.Layer,
                          gnn: tf.keras.layers.Layer,
+                         inference_combo: Optional[dict[str, float]],
                          yaml_filepath: Path
                          ) -> Optional["DefinitionTask"]:
         with yaml_filepath.open() as yaml_file:
@@ -1287,7 +1307,7 @@ class DefinitionTask(tf.keras.layers.Layer):
         if config.get('definition_head_type') is None:
             return None
         else:
-            return cls(graph_embedding=graph_embedding, gnn=gnn, **config)
+            return cls(graph_embedding=graph_embedding, gnn=gnn, inference_combo=inference_combo, **config)
 
     @staticmethod
     def _mask_defined_embeddings(scalar_definition_graph: tfgnn.GraphTensor, embedded_graph: tfgnn.GraphTensor):
@@ -1307,6 +1327,28 @@ class DefinitionTask(tf.keras.layers.Layer):
         definition_name_vectors = scalar_definition_graph.context['definition_name_vectors']
         definition_body_embeddings = self.definition_head((hidden_graph, num_definitions, definition_name_vectors), training=training)
         return definition_body_embeddings
+    
+    def losses(self):
+        return {key: DefinitionNormSquaredLoss() for key in self.keys}
+    
+    def loss_weights(self, weight):
+        return {key: weight for key in self.keys}
+
+    def dummy_ground_truth_outputs(self):
+        return {key: tf.zeros(shape=(1, self._hidden_size)) for key in self.keys}
+    
+    def prediction_embedding(self, scalar_definition_graph):
+        """
+        Combine all embeddings into a single embedding using self.inference_combo.  Unit normalize if needed.
+        """
+        embeddings = self.call(scalar_definition_graph)
+        embedding = sum(w * embeddings[key] for key, w in self.inference_combo.items())
+        
+        if len(self.inference_combo) > 1 and self._unit_normalize:
+            embedding = embedding / tf.norm(embedding, axis=-1, keepdims=True)
+        
+        return embedding
+
 
 
 def get_prediction_task_constructor(prediction_task_type: str

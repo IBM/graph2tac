@@ -593,6 +593,7 @@ class TFGNNPredict(Predict):
         if definition_yaml_filepath.is_file():
             self.definition_task = DefinitionTask.from_yaml_config(graph_embedding=self.prediction_task.graph_embedding,
                                                                    gnn=self.prediction_task.gnn,
+                                                                   inference_combo=None,
                                                                    yaml_filepath=definition_yaml_filepath)
         else:
             self.definition_task = None
@@ -681,7 +682,8 @@ class TFGNNPredict(Predict):
             definition_graph = stack_graph_tensors([graph_tensor])
 
             scalar_definition_graph = definition_graph.merge_batch_to_components()
-            definition_embeddings = self.definition_task(scalar_definition_graph).flat_values
+
+            definition_embeddings = self.definition_task.prediction_embedding(scalar_definition_graph).flat_values
             defined_labels = Trainer._get_defined_labels(definition_graph).flat_values
 
             self.prediction_task.graph_embedding.update_node_embeddings(
