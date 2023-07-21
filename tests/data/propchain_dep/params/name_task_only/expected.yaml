@@ -1,0 +1,60 @@
+arguments_seq_accuracy:
+- 0.3333333432674408
+- 0.3333333432674408
+global_arguments_logits_accuracy:
+- 0.0
+- 0.0
+global_arguments_logits_loss:
+- 0.6669037342071533
+- 0.6939045786857605
+local_arguments_logits_accuracy:
+- 0.0
+- 0.0
+local_arguments_logits_loss:
+- 1.0159510374069214
+- 0.8972084522247314
+loss:
+- 676.9439086914062
+- 558.3450317382812
+name_embedding_loss:
+- 1.3483177423477173
+- 1.1113052368164062
+strict_accuracy:
+- 0.0
+- 0.0
+tactic_logits_accuracy:
+- 0.3333333432674408
+- 0.1666666716337204
+tactic_logits_loss:
+- 1.099208950996399
+- 1.098240613937378
+val_arguments_seq_accuracy:
+- 0.0
+- 0.0
+val_global_arguments_logits_accuracy:
+- 0.0
+- 0.0
+val_global_arguments_logits_loss:
+- 0.8024711608886719
+- 0.8186010718345642
+val_local_arguments_logits_accuracy:
+- 1.0
+- 1.0
+val_local_arguments_logits_loss:
+- 0.8809049129486084
+- 0.9457274079322815
+val_loss:
+- 760.4462890625
+- 362.0873718261719
+val_name_embedding_loss:
+- 1.5153449773788452
+- 0.7184672355651855
+val_strict_accuracy:
+- 0.0
+- 0.0
+val_tactic_logits_accuracy:
+- 0.5
+- 1.0
+val_tactic_logits_loss:
+- 1.0874121189117432
+- 1.086403489112854
