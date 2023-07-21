@@ -1341,11 +1341,13 @@ class DefinitionTask(tf.keras.layers.Layer):
         """
         Combine all embeddings into a single embedding using self.inference_combo.  Unit normalize if needed.
         """
+        # dict: [batch, (defs), dim]
         embeddings = self.call(scalar_definition_graph)
+        # [batch, (defs), dim]
         embedding = sum(w * embeddings[key] for key, w in self.inference_combo.items())
         
         if len(self.inference_combo) > 1 and self._unit_normalize:
-            embedding = embedding / tf.norm(embedding, axis=-1, keepdims=True)
+            embedding = embedding / tf.ragged.map_flat_values(tf.norm, embedding, axis=-1, keepdims=True)
         
         return embedding
 

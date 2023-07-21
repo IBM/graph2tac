@@ -1002,8 +1002,11 @@ class DenseDefinitionHead(tf.keras.layers.Layer):
                 # just use name to calculate embedding
                 self.keys = ["name_embedding"]
 
-        self._hidden_layers = [tf.keras.layers.Dense.from_config(hidden_layer_config) for hidden_layer_config in hidden_layers]
-        self._final_layer = tf.keras.layers.Dense(units=hidden_size)
+        self._hidden_layers = {}
+        self._final_layer = {}
+        for k in self.keys:
+            self._hidden_layers[k] = [tf.keras.layers.Dense.from_config(hidden_layer_config) for hidden_layer_config in hidden_layers]
+            self._final_layer[k] = tf.keras.layers.Dense(units=hidden_size)
         self._unit_normalize = unit_normalize
 
     def get_config(self) -> dict:
@@ -1014,9 +1017,10 @@ class DenseDefinitionHead(tf.keras.layers.Layer):
             name_layer = tf.keras.layers.serialize(self._name_layer_core)
         config.update({
             'hidden_size': self._hidden_size,
-            'hidden_layers': [hidden_layer.get_config() for hidden_layer in self._hidden_layers],
+            'hidden_layers': [hidden_layer.get_config() for hidden_layer in list(self._hidden_layers.values())[0]],
             'unit_normalize': self._unit_normalize,
             'name_layer': name_layer,
+            'name_combination_strategy': self.name_combination_strategy,
         })
         return config
 
@@ -1049,13 +1053,17 @@ class DenseDefinitionHead(tf.keras.layers.Layer):
         
         if "definition_embedding" in self.keys:
             hidden_state = tf.concat(hidden_state, axis=-1)
-            for hidden_layer in self._hidden_layers:
+            for hidden_layer in self._hidden_layers["definition_embedding"]:
                 hidden_state = hidden_layer(hidden_state, training=training)
-            definition_embedding = self._final_layer(hidden_state, training=training)
+            definition_embedding = self._final_layer["definition_embedding"](hidden_state, training=training)
             outputs.update({"definition_embedding": definition_embedding})
         
         if "name_embedding" in self.keys:
-            outputs.update({"name_embedding": rnn_output})
+            hidden_state = rnn_output
+            for hidden_layer in self._hidden_layers["name_embedding"]:
+                hidden_state = hidden_layer(hidden_state, training=training)
+            definition_embedding = self._final_layer["name_embedding"](hidden_state, training=training)
+            outputs.update({"name_embedding": definition_embedding})
         
         if self._unit_normalize:
             outputs = {
