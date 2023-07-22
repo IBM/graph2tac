@@ -989,14 +989,14 @@ class DenseDefinitionHead(tf.keras.layers.Layer):
                 self._name_layer_core,
             ])
 
-            assert name_combination_strategy in ["mix", "seperate", "name_only"], name_combination_strategy
+            assert name_combination_strategy in ["mix", "separate", "name_only"], name_combination_strategy
             self.name_combination_strategy = name_combination_strategy
 
             if self.name_combination_strategy == "mix":
                 # return mix name and definition embedding in neural network
                 self.keys = ["definition_embedding"]      
-            elif self.name_combination_strategy == "seperate":
-                # return seperate definition and name embeddings
+            elif self.name_combination_strategy == "separate":
+                # return separate definition and name embeddings
                 self.keys = ["definition_embedding", "name_embedding"]      
             elif self.name_combination_strategy == "name_only":
                 # just use name to calculate embedding

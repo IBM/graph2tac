@@ -7,7 +7,7 @@ definition_head_config:
         class_name: LSTM
         config:
           units: 16
-  name_combination_strategy: seperate
+  name_combination_strategy: separate
   hidden_layers:
   - activation: relu
     units: 16
