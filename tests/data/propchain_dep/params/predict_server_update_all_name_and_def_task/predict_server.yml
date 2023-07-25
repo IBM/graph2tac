@@ -6,3 +6,4 @@ total_expand_bound: 10
 search_expand_bound: 4
 update_all_definitions: null
 paranoic_data_server: null
+def_name_ratio: .9

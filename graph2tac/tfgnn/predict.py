@@ -515,6 +515,7 @@ class TFGNNPredict(Predict):
                  log_dir: Path,
                  tactic_expand_bound: int,
                  search_expand_bound: int,
+                 def_name_ratio: Optional[float],
                  debug_dir: Optional[Path] = None,
                  checkpoint_number: Optional[int] = None,
                  exclude_tactics: Optional[List[str]] = None,
@@ -591,9 +592,13 @@ class TFGNNPredict(Predict):
         # create definition task
         definition_yaml_filepath = log_dir / 'config' / 'definition.yaml'
         if definition_yaml_filepath.is_file():
+            if def_name_ratio is None:
+                inference_combo=None
+            else:
+                inference_combo = {"definition_embedding": def_name_ratio, "name_embedding": 1.0 - def_name_ratio}
             self.definition_task = DefinitionTask.from_yaml_config(graph_embedding=self.prediction_task.graph_embedding,
                                                                    gnn=self.prediction_task.gnn,
-                                                                   inference_combo=None,
+                                                                   inference_combo=inference_combo,
                                                                    yaml_filepath=definition_yaml_filepath)
         else:
             self.definition_task = None

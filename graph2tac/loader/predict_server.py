@@ -845,6 +845,10 @@ def parse_args() -> argparse.Namespace:
                         type=int, default=15,
                         help='Definition step to stop profiling (exclusive) (default: 15).')
     
+    parser.add_argument('--def-name-ratio', '--def_name_ratio',
+                        type=float, default=None,
+                        help='If model has name and definition tasks, then the what percent of the embedding is based on the definition.  (Default: Evenly split.)')
+    
     return parser.parse_args()
 
 def load_model(config: argparse.Namespace, log_levels: dict) -> Predict:
@@ -884,6 +888,7 @@ def load_model(config: argparse.Namespace, log_levels: dict) -> Predict:
         model = TFGNNPredict(log_dir=Path(config.model).expanduser().absolute(),
                              tactic_expand_bound=config.tactic_expand_bound,
                              search_expand_bound=config.search_expand_bound,
+                             def_name_ratio=config.def_name_ratio,
                              debug_dir=config.debug_predict,
                              checkpoint_number=config.checkpoint_number,
                              exclude_tactics=exclude_tactics)
