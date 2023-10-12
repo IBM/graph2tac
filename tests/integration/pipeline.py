@@ -10,7 +10,7 @@ import shutil
 import sys
 from unittest.mock import patch
 import tensorflow as tf
-from typing import Any
+from typing import Any, Union
 import warnings
 import yaml
 
@@ -124,7 +124,7 @@ class ExpectedResults:
         return expected_results
 
     @classmethod
-    def approximate(cls, results: dict | list | float | Any, rel_error_tolerance: float) -> dict | list | float | Any:
+    def approximate(cls, results: Union[dict, list, float, Any], rel_error_tolerance: float) -> Union[dict, list, float, Any]:
         """Recursively go through JSON compatible object and replace floats with pytest.approx"""
         if isinstance(results, dict):
             return {k : cls.approximate(v, rel_error_tolerance) for k,v in results.items()}
