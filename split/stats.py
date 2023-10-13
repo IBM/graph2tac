@@ -5,6 +5,7 @@ import yaml
 from dataclasses import dataclass
 import random
 import sys
+from typing import Dict
 
 import matplotlib as mpl
 import matplotlib.pyplot as plt
@@ -12,9 +13,9 @@ import numpy as np
 
 @dataclass
 class BasicStats:
-    dataset_to_num_thms : dict[str,int]
-    dataset_to_num_proofstates : dict[str,int]
-    dataset_to_deps : dict[str,list[str]]
+    dataset_to_num_thms : Dict[str,int]
+    dataset_to_num_proofstates : Dict[str,int]
+    dataset_to_deps : Dict[str, List[str]]
 
 def compute_basic_stats():
     dataset_path = Path("/home/olsak/datasets_coq/v15-opam-coq8.11-partial/dataset")

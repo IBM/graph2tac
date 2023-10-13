@@ -10,7 +10,7 @@ import shutil
 import sys
 from unittest.mock import patch
 import tensorflow as tf
-from typing import Any, Union
+from typing import Any, Union, List, Tuple
 import warnings
 import yaml
 
@@ -36,11 +36,11 @@ class ParamSets:
             raise Exception("Test parameter directory param_dir not properly configured.")
     
     @staticmethod
-    def _param_train(param_dir: Path) -> tuple[str, str]:
+    def _param_train(param_dir: Path) -> Tuple[str, str]:
         return (param_dir.parent.parent.name, param_dir.name)
     
     @staticmethod
-    def _param_predict_server(param_dir: Path) -> tuple[str, str, str]:
+    def _param_predict_server(param_dir: Path) -> Tuple[str, str, str]:
         # find where to get the trained model from
         with (param_dir / "dependencies.yml").open("r") as f:
             dependencies = yaml.safe_load(f)
@@ -51,7 +51,7 @@ class ParamSets:
         return (data_param, train_param, predict_server_param)
     
     @classmethod
-    def params_for_step(cls, pipeline_step: str) -> list[tuple]:
+    def params_for_step(cls, pipeline_step: str) -> List[tuple]:
         if pipeline_step == "predict_server":
             return sorted([
                 cls._param_predict_server(d)
@@ -162,7 +162,7 @@ class ExpectedResults:
 
 class Pipeline:
     @staticmethod
-    def _run_tfgnn_training(tmp_path: Path, data_dir: Path, params_dir: Path) -> tuple[dict, Path]:
+    def _run_tfgnn_training(tmp_path: Path, data_dir: Path, params_dir: Path) -> Tuple[dict, Path]:
         """Run training and return results for comparison"""
         import graph2tac.tfgnn.train  # put import here so it doesn't break other tests if it crashes
 
@@ -185,7 +185,7 @@ class Pipeline:
         return results, model_dir
 
     @staticmethod
-    def _run_hmodel_training(tmp_path: Path, data_dir: Path, params_dir: Path) -> tuple[dict, Path]:
+    def _run_hmodel_training(tmp_path: Path, data_dir: Path, params_dir: Path) -> Tuple[dict, Path]:
         """Run training and return results for comparison"""
         import graph2tac.loader.hmodel  # put import here so it doesn't break other tests if it crashes
 
@@ -219,7 +219,7 @@ class Pipeline:
         return data, model_dir
 
     @classmethod
-    def _run_training(cls, tmp_path: Path, data_dir: Path, params_dir: Path) -> tuple[dict, Path]:
+    def _run_training(cls, tmp_path: Path, data_dir: Path, params_dir: Path) -> Tuple[dict, Path]:
         training_type = ParamSets.get_pipeline_step(params_dir)
         if training_type == "hmodel":
             return cls._run_hmodel_training(tmp_path=tmp_path, data_dir=data_dir, params_dir=params_dir)
@@ -229,7 +229,7 @@ class Pipeline:
             raise ValueError(f"Unexpected value for training_type: {training_type}")
 
     @classmethod
-    def run_training(cls, tmp_path: Path, data_dir: Path, params_dir: Path, cache: pytest.Cache, use_cached_results: bool = False, retrain: bool = False) -> tuple[dict, Path]:
+    def run_training(cls, tmp_path: Path, data_dir: Path, params_dir: Path, cache: pytest.Cache, use_cached_results: bool = False, retrain: bool = False) -> Tuple[dict, Path]:
         # check for saved pretrained models
         if (params_dir / "model").exists():
             pretrained_model_dir = params_dir / "model"
