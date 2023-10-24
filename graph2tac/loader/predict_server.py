@@ -4,7 +4,7 @@ from dataclasses import dataclass
 import sys
 import socket
 from pathlib import Path
-from typing import BinaryIO, Optional
+from typing import BinaryIO, Optional, Union, Dict
 import numpy as np
 from numpy.typing import NDArray, ArrayLike
 import tqdm
@@ -73,7 +73,7 @@ class ResponseHistory:
         return str
 
     @staticmethod
-    def convert_msg_to_dict(msg: CheckAlignmentResponse | TacticPredictionsGraph) -> dict:
+    def convert_msg_to_dict(msg: Union[CheckAlignmentResponse, TacticPredictionsGraph]) -> dict:
         if isinstance(msg, TacticPredictionsGraph):
             return {
                 "_type": type(msg).__name__,
@@ -95,7 +95,7 @@ class ResponseHistory:
         else:
             raise NotImplementedError(f"f{type(msg)} messages not yet supported")
     
-    def record_response(self, msg: CheckAlignmentResponse | TacticPredictionsGraph):
+    def record_response(self, msg: Union[CheckAlignmentResponse, TacticPredictionsGraph]):
         if self._recording_on:
             self.data["responses"].append(self.convert_msg_to_dict(msg))
 
@@ -103,12 +103,12 @@ class Profiler:
     """
     Controls the tensorflow profiler for both profiling predictions and definitions
     """
-    logdir: dict[str, Path]
-    start: dict[str, int]
-    end: dict[str, int]
-    cnt: dict[str, int]
+    logdir: Dict[str, Path]
+    start: Dict[str, int]
+    end: Dict[str, int]
+    cnt: Dict[str, int]
 
-    def __init__(self, logdir: dict[str, Optional[Path]], start: dict[str, int], end: dict[str, int]):
+    def __init__(self, logdir: Dict[str, Optional[Path]], start: Dict[str, int], end: Dict[str, int]):
         self.logdir = {k: v for k,v in logdir.items() if v is not None}
         self.start = start
         self.end = end

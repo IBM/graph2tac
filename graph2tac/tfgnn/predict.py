@@ -1,4 +1,4 @@
-from typing import Tuple, List, Union, Iterable, Callable, Optional
+from typing import Tuple, List, Union, Iterable, Callable, Optional, Dict
 
 import re
 import yaml
@@ -44,12 +44,12 @@ class BeamSearch(tf.keras.layers.Layer):
     def __init__(
         self, 
         token_log_prob_fn: Callable[
-            [tf.Tensor, tf.Tensor, dict[str, tf.Tensor], dict[str, tf.Tensor | tf.RaggedTensor]],
-            tuple[tf.Tensor, dict[str, tf.Tensor]]
+            [tf.Tensor, tf.Tensor, Dict[str, tf.Tensor], Dict[str, Union[tf.Tensor, tf.RaggedTensor]]],
+            Tuple[tf.Tensor, Dict[str, tf.Tensor]]
         ], 
         stopping_fn: Callable[
-            [tf.Tensor, tf.Tensor, dict[str, tf.Tensor], dict[str, tf.Tensor | tf.RaggedTensor]],
-            tuple[tf.Tensor, dict[str, tf.Tensor]]
+            [tf.Tensor, tf.Tensor, Dict[str, tf.Tensor], Dict[str, Union[tf.Tensor, tf.RaggedTensor]]],
+            Tuple[tf.Tensor, Dict[str, tf.Tensor]]
         ],
     ):
         super().__init__()
@@ -60,14 +60,14 @@ class BeamSearch(tf.keras.layers.Layer):
         self,
         ids: tf.Tensor,  # [batch_size, beam_size0, seq_length]
         scores: tf.Tensor,  # [batch_size, beam_size0]
-        cache: dict[str, tf.Tensor],  # dict with values: [batch_size, beam_size0, ...]
-        static_data: dict[str, tf.Tensor | tf.RaggedTensor],
+        cache: Dict[str, tf.Tensor],  # dict with values: [batch_size, beam_size0, ...]
+        static_data: Dict[str, Union[tf.Tensor, tf.RaggedTensor]],
         i: tf.Tensor,  # int32
         max_beam_size: tf.Tensor,  # int32
-    ) -> tuple[
+    ) -> Tuple[
         tf.Tensor,  # ids: [batch_size, beam_size, seq_length+1]
         tf.Tensor,  # scores: [batch_size, beam_size]
-        dict[str, tf.Tensor],  # cache with values: [batch_size, beam_size, ...]
+        Dict[str, tf.Tensor],  # cache with values: [batch_size, beam_size, ...]
     ]:
         batch_size = tf.shape(ids)[0]
         beam_size0 = tf.shape(ids)[1]
@@ -105,14 +105,14 @@ class BeamSearch(tf.keras.layers.Layer):
         is_finished: tf.Tensor, # bool
         ids: tf.Tensor,  # [batch_size, beam_size0, seq_length]
         scores: tf.Tensor,  # [batch_size, beam_size0]
-        cache: dict[str, tf.Tensor],  # dict with values: [batch_size, beam_size0, ...]
-        static_data: dict[str, tf.Tensor | tf.RaggedTensor],
+        cache: Dict[str, tf.Tensor],  # dict with values: [batch_size, beam_size0, ...]
+        static_data: Dict[str, Union[tf.Tensor, tf.RaggedTensor]],
         i: tf.Tensor,  # int32
         max_beam_size: tf.Tensor,  # int32                           
-    ) -> tuple[
+    ) -> Tuple[
         tf.Tensor,  # ids: [batch_size, beam_size, seq_length+1]
         tf.Tensor,  # scores: [batch_size, beam_size]
-        dict[str, tf.Tensor],  # cache with values: [batch_size, beam_size, ...]
+        Dict[str, tf.Tensor],  # cache with values: [batch_size, beam_size, ...]
     ]:
         if is_finished:
             return (is_finished, (ids, scores, cache))
@@ -130,11 +130,11 @@ class BeamSearch(tf.keras.layers.Layer):
     def call(
         self,
         initial_ids: tf.Tensor,  # [batch_size, initial_seq_length]
-        initial_cache: dict[str, tf.Tensor],  # [batch_size, ...]
-        static_data: dict[str, tf.Tensor | tf.RaggedTensor],
+        initial_cache: Dict[str, tf.Tensor],  # [batch_size, ...]
+        static_data: Dict[str, Union[tf.Tensor, tf.RaggedTensor]],
         beam_size: tf.Tensor,  # int32
         max_decode_length: tf.Tensor,  # int32
-    ) -> tuple[tf.Tensor, tf.Tensor]:
+    ) -> Tuple[tf.Tensor, tf.Tensor]:
         batch_size = tf.shape(initial_ids)[0]
 
         # start with a beam_size of 1 for the input to the first step first step
@@ -184,7 +184,7 @@ class SelectBestResults(tf.keras.layers.Layer):
     :param tactic_index_to_numargs: list tactic arg lengths for each tactic
     :param search_expand_bound: maximum number of results to return
     """
-    def __init__(self, tactic_index_to_numargs: list[int], search_expand_bound: int):
+    def __init__(self, tactic_index_to_numargs: List[int], search_expand_bound: int):
         super().__init__()
         self.tactic_index_to_numargs = tf.cast(tf.constant(tactic_index_to_numargs), tf.int32)
         self.search_expand_bound = search_expand_bound
@@ -198,9 +198,9 @@ class SelectBestResults(tf.keras.layers.Layer):
         self,
         partial_seqs: tf.Tensor,  # [batch, beam_size, seq_length] dtype: int
         pos: tf.Tensor,  # scalar dtype: int32,
-        cache: dict[str, tf.Tensor],  # value shapes: [batch, beam_size, ...]
-        static_data: dict[str, tf.Tensor | tf.RaggedTensor]
-    ) -> tuple[tf.Tensor, dict[str, tf.Tensor]]:  # output shapes [batch, beam_size, vocab], dict of [batch, beam_size, ...]
+        cache: Dict[str, tf.Tensor],  # value shapes: [batch, beam_size, ...]
+        static_data: Dict[str, Union[tf.Tensor, tf.RaggedTensor]],
+    ) -> Tuple[tf.Tensor, Dict[str, tf.Tensor]]:  # output shapes [batch, beam_size, vocab], dict of [batch, beam_size, ...]
         if pos == 0:
             # look up tactic logits
             batch_ix = cache["batch_ix"]  # [batch, beam_size]
@@ -229,9 +229,9 @@ class SelectBestResults(tf.keras.layers.Layer):
         self,
         partial_seqs: tf.Tensor,  # [batch, beam_size, seq_length] dtype: int
         pos: tf.Tensor,  # scalar dtype: int32,
-        cache: dict[str, tf.Tensor],  # value shapes: [batch, beam_size, ...]
-        static_data: dict[str, tf.Tensor | tf.RaggedTensor]
-    ) -> tuple[tf.Tensor, dict[str, tf.Tensor]]:  # output shapes [batch, beam_size], dict of [batch, beam_size, ...]
+        cache: Dict[str, tf.Tensor],  # value shapes: [batch, beam_size, ...]
+        static_data: Dict[str, Union[tf.Tensor, tf.RaggedTensor]],
+    ) -> Tuple[tf.Tensor, Dict[str, tf.Tensor]]:  # output shapes [batch, beam_size], dict of [batch, beam_size, ...]
         if pos == 0:
             is_finished = tf.zeros(shape=tf.shape(partial_seqs)[:2], dtype=bool)  # [batch, beam_size]
             return is_finished, cache
@@ -253,7 +253,7 @@ class SelectBestResults(tf.keras.layers.Layer):
         tactic_arg_counts: tf.Tensor,  # [batch, tactics] dtype:int32
         arg_logits: tf.RaggedTensor,  # [batch * tactics, None(args), small_cxt] 
         beam_width: tf.Tensor,  # int32
-    ) -> tuple[
+    ) -> Tuple[
         tf.Tensor,  # tactic_token [batch-beam]
         tf.RaggedTensor,  # arg_token [batch-beam, None(args)]
         tf.Tensor,  # log_probs [batch-beam]
@@ -309,7 +309,7 @@ class SelectBestResults(tf.keras.layers.Layer):
         tactic_arg_counts: tf.Tensor,  # [batch, tactics] dtype:int32
         arg_logits: tf.RaggedTensor,  # [batch * tactics, None(args), small_cxt] 
         beam_width: tf.Tensor,  # int32
-    ) -> tuple[
+    ) -> Tuple[
         tf.Tensor,  # tactic [batch-beam]
         tf.RaggedTensor,  # arg_ix [batch, None(args)]
         tf.Tensor,  # log_probs [batch-beam]
@@ -365,7 +365,7 @@ class SelectBestResults(tf.keras.layers.Layer):
         tactic_arg_counts: tf.Tensor,  # [batch, tactics] dtype:int32
         arg_logits: tf.RaggedTensor,  # [batch * tactics, None(args), cxt] 
         beam_width: tf.Tensor,  # int32
-    ) -> tuple[
+    ) -> Tuple[
         tf.Tensor,  # tactic [batch-beam]
         tf.RaggedTensor,  # arg_ix [batch, None(args)]
         tf.Tensor,  # log_probs [batch-beam]
@@ -412,7 +412,7 @@ class SelectBestResults(tf.keras.layers.Layer):
         local_arg_logits: tf.RaggedTensor,  # [batch * tactics, None(args), global_cxt]
         global_arg_logits: tf.RaggedTensor,  # [batch * tactics, None(args), local_cxt]
         beam_width: tf.Tensor,  # int32
-    ) -> tuple[
+    ) -> Tuple[
         tf.RaggedTensor,  # log_probs [batch, None(options)]
         tf.RaggedTensor,  # log_probs [batch, None(options), None(tactic+args), 2]
     ]:
@@ -462,7 +462,7 @@ class SelectBestResults(tf.keras.layers.Layer):
 
     def call(
         self,
-        inference_output: dict[str, tf.Tensor | tf.RaggedTensor],
+        inference_output: Dict[str, Union[tf.Tensor, tf.RaggedTensor]],
     ):
         tactics = inference_output["tactic"]  # [batch, top_k_tactics]
         tactic_logits = inference_output["tactic_logits"]  # [batch, top_k_tactics]

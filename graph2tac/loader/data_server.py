@@ -10,7 +10,7 @@ import itertools
 import random
 from graph2tac.hash import get_split_label
 from collections import defaultdict
-from typing import Iterable, Optional
+from typing import Iterable, Optional, List, Tuple, Dict
 import tensorflow as tf
 import tensorflow_gnn as tfgnn
 
@@ -290,7 +290,7 @@ HOLDOUT = 2 # maybe unnecessary
 class Splitter:
     def lemma(self, d : Definition) -> int:
         raise Exception("Not implemented")
-    def definition_cluster(self, d : list[Definition]) -> int:
+    def definition_cluster(self, d : List[Definition]) -> int:
         raise Exception("Not implemented")
     def assign_data_server(self, data_server):
         pass
@@ -298,29 +298,29 @@ class Splitter:
 class SplitDisabled(Splitter):
     def lemma(self, d : Definition) -> int:
         return TRAIN
-    def definition_cluster(self, d : list[Definition]) -> int:
+    def definition_cluster(self, d : List[Definition]) -> int:
         return TRAIN
 
 class SplitByHash(Splitter):
-    def __init__(self, proportions : list[int], random_seed : int):
+    def __init__(self, proportions : List[int], random_seed : int):
         self.proportions = proportions
         self.random_seed = random_seed
     def lemma(self, d : Definition) -> int:
         # to make it identical to vasily's loader
         ident_64 = np.array(int(d.node.identity)).astype("uint64").item()  # casts to uint64 (w/ overflow) w/o deprication warning
         return get_split_label(ident_64, self.proportions, self.random_seed)
-    def definition_cluster(self, d : list[Definition]) -> int:
+    def definition_cluster(self, d : List[Definition]) -> int:
         return TRAIN
 
 class SplitByFilePrefix(Splitter):
-    def __init__(self, prefixes_per_label : list[list[str]]):
+    def __init__(self, prefixes_per_label : List[List[str]]):
         self.prefixes_per_label = [
             (label+1, prefixes)
             for label, prefixes in enumerate(prefixes_per_label)
         ]
     def lemma(self, d : Definition):
         return self.graphid_to_label[d.node.graph]
-    def definition_cluster(self, d : list[Definition]):
+    def definition_cluster(self, d : List[Definition]):
         return self.graphid_to_label[d[0].node.graph]
     def assign_data_server(self, data_server):
 
@@ -374,12 +374,12 @@ class DataServer(AbstractDataServer):
         self.dataset_config = dataset_config
 
         self._data_to_tfgnn = None
-        self._proof_steps : list[tuple[Outcome, Definition, int]] = []
-        self._def_clusters : list[list[Definition]] = []
-        self._repr_to_spine : dict[Definition, NDArray[np.uint32]] = dict()
-        self._repr_to_filedeps : dict[Definition, list[Definition]] = dict()
-        self._repr_to_recdeps : dict[Definition, list[Definition]] = dict()
-        self._def_to_file_ctx : dict[Definition, tuple[list[Definition], NDArray[np.uint32]]] = dict()
+        self._proof_steps : List[Tuple[Outcome, Definition, int]] = []
+        self._def_clusters : List[List[Definition]] = []
+        self._repr_to_spine : Dict[Definition, NDArray[np.uint32]] = dict()
+        self._repr_to_filedeps : Dict[Definition, List[Definition]] = dict()
+        self._repr_to_recdeps : Dict[Definition, List[Definition]] = dict()
+        self._def_to_file_ctx : Dict[Definition, Tuple[List[Definition], NDArray[np.uint32]]] = dict()
 
         self._reader = data_reader(Path(self.data_dir))
         self._data = self._reader.__enter__()
@@ -657,16 +657,16 @@ class DataServer(AbstractDataServer):
             if self.split.lemma(d) in labels
         ]
 
-    def get_datapoints(self, label : int, shuffled: bool = False) -> Iterable[tuple[LoaderProofstate, LoaderAction, int]]:
+    def get_datapoints(self, label : int, shuffled: bool = False) -> Iterable[Tuple[LoaderProofstate, LoaderAction, int]]:
         ids = self.datapoint_indices(label)
         if shuffled:
             self.rng_proofstates.shuffle(ids)
         return IterableLen(filtermap(self.datapoint_graph, ids), len(ids))
 
-    def data_train(self, shuffled: bool = False) -> Iterable[tuple[LoaderProofstate, LoaderAction, int]]:
+    def data_train(self, shuffled: bool = False) -> Iterable[Tuple[LoaderProofstate, LoaderAction, int]]:
         return self.get_datapoints(TRAIN, shuffled = shuffled)
 
-    def data_valid(self) -> Iterable[tuple[LoaderProofstate, LoaderAction, int]]:
+    def data_valid(self) -> Iterable[Tuple[LoaderProofstate, LoaderAction, int]]:
         return self.get_datapoints(VALID)
 
     def def_cluster_indices(self, *labels):

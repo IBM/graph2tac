@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Optional, Any
+from typing import Optional, Any, List
 import tensorflow as tf
 from collections import namedtuple
 
@@ -101,9 +101,9 @@ class GraphConstants:
     base_node_label_num: int
     node_label_num: int
     cluster_subgraphs_num: int
-    tactic_index_to_numargs: list[int]
-    tactic_index_to_string: list[str]    # tactic names
-    tactic_index_to_hash: list[int]
-    label_to_names: list[str]
-    label_to_ident: list[int]
-    label_in_spine: list[bool]
+    tactic_index_to_numargs: List[int]
+    tactic_index_to_string: List[str]    # tactic names
+    tactic_index_to_hash: List[int]
+    label_to_names: List[str]
+    label_to_ident: List[int]
+    label_in_spine: List[bool]

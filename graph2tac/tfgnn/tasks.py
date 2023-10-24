@@ -231,7 +231,7 @@ class LocalArgumentModel(tf.keras.Model):
 @tf.function
 def arg_best_logit_and_pred(
     logits: tf.RaggedTensor,  # [batch, None(args), None(context)]
-) -> tuple[tf.RaggedTensor, tf.RaggedTensor]:  # ([batch, None(args)], [batch, None(args)])
+) -> Tuple[tf.RaggedTensor, tf.RaggedTensor]:  # ([batch, None(args)], [batch, None(args)])
     """Find the value and index of the best arguments logit
 
     If the context is empty, return -inf for the value and 0 for the index
@@ -239,7 +239,7 @@ def arg_best_logit_and_pred(
     :param logits: Logits.  Shape: [batch, None(args), None(context)]
     :type logits: tf.RaggedTensor
     :return: value and index of the best logits.  Shape: [batch, None(arg)]
-    :rtype: tuple[tf.RaggedTensor, tf.RaggedTensor]
+    :rtype: Tuple[tf.RaggedTensor, tf.RaggedTensor]
     """
     # pad context with -inf to make rows uniform
     logits = logits.with_values(logits.values.to_tensor(default_value=-np.inf))  # [batch, None(args), max(context)]
@@ -1015,7 +1015,7 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
         self,
         logits0: tf.RaggedTensor,  # [batch_dim, (ragged_dim)]
         logits1: tf.RaggedTensor,  # [batch_dim, (ragged_dim)]
-    ) -> tuple[tf.RaggedTensor, tf.RaggedTensor]:  # [batch_dim, (ragged_dim)]
+    ) -> Tuple[tf.RaggedTensor, tf.RaggedTensor]:  # [batch_dim, (ragged_dim)]
 
         # subtract off max value to make stable 
         max_logits0 = tf.expand_dims(tf.reduce_max(logits0, axis=-1), -1)  # [total(args), 1]
