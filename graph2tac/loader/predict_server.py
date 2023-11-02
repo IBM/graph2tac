@@ -38,7 +38,8 @@ def apply_temperature(confidences: ArrayLike, temperature: float) -> NDArray[np.
     
     # confidences are log probabilities associated with a subset of all possible responses
     log_probs = np.array(confidences, np.float64)
-    remainder_log_prob = np.log(np.maximum(1.0 - np.exp(log_probs).sum(), 0.0))
+    with np.errstate(divide='ignore'):  # ok if taking np.log(0.0) here.  It will be -inf.
+        remainder_log_prob = np.log(np.maximum(1.0 - np.exp(log_probs).sum(), 0.0))
 
     # apply temperature
     log_probs = log_probs / temperature
