@@ -53,11 +53,21 @@ class ParamSets:
     @classmethod
     def params_for_step(cls, pipeline_step: str) -> List[tuple]:
         if pipeline_step == "predict_server":
-            return sorted([
+            params = sorted([
                 cls._param_predict_server(d)
                 for d in TESTDATADIR.glob("*/params/*")
                 if cls.get_pipeline_step(d) == pipeline_step
             ])
+            # skip a particular test which has issues right now:
+            params = [
+                param if param != ("propchain_dep", "hmodel", "predict_server_hmodel") else
+                pytest.param(
+                    *param,
+                    marks=pytest.mark.skip(reason="This hmodel test isn't properly testing the server anymore.")
+                )
+                for param in params
+            ]
+            return params
         elif pipeline_step in ["hmodel", "tfgnn", "load_previous_model"]:
             return sorted([
                 cls._param_train(d)

@@ -29,7 +29,7 @@ class ExtendedTensorBoard(tf.keras.callbacks.TensorBoard):
         """
         self.run_counter = run_counter
         self.devices = tf.config.list_physical_devices('GPU')
-        self.device_names = [re.search('.*(GPU:\d)', device.name).group(1) for device in self.devices]
+        self.device_names = [re.search(r'.*(GPU:\d)', device.name).group(1) for device in self.devices]
         self._epoch_begin_times = {}
         self._epoch_end_times = {}
         super().__init__(*args, **kwargs)
@@ -135,7 +135,7 @@ class QCheckpointManager(tf.train.CheckpointManager):
         maybe_delete = OrderedDict()
         while len(self._maybe_delete) > self._max_to_keep:
             filename, timestamp = self._maybe_delete.popitem(last=False)
-            filename_regex = re.search('.*-(\d+)', filename)
+            filename_regex = re.search(r'.*-(\d+)', filename)
             if filename_regex is not None:
                 epoch = int(filename_regex.group(1))
 

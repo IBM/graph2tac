@@ -603,7 +603,7 @@ class TFGNNPredict(Predict):
             checkpoint.definition_task = self.definition_task.get_checkpoint()
 
         checkpoints_path = log_dir / 'ckpt'
-        available_checkpoints = {int(re.search('ckpt-(\d+).index', str(ckpt)).group(1)): ckpt.with_suffix('')
+        available_checkpoints = {int(re.search(r'ckpt-(\d+).index', str(ckpt)).group(1)): ckpt.with_suffix('')
                                  for ckpt in checkpoints_path.glob('*.index')}
         if checkpoint_number is None:
             checkpoint_number = max(available_checkpoints.keys())
