@@ -21,7 +21,7 @@ setup(
     license='MIT',
     install_requires=[
         'keras>=2.8',
-        'tensorflow>=2.10.0,<2.11',
+        'tensorflow>=2.12.0,<2.13',
         'tensorflow_gnn>=0.2.0,<0.3',  # TODO(jrute): Try to upgrade to >=0.3
         'protobuf<4.0',
         'tqdm',
