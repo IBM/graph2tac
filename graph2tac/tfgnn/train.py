@@ -418,7 +418,7 @@ def main_with_return_value():
         parser.error(f'--run-config {args.run_config} must be a YAML file')
     with args.run_config.open() as yaml_file:
         run_config = yaml.load(yaml_file, Loader=yaml.SafeLoader)
-    tf.random.set_seed(run_config['tf_seed'])
+    tf.keras.utils.set_random_seed(run_config['tf_seed'])
 
     # dataset creation
     if args.data_dir is not None and not args.data_dir.is_dir():

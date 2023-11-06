@@ -9,7 +9,7 @@ setup(
     version='0.1.0',
     description='graph2tac converts graphs to actions',
     author=' Mirek Olsak, Vasily Pestun, Jason Rute, Fidel I. Schaposnik Massolo',
-    python_requires='>=3.8',
+    python_requires='>=3.9',
     include_package_data=True,
     entry_points={'console_scripts':
                   [
@@ -21,7 +21,7 @@ setup(
     license='MIT',
     install_requires=[
         'keras>=2.8',
-        'tensorflow>=2.9.0,<2.10', # TODO(jrute): Try to upgrade to >=2.10
+        'tensorflow>=2.10.0,<2.11',
         'tensorflow_gnn>=0.2.0,<0.3',  # TODO(jrute): Try to upgrade to >=0.3
         'protobuf<4.0',
         'tqdm',
