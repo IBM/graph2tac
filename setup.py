@@ -9,7 +9,7 @@ setup(
     version='0.1.0',
     description='graph2tac converts graphs to actions',
     author=' Mirek Olsak, Vasily Pestun, Jason Rute, Fidel I. Schaposnik Massolo',
-    python_requires='>=3.9',
+    python_requires='>=3.9,<3.12',  # the python version is determined by the tensorflow version
     include_package_data=True,
     entry_points={'console_scripts':
                   [
