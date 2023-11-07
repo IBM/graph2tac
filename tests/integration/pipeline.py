@@ -293,7 +293,7 @@ class Pipeline:
             context._context = None
             context._create_context()
             # a seed has to be set after tensorflow is imported.
-            tf.random.set_seed(1)
+            tf.keras.utils.set_random_seed(1)
 
             TFGNNPredict(
                 log_dir=model_dir,
@@ -318,7 +318,7 @@ class Pipeline:
         # a seed has to be set after tensorflow is imported.
         # Also it makes the tests deterministic.
         # (The predict server is usually deterministic except when using --update-no-definitions)
-        tf.random.set_seed(1)  
+        tf.keras.utils.set_random_seed(1)
 
         server_args = ["<program>",
             "--model", model_dir,
