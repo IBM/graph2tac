@@ -84,7 +84,7 @@ export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$CONDA_PREFIX/lib
 ```
 
 For `g2t-train-tfgnn`, to train on the available GPUs, add `--gpu all` to the options for `g2t-train-tfgnn`.
-Training on multiple GPUs is supported (but only tested up to 2 A100s).
+Training on multiple GPUs is supported (but only tested up to two A100s).
 
 For `g2t-server` it will use any available GPUs.  (You can also control the number of CPUs via `--cpu-thread-count`.)
 
