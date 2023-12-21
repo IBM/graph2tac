@@ -6,11 +6,11 @@ This python project makes it possible to train and run Graph2Tac models
 to be used inside [Tactician](https://coq-tactician.github.io/people/),
 an automated theorem proving system for Coq.
 
-![Overview diagram of Graph2Tac training](images/definition.png)
+![Overview diagram of Graph2Tac training](https://github.com/IBM/graph2tac/blob/main/images/definition.png?raw=true)
 
 ## Using Graph2Tac within Coq
 The simplest way to use the Graph2Tac model trained for the paper is via Tactician.
-See the instructions at [TODO](TODO).
+See the instructions for the [Tactician API](https://coq-tactician.github.io/api/).
 
 ## Using the graph2tac library
 
@@ -98,4 +98,4 @@ You can run tests as follows
 ```bash
 pytest tests
 ```
-See the [testing README](tests/README.md) for more information.
+See the [testing README](https://github.com/IBM/graph2tac/blog/main/tests/README.md) for more information.
