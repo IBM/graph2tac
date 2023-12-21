@@ -3,7 +3,7 @@ Graph2Tac is a novel neural network architecture for predicting tactics in the C
 and for assigning embeddings to new definitions (including theorems).
 More details can be found in [the paper](TODO).
 This python project makes it possible to train and run Graph2Tac models
-to be used inside [Tactician](https://coq-tactician.github.io/people/),
+to be used inside [Tactician](https://coq-tactician.github.io/),
 an automated theorem proving system for Coq.
 
 ![Overview diagram of Graph2Tac training](https://github.com/IBM/graph2tac/blob/main/images/definition.png?raw=true)
@@ -63,7 +63,7 @@ g2t-server \
 The server is available locally via `localhost:33333`
 or remotely via `URL:33333` where `URL` is the URL (or IP address) of the machine it is running on.
 Use `CTRL-C` to exit the server.
-See https://github.com/coq-tactician/coq-tactician-reinforce for instructions on how to call the server from Coq.
+See https://github.com/coq-tactician/coq-tactician-api for instructions on how to call the server from Coq.
 
 One can also run the server via stdin/stdout by replacing `--tcp --port 33333 --host 0.0.0.0` with `--stdin`
 This is intended for starting the server directly from within Coq.
@@ -84,7 +84,7 @@ export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$CONDA_PREFIX/lib
 ```
 
 For `g2t-train-tfgnn`, to train on the available GPUs, add `--gpu all` to the options for `g2t-train-tfgnn`.
-Training on multiple GPUs is supported (but only tested up to 2 A100s).
+Training on multiple GPUs is supported (but only tested up to two A100s).
 
 For `g2t-server` it will use any available GPUs.  (You can also control the number of CPUs via `--cpu-thread-count`.)
 
