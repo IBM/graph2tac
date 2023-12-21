@@ -26,7 +26,7 @@ or [conda](https://docs.conda.io/en/latest/) environment._
 
 ### Training
 To get started on training a model, the following code
-(when run inside the [repository](https://github.com/IBM/graph2tac))
+(where paths are relative to the [repository](https://github.com/IBM/graph2tac) root)
 trains on a small portion of the Coq standard library we use for testing.
 ```bash
 g2t-train-tfgnn \
@@ -41,8 +41,8 @@ g2t-train-tfgnn \
 
 See `g2t-train-tfgnn --help` for more command line options,
 and the various YAML files to change the hyperparameters.
-The trained model is stored in the directory `model/`.
-(Note, if `model/` already exists, it will continue training that model.)
+The trained model is stored in the log directory `model/`.
+(Note, if `model/` already exists and contains a model, it will continue training that model.)
 
 See [TODO](TODO) for the full Coq dataset.
 
