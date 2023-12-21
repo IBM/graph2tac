@@ -44,7 +44,7 @@ and the various YAML files to change the hyperparameters and training epochs.
 The trained model is stored in the log directory, `model/` in the above example.
 (Note, if `model/` already exists and contains a model, it will continue training that model.)
 
-See [TODO](TODO) for the full Coq dataset.
+See [here](https://zenodo.org/records/10028721) for the full Coq dataset.
 
 ### Running
 The above trained model (or another existing trained model)
