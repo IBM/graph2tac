@@ -1,8 +1,8 @@
-# graph2tac
+# Graph2Tac
 Graph2Tac is a novel neural network architecture for predicting tactics in the Coq theorem prover,
 and for assigning embeddings to new definitions (including theorems).
 More details can be found in [the paper](TODO).
-The project makes it possible to train and run Graph2Tac models
+This python project makes it possible to train and run Graph2Tac models
 to be used inside [Tactician](https://coq-tactician.github.io/people/),
 an automated theorem proving system for Coq.
 
@@ -42,6 +42,7 @@ g2t-train-tfgnn \
 See `g2t-train-tfgnn --help` for more command line options,
 and the various YAML files to change the hyperparameters.
 The trained model is stored in the directory `model/`.
+(Note, if `model/` already exists, it will continue training that model.)
 
 See [TODO](TODO) for the full Coq dataset.
 
@@ -82,10 +83,10 @@ Note, for using GPUs with conda environments we found it necessary to set
 export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$CONDA_PREFIX/lib
 ```
 
-For training, add `TODO` to the options for `g2t-train-tfgnn`.
+For `g2t-train-tfgnn`, to train on the avilable GPUs, add `--gpu all` to the options for `g2t-train-tfgnn`.
+Training on multiple GPUs is supported (but only tested up to 2 A100s).
 
-For inference add `TODO`.
-
+For `g2t-server` it will use any available GPUs.  (You can also control the number of CPUs via `--cpu-thread-count`.)
 
 ## Development
 If you wish to develop Graph2Tac or run a previous commit, you may install it
