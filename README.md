@@ -1,26 +1,98 @@
 # graph2tac
-graph2tac converts graphs to tactics
+Graph2Tac is a novel neural network architecture for predicting tactics in the Coq theorem prover,
+and for assigning embeddings to new definitions (including theorems).
+More details can be found in [the paper](TODO).
+The project makes it possible to train and run Graph2Tac models
+to used inside [Tactician](https://coq-tactician.github.io/people/),
+an automated theorem proving system for Coq.
 
-# prerequisites on Linux
+![Overview diagram of Graph2Tac training](images/definition.pdf)
 
-- CUDA/GPU (optional, if you want to use GPU): please follow https://www.tensorflow.org/install to install on your system.
+## Using Graph2Tac within Coq
+The simplest way to use the Graph2Tac model trained for the paper is via Tactician.
+See the instructions [TODO](TODO).
 
-# installation 
+## Using the graph2tac library
 
-The python `graph2tac` package can be installed with `pip install` in a standard way from git repo (we aren't yet on pypi.org). For developers a recommended way is `pip install -e .` from the cloned source repository which allows to develop directly on the source of the installed package. We recommend and have tested on Python 3.10.
-
-# entry-points
-
-- See `g2t-train-tfgnn --help` to train the TF-GNN model
-- See `g2t-server --help` to launch the python server for evaluation
-- See `g2t-tfgnn-predict-graphs --help` to evaluate prediction tfgnn networks on supervised data, and plot results
-
-Get started training a simple, small model with the following command:
+### Installation
+Graph2Tac has been tested with Linux and x86 MacOS, but may work on other systems as well.
+It requires Python 3.9, 3.10, or 3.11, and can be installed with
+```bash
+pip install graph2tac
 ```
-g2t-train-tfgnn --data-dir tests/data/mini_stdlib/dataset/  --dataset-config graph2tac/tfgnn/default_dataset_config.yml --prediction-task-config graph2tac/tfgnn/default_global_argument_prediction.yml --trainer-config graph2tac/tfgnn/default_trainer_config.yml --run-config graph2tac/tfgnn/default_run_config.yml --definition-task-config graph2tac/tfgnn/default_definition_task.yml --log model/
+_It is highly recommended that you use a virtual environment or conda environment._
+
+### Training
+To get started on training a model, the following code
+(when run inside the [repository](https://github.com/IBM/graph2tac))
+trains on a small portion of the Coq standard library we use for testing.
+```bash
+g2t-train-tfgnn \
+  --data-dir tests/data/mini_stdlib/dataset/ \
+  --dataset-config graph2tac/tfgnn/default_dataset_config.yml \
+  --prediction-task-config graph2tac/tfgnn/default_global_argument_prediction.yml \
+  --trainer-config graph2tac/tfgnn/default_trainer_config.yml \
+  --run-config graph2tac/tfgnn/default_run_config.yml \
+  --definition-task-config graph2tac/tfgnn/default_definition_task.yml \
+  --log model/
 ```
-You can then start a prediction server that communicates with Coq as follows:
+
+See `g2t-train-tfgnn --help` for more command line options,
+and the various YAML files to change the hyperparameters.
+The trained model is stored in the directory `model/`.
+
+See [TODO](TODO) for the full Coq dataset.
+
+### Running
+The above trained model (or another existing trained model)
+can be run via a prediction server for interacting with Coq as follows:
+```bash
+g2t-server \
+  --arch tfgnn \
+  --tcp --port 33333 --host 0.0.0.0 \
+  --model model/ \
+  --log_level=info \
+  --tf_log_level=critical \
+  --tactic_expand_bound=256 \
+  --search_expand_bound=256 \
+  --update_new_definitions
 ```
-g2t-server --arch tfgnn --tcp --port 33333 --host 0.0.0.0 --model model/ --log_level=info --tf_log_level=critical --tactic_expand_bound=8 --total_expand_bound=10 --search_expand_bound=4 --update_all_definitions
-```
+The server is available locally via `localhost:33333`
+or remotely via `URL:33333` where `URL` is the URL (or IP address) of the machine it is running on.
+Use `CTRL-C` to exit the server.
 See https://github.com/coq-tactician/coq-tactician-reinforce for instructions on how to call the server from Coq.
+
+You can also run the server via stdin/stdout by replacing `--tcp --port 33333 --host 0.0.0.0` with `--stdin`
+This is intended for starting the server directly from within Coq.
+
+See `g2t-server --help` for more command line options.
+
+### Using a GPU
+Graph2Tac uses Tensorflow for training and inference, and will support Nvidia GPUs.
+To test that Tensorflow can access your system GPU, run the following python script.
+```python
+import tensorflow as tf
+print("How many GPUs available: ", len(tf.config.list_physical_devices('GPU')))
+```
+and follow the [Tensorflow GPU](https://www.tensorflow.org/guide/gpu) instructions if needed.
+Note, for using GPUs with conda environments we found it necessary to set 
+```bash
+export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$CONDA_PREFIX/lib
+```
+
+For training, add `TODO` to the options for `g2t-train-tfgnn`.
+
+For inference add `TODO`.
+
+
+## Development
+If you wish to develop Graph2Tac or run a previous commit, you may install it
+from within the [repository](https://github.com/IBM/graph2tac) via
+```bash
+pip install -e .
+```
+You can run tests as follows
+```bash
+pytest tests
+```
+See the [testing README](tests/README.md) for more information.
