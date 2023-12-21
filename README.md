@@ -3,14 +3,14 @@ Graph2Tac is a novel neural network architecture for predicting tactics in the C
 and for assigning embeddings to new definitions (including theorems).
 More details can be found in [the paper](TODO).
 The project makes it possible to train and run Graph2Tac models
-to used inside [Tactician](https://coq-tactician.github.io/people/),
+to be used inside [Tactician](https://coq-tactician.github.io/people/),
 an automated theorem proving system for Coq.
 
 ![Overview diagram of Graph2Tac training](images/definition.png)
 
 ## Using Graph2Tac within Coq
 The simplest way to use the Graph2Tac model trained for the paper is via Tactician.
-See the instructions [TODO](TODO).
+See the instructions at [TODO](TODO).
 
 ## Using the graph2tac library
 
