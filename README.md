@@ -6,7 +6,7 @@ The project makes it possible to train and run Graph2Tac models
 to used inside [Tactician](https://coq-tactician.github.io/people/),
 an automated theorem proving system for Coq.
 
-![Overview diagram of Graph2Tac training](images/definition.svg)
+![Overview diagram of Graph2Tac training](images/definition.png)
 
 ## Using Graph2Tac within Coq
 The simplest way to use the Graph2Tac model trained for the paper is via Tactician.
