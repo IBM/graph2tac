@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "graph2tac"
-version = "1.0.0"
+version = "1.0.4"
 authors = [
   { name="Lasse Blaauwbroek" },
   { name="Fidel I. Schaposnik Massolo" },
@@ -59,4 +59,5 @@ Repository = "https://github.com/IBM/graph2tac"
 
 [tool.setuptools.packages.find]
 where = ["."]
+exclude = ["tests*"]
 namespaces = false  # prevents folders without __init__.py from being scanned
