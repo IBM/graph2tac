@@ -58,4 +58,5 @@ Issues = "https://github.com/IBM/graph2tac/issues"
 Repository = "https://github.com/IBM/graph2tac"
 
 [tool.setuptools.packages.find]
-include = ["graph2tac"]
+where = ["."]
+namespaces = false  # prevents folders without __init__.py from being scanned
