@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "graph2tac"
 version = "1.0.0"
 authors = [
-  { name="Lasse Blaauwbroe" },
+  { name="Lasse Blaauwbroek" },
   { name="Fidel I. Schaposnik Massolo" },
   { name="Miroslav Olšák" },
   { name="Vasily Pestun" },
@@ -58,4 +58,4 @@ Issues = "https://github.com/IBM/graph2tac/issues"
 Repository = "https://github.com/IBM/graph2tac"
 
 [tool.setuptools.packages.find]
-where = ["."]  # find all packages in the project instead of listing them 1-by-1
+include = ["graph2tac"]
