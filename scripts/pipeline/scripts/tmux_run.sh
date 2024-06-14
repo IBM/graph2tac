@@ -1,0 +1,1 @@
+tmux new-session -d -s $(basename $(dirname "$PWD")) "sh run.sh"
