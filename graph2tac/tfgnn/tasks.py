@@ -492,17 +492,17 @@ class TacticPrediction(PredictionTask):
         embedded_graph = self.graph_embedding(bare_graph)  # noqa [ PyCallingNonCallable ]
         hidden_graph = self.gnn(embedded_graph)
         
-        # [batch_size, ]
+        # [batch_size, hdim]
         tactic_embedding = self.tactic_head(hidden_graph)
         
-        # [batch_size, ], ...
+        # [batch_size, hdim], ...
         return tactic_embedding, hidden_graph
     
     def _tactic_logits_and_hidden_graph(
             self,
             scalar_proofstate_graph: tfgnn.GraphTensor
         ) -> Tuple[tf.Tensor, tfgnn.GraphTensor]:
-        # [batch_size, ], ...
+        # [batch_size, hdim], ...
         tactic_embedding, hidden_graph = self._tactic_embeddings_and_hidden_graph(scalar_proofstate_graph)
         
         # [batch_size, tactic_num]
@@ -1084,7 +1084,7 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
                                                  name=self.PROOFSTATE_GRAPH)
         scalar_proofstate_graph = proofstate_graph.merge_batch_to_components()
 
-        # [batch, ], ...
+        # [batch, hdim], ...
         tactic_embeddings, hidden_graph = self._tactic_embeddings_and_hidden_graph(scalar_proofstate_graph)
         # [batch, tactic_num]
         tactic_logits = self.tactic_logits_from_embeddings(tactic_embeddings)
@@ -1137,7 +1137,7 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
         # [tactic_num]
         tactic_mask = tf.keras.Input(shape=(graph_constants.tactic_num,), dtype=tf.bool, name=self.TACTIC_MASK)
         
-        # [batch_size, ], ...
+        # [batch_size, hdim], ...
         tactic_embedding, hidden_graph = self._tactic_embeddings_and_hidden_graph(scalar_proofstate_graph)
         # [batch_size, tactic_num]
         tactic_logits = self.tactic_logits_from_embeddings(tactic_embedding)  # noqa [ PyCallingNonCallable ]
