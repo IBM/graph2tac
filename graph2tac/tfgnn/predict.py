@@ -696,17 +696,15 @@ class TFGNNPredict(Predict):
         )
         allowed_model_tactics_spec = tf.TensorSpec(shape=(None,), dtype=tf.int32)
         @tf.function(input_signature = (LoaderProofstateSpec, allowed_model_tactics_spec))
-        def inference_model(state, allowed_model_tactics):
-            tactic_mask = tf.scatter_nd(
-                indices = tf.expand_dims(allowed_model_tactics, axis = 1),
-                updates = tf.ones_like(allowed_model_tactics, dtype=bool),
-                shape = [self.graph_constants.tactic_num]
-            )
+        def inference_model(
+            state: LoaderProofstate,
+            allowed_model_tactics: tf.Tensor,  # [tactic_cxt]
+        ):
             graph_tensor_single = self._make_proofstate_graph_tensor(state)
             graph_tensor_stacked = stack_graph_tensors([graph_tensor_single])
             inference_output = inference_model_bare({
                 self.prediction_task.PROOFSTATE_GRAPH: graph_tensor_stacked,
-                self.prediction_task.TACTIC_MASK: tf.expand_dims(tactic_mask, axis=0),
+                self.prediction_task.TACTIC_IDS: allowed_model_tactics,
             })
             return self.select_best_results_task(inference_output)
         self._inference_model = inference_model
