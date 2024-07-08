@@ -255,6 +255,222 @@ def arg_best_logit_and_pred(
     return (best_logit, pred)
 
 
+class ResizableArray(tf.keras.layers.Layer):
+    """This layer is an array in which one can push new tensor values onto the end or pop off values.
+
+    The `length` is the length of the array, but it is implemented with a larger tensor underneath.
+    To resize the underlying tensor, use `check_and_resize_if_needed`.
+
+    **NB: Resizing will require recompiling any `@tf.function` functions which use this layer!**
+    
+    To prevent accidentally using a compiled resized array or accessing data outside the bounds of the array,
+    use the accessors `get_value` and `get_slice` instead of the underlying tensor.
+    The accessors will throw out-of-bound errors
+    as well as errors when calling a previously compiled function after resizing.
+    """
+    def __init__(
+        self,
+        value_shape: Tuple[int, ...],
+        value_dtype: tf.DType,
+        init_tensor_size: int = 1024,
+        name="resizable_array",
+        **kwargs
+    ):
+        super().__init__(name=name, **kwargs)
+        self._value_shape = value_shape
+        self._value_dtype = value_dtype
+        
+        # shape: [size,] + value_shape
+        self._data = tf.Variable(tf.zeros(
+            shape=(init_tensor_size,) + value_shape,
+            dtype=self._value_dtype
+        ), trainable=False)
+        
+        self.length = tf.Variable(0)  # The array length (shorter than the tensor size)
+        # After resizing, a pre-compiled function will see _valid as False,
+        # but other functions compiled after will see _valid as True.
+        self._valid = tf.Variable(True)
+    
+    def _tensor_size(self) -> int:
+        return tf.shape(self._data)[0]
+
+    def _resize(self, new_size: int):
+        """Extend the underlying tensor in place.
+        
+        NB: **Must recompile any `@tf.function` functions after resizing!**
+        """
+        print(new_size, self._tensor_size(), self.length)
+        assert new_size >= self._tensor_size()
+        new_data = tf.zeros(
+            shape=(new_size - self._tensor_size(),) + self._value_shape,
+            dtype=self._value_dtype,
+        )
+
+        self._data = tf.Variable(tf.concat([self._data, new_data], axis=0))
+        self.length = tf.Variable(self.length.value)
+        self._valid.assign(False)        # Previously compiled functions will see `_valid` as False,
+        self._valid = tf.Variable(True)  # while any other functions will see it as True.
+
+    def check_and_resize_if_needed(self, length_increase: int = 1, size_buffer_percent: float = 0.3) -> bool:
+        """
+        Resize the underlying tensor in place to support the length increase.  Return True if resized.       
+        """
+        new_length = self.length + length_increase
+        if new_length > self._tensor_size():
+            new_size = int(np.ceil(float(self._tensor_size()) * (1.0 + size_buffer_percent)))
+            self._resize(new_size)
+            return True
+        else:
+            return False
+
+    def set_array_data(
+        self,
+        data: tf.Tensor  # shape: [length,] + value_shape
+    ):
+        assert tf.shape(data)[0] <= self._tensor_size()
+        length = tf.shape(data)[0]
+        self._data.scatter_update(
+            tf.IndexedSlices(
+                data,
+                tf.range(length),
+            )
+        )
+        self.length.assign(length)
+    
+    def push_values(
+        self,
+        values: tf.Tensor  # shape: [length_increase,] + value_shape
+    ):
+        new_length = self.length + tf.shape(values)[0]
+        assert new_length <= self._tensor_size(), f"Pushing a value past the size of the underlying tensor {self._tensor_size()}"
+        self._data.scatter_update(
+            tf.IndexedSlices(
+                values,
+                tf.range(self.length, new_length),
+            )
+        )
+        self.length.assign_add(tf.shape(values)[0])
+
+    def push_value(
+        self,
+        value: tf.Tensor  # shape: value_shape
+    ):
+        self.push_values([value])
+
+    def pop_until_length(self, length: int):
+        """Reduce the length of the array.  Has effect of popping all elements after the length."""
+        assert length <= self.length, f"Length after popping is larger than the current length."
+        self.length.assign(length)
+
+    def _assert_valid(self):
+        tf.assert_equal(
+            self._valid,
+            True,
+            message=(
+                "This layer was resized, but is being run in a compiled function which was compiled before resizing."
+                "After resizing, one must recompile the function."
+            )
+        )
+    
+    def _assert_bounds(self, start: int, end: int):
+        tf.assert_greater(
+            start,
+            -1,
+            message="Out of bounds: Negative indexing not supported."
+        )
+        tf.assert_less(
+            end,
+            self.length + 1,
+            message="Out of bounds: Accessing value past the length of the array."
+        )
+
+    def get_value(self, ix: int):
+        """Get value from the array.  (ix < self.length)"""
+        self._assert_valid()
+        self._assert_bounds(ix, ix+1)
+
+        return self._data[ix]
+    
+    def get_slice(self, start: int, end: int):
+        self._assert_valid()
+        self._assert_bounds(start, end)
+        
+        return self._data[start:end]
+
+
+class TacticInferenceTask(tf.keras.layers.Layer):
+    """
+    This layer controls (base) tactic prediction during inference,
+    including predicting tactics, and storing data for new tactics seen during inference.
+    """
+    def __init__(
+        self,
+        graph_constants: GraphConstants,
+        tactic_logits_from_embeddings,
+        initial_tensor_size: int = 1024,
+        name="tactic_inference",
+        **kwargs
+    ):
+        super().__init__(name=name, **kwargs)
+
+        # the original trained tactic embeddings
+        assert not tactic_logits_from_embeddings._cosine_similarity
+        # [tactics, hdim]
+        self.trained_tactic_embeddings = tactic_logits_from_embeddings._embedding_matrix
+        hdim = tf.shape(self.trained_tactic_embeddings)[1]
+
+        # the arg counts for all tactics (old and new)
+        self.tactic_id_to_arg_count = ResizableArray(value_shape=tuple(), value_dtype=tf.int64, init_tensor_size=len(graph_constants.tactic_index_to_numargs) + initial_tensor_size)
+        self.tactic_id_to_arg_count.set_array_data(tf.constant(graph_constants.tactic_index_to_numargs, dtype = tf.int64))
+        assert self.tactic_id_to_arg_count.length == tf.shape(self.trained_tactic_embeddings)[0], (self.tactic_id_to_arg_count.length, tf.shape(self.trained_tactic_embeddings)[0])
+
+        # the embeddings and tactic id for each new example
+        self.proof_step_embeddings = ResizableArray(value_shape=(hdim,), value_dtype=tf.float32, init_tensor_size=initial_tensor_size)
+        self.proof_step_tactic_ids = ResizableArray(value_shape=tuple(), value_dtype=tf.int64, init_tensor_size=initial_tensor_size)
+
+    def _tactic_logits(
+        self,
+        query_embs: tf.Tensor,  # [batch, hdim]
+        tactic_ctx_ids: tf.Tensor,  # [tactic_cxt, ]
+    ) -> Tuple[tf.Tensor, tf.Tensor, tf.Tensor]:  # ([tactic_cxt, hdim], [batch, tactic_cxt, hdim], [tactic_cxt,])
+        """
+        Calculate tactic logits.
+        
+        Takes into account that some tactics may appear more than once in the key table,
+        so it returns the key table with the appropriate key for each logit.
+        """
+        batch_size = tf.shape(query_embs)[0]
+
+        # [tactics, hdim]
+        tac_embs = self.trained_tactic_embeddings
+
+        # TODO: Don't assume that index and id are the same 
+        # TODO: Filter rows of embedding table by tactic id
+
+        # [tactic_cxt, hdim]
+        key_embs = tf.gather(tac_embs, indices=tactic_ctx_ids, batch_dims=0)
+
+        # TODO: Reduce option 1: Combine duplicate keys by summing or averaging
+
+        # TODO: Don't assume that index and id are the same 
+        # [batch, tactic_cxt]
+        tactic_logits = tf.einsum("ik,jk->ij", query_embs, key_embs)
+        
+        # TODO: Reduce option 2: Take max of duplicate logits (and reduce keys)
+        # TODO: Reduce option 3: Take sum of duplicate logits (and sum keys?) (is this the same as option 1?)
+        # TODO: Reduce option 4: Run softmax on logits and sum probs (before converting back to logits) (taking a weighted average of the keys?)
+        
+        # [batch, tactic_cxt, hdim]
+        batch_key_embs = tf.tile(tf.expand_dims(key_embs, axis=0), multiples=[batch_size, 1, 1])
+        
+        # [tactic_cxt,]
+        # TODO: Better to avoid accessing _data directly so that not outside array length
+        tactic_cxt_arg_cnts = tf.gather(self.tactic_id_to_arg_count._data, tactic_ctx_ids)
+
+        # ([tactic_cxt, hdim], [batch, tactic_cxt, hdim], [tactic_cxt,])
+        return tactic_logits, batch_key_embs, tactic_cxt_arg_cnts
+
+
 class GlobalArgumentModel(tf.keras.Model):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -499,45 +715,6 @@ class TacticPrediction(PredictionTask):
         
         # [batch_size, hdim], ...
         return tactic_embedding, hidden_graph
-    
-    def _tactic_logits_inference(
-        self,
-        query_embs: tf.Tensor,  # [batch, hdim]
-        tactic_ctx_ids: tf.Tensor,  # [tactic_cxt, ]
-    ) -> Tuple[tf.Tensor, tf.Tensor]:  # [batch, tactic_cxt]
-        """
-        Calculate tactic logits.
-        
-        Takes into account that some tactics may appear more than once in the key table,
-        so it returns the key table with the appropriate key for each logit.
-        """
-        assert not self.tactic_logits_from_embeddings._cosine_similarity
-        batch_size = tf.shape(query_embs)[0]
-
-        # [tactics, hdim]
-        tac_embs = self.tactic_logits_from_embeddings._embedding_matrix
-
-        # TODO: Don't assume that index and id are the same 
-        # TODO: Filter rows of embedding table by tactic id
-
-        # [tactic_cxt, hdim]
-        key_embs = tf.gather(tac_embs, indices=tactic_ctx_ids, batch_dims=0)
-
-        # TODO: Reduce option 1: Combine duplicate keys by summing or averaging
-
-        # TODO: Don't assume that index and id are the same 
-        # [batch, tactic_cxt]
-        tactic_logits = tf.einsum("ik,jk->ij", query_embs, key_embs)
-        
-        # TODO: Reduce option 2: Take max of duplicate logits (and reduce keys)
-        # TODO: Reduce option 3: Take sum of duplicate logits (and sum keys?) (is this the same as option 1?)
-        # TODO: Reduce option 4: Run softmax on logits and sum probs (before converting back to logits) (taking a weighted average of the keys?)
-        
-        # [batch, tactic_cxt, hdim]
-        batch_key_embs = tf.tile(tf.expand_dims(key_embs, axis=0), multiples=[batch_size, 1, 1])
-        
-        # ([tactic_cxt, hdim], [batch, tactic_cxt, hdim])
-        return tactic_logits, batch_key_embs
 
     def get_config(self):
         config = super().get_config()
@@ -556,7 +733,7 @@ class TacticPrediction(PredictionTask):
     def create_train_model(self) -> tf.keras.Model:
         raise NotImplemented("Use GlobalArgumentPrediction instead")
 
-    def create_inference_model(self, tactic_expand_bound: int, graph_constants: GraphConstants) -> tf.keras.Model:
+    def create_inference_model(self, tactic_expand_bound: int, tactic_inference_task: TacticInferenceTask) -> tf.keras.Model:
         raise NotImplemented("Use GlobalArgumentPrediction instead")
 
     @staticmethod
@@ -936,7 +1113,7 @@ class LocalArgumentPrediction(TacticPrediction):
     def create_train_model(self) -> tf.keras.Model:
         raise NotImplemented("Use GlobalArgumentPrediction instead")
 
-    def create_inference_model(self, tactic_expand_bound: int, graph_constants: GraphConstants) -> tf.keras.Model:
+    def create_inference_model(self, tactic_expand_bound: int, tactic_inference_task: TacticInferenceTask) -> tf.keras.Model:
         raise NotImplemented("Use GlobalArgumentPrediction instead")
 
     @staticmethod
@@ -1146,7 +1323,7 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
                                             self.LOCAL_ARGUMENTS_LOGITS: local_arguments_logits_output,
                                             self.GLOBAL_ARGUMENTS_LOGITS: global_arguments_logits_output})
 
-    def create_inference_model(self, tactic_expand_bound: int, graph_constants: GraphConstants) -> tf.keras.Model:
+    def create_inference_model(self, tactic_expand_bound: int, tactic_inference_task: TacticInferenceTask) -> tf.keras.Model:
         """
         Combines a GNN component with a tactic head and an arguments head to produce an end-to-end model for the
         global argument prediction task. The resulting model is for inference purposes, and produces tactics, their logits
@@ -1165,16 +1342,13 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
 
         # [tactic_cxt]  (keras.Input adds a batch dimension to the front which in our case is tactic_cxt)
         tactic_cxt_ids = tf.keras.Input(shape=tuple(), dtype=tf.int32, name=self.TACTIC_IDS)
-        # TODO: Should tactic_arg_cnts be an input to the inference model?  It would maybe be the easiest solution. 
-        # [tactic_cxt, ]  type: int64
-        tactic_cxt_arg_cnts = tf.gather(tf.constant(graph_constants.tactic_index_to_numargs, dtype = tf.int64), tactic_cxt_ids, batch_dims=0)
         # scalar
         tactic_cxt = tf.shape(tactic_cxt_ids)[0]
         
         # [batch_size, hdim], ...
         tactic_query_embs, hidden_graph = self._tactic_embeddings_and_hidden_graph(scalar_proofstate_graph)
         # [batch_size, tactic_cxt], [batch_size, tactic_cxt, hdim]
-        tactic_logits, tactic_key_embs = self._tactic_logits_inference(query_embs=tactic_query_embs, tactic_ctx_ids=tactic_cxt_ids)
+        tactic_logits, tactic_key_embs, tactic_cxt_arg_cnts = tactic_inference_task._tactic_logits(query_embs=tactic_query_embs, tactic_ctx_ids=tactic_cxt_ids)     
 
         # During argument prediction, the model crashes
         # where there no local or global context, but we choose tactics which take arguments.

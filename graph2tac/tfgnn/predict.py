@@ -11,7 +11,7 @@ from pathlib import Path
 
 from graph2tac.loader.data_classes import DataConfig, GraphConstants, LoaderGraph, ProofstateMetadata, ProofstateContext, LoaderAction, LoaderActionSpec, LoaderProofstate, LoaderProofstateSpec, LoaderDefinition, LoaderDefinitionSpec
 from graph2tac.loader.data_server import DataToTFGNN
-from graph2tac.tfgnn.tasks import PredictionTask, DefinitionTask, GLOBAL_ARGUMENT_PREDICTION
+from graph2tac.tfgnn.tasks import PredictionTask, DefinitionTask, GLOBAL_ARGUMENT_PREDICTION, TacticInferenceTask
 from graph2tac.tfgnn.train import Trainer
 from graph2tac.common import logger
 from graph2tac.predict import Predict, predict_api_debugging, NUMPY_NDIM_LIMIT
@@ -588,6 +588,12 @@ class TFGNNPredict(Predict):
             search_expand_bound=self._search_expand_bound
         )
 
+        # create tactic inference task
+        self.tactic_inference_task = TacticInferenceTask(
+            graph_constants=graph_constants,
+            tactic_logits_from_embeddings=self.prediction_task.tactic_logits_from_embeddings,
+        )
+
         # create definition task
         definition_yaml_filepath = log_dir / 'config' / 'definition.yaml'
         if definition_yaml_filepath.is_file():
@@ -692,7 +698,7 @@ class TFGNNPredict(Predict):
 
         inference_model_bare = self.prediction_task.create_inference_model(
             tactic_expand_bound=self._tactic_expand_bound,
-            graph_constants=self.graph_constants
+            tactic_inference_task=self.tactic_inference_task,
         )
         allowed_model_tactics_spec = tf.TensorSpec(shape=(None,), dtype=tf.int32)
         @tf.function(input_signature = (LoaderProofstateSpec, allowed_model_tactics_spec))
