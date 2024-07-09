@@ -406,12 +406,28 @@ class TacticInferenceTask(tf.keras.layers.Layer):
     def __init__(
         self,
         graph_constants: GraphConstants,
-        tactic_logits_from_embeddings,
+        tactic_logits_from_embeddings: LogitsFromEmbeddings,
         initial_tensor_size: int = 1024,
+        recent_proofstep_limit: int = 0,
+        recent_proofstep_use_tactic_head = True,
+        recent_proofstep_temp: Optional[float] = None,
+        select_from_learned_tactics: bool = True,
+        reduction_type: str = "none",
+        use_learned_tactic_embeddings: bool = False,
         name="tactic_inference",
         **kwargs
     ):
         super().__init__(name=name, **kwargs)
+
+        self.recent_proofstep_use_tactic_head = recent_proofstep_use_tactic_head
+        self.recent_proofstep_temp = recent_proofstep_temp
+        self.select_from_learned_tactics = select_from_learned_tactics
+        self.recent_proofstep_limit = recent_proofstep_limit
+        self.reduction_type = reduction_type
+        self.use_learned_tactic_embeddings = use_learned_tactic_embeddings
+        assert self.select_from_learned_tactics or self.recent_proofstep_limit, (
+            "Need at least one of select_from_learned_tactics or recent_proofstep_limit."
+        )
 
         # the original trained tactic embeddings
         assert not tactic_logits_from_embeddings._cosine_similarity
@@ -421,18 +437,18 @@ class TacticInferenceTask(tf.keras.layers.Layer):
 
         # the arg counts for all tactics (old and new)
         self.tactic_id_to_arg_count = ResizableArray(value_shape=tuple(), value_dtype=tf.int64, init_tensor_size=len(graph_constants.tactic_index_to_numargs) + initial_tensor_size)
-        self.tactic_id_to_arg_count.set_array_data(tf.constant(graph_constants.tactic_index_to_numargs, dtype = tf.int64))
+        self.tactic_id_to_arg_count.set_array_data(tf.constant(graph_constants.tactic_index_to_numargs, dtype=tf.int64))
         assert self.tactic_id_to_arg_count.length == tf.shape(self.trained_tactic_embeddings)[0], (self.tactic_id_to_arg_count.length, tf.shape(self.trained_tactic_embeddings)[0])
 
         # the embeddings and tactic id for each new example
         self.proof_step_embeddings = ResizableArray(value_shape=(hdim,), value_dtype=tf.float32, init_tensor_size=initial_tensor_size)
-        self.proof_step_tactic_ids = ResizableArray(value_shape=tuple(), value_dtype=tf.int64, init_tensor_size=initial_tensor_size)
+        self.proof_step_tactic_ids = ResizableArray(value_shape=tuple(), value_dtype=tf.int32, init_tensor_size=initial_tensor_size)
 
     def _tactic_logits(
         self,
         query_embs: tf.Tensor,  # [batch, hdim]
         tactic_ctx_ids: tf.Tensor,  # [tactic_cxt, ]
-    ) -> Tuple[tf.Tensor, tf.Tensor, tf.Tensor]:  # ([tactic_cxt, hdim], [batch, tactic_cxt, hdim], [tactic_cxt,])
+    ) -> Tuple[tf.Tensor, tf.Tensor, tf.Tensor, tf.Tensor]:  # ([batch, logits], [batch, logits, hdim], [logits,], [logits,])
         """
         Calculate tactic logits.
         
@@ -441,34 +457,135 @@ class TacticInferenceTask(tf.keras.layers.Layer):
         """
         batch_size = tf.shape(query_embs)[0]
 
-        # [tactics, hdim]
-        tac_embs = self.trained_tactic_embeddings
+        all_tactic_embs = []
+        all_tactic_logits = []
+        all_tactic_ids = []
+        if self.select_from_learned_tactics:
+            # [tactics, hdim]
+            tac_embs = self.trained_tactic_embeddings
+            # [tactic_cxt, hdim]
+            key_embs = tf.gather(tac_embs, indices=tactic_ctx_ids, batch_dims=0)
+            # [tactic_cxt, batch]
+            tactic_logits = tf.einsum("ik,jk->ji", query_embs, key_embs)
+            
+            all_tactic_embs.append(key_embs)
+            all_tactic_logits.append(tactic_logits)
+            all_tactic_ids.append(tactic_ctx_ids)
 
-        # TODO: Don't assume that index and id are the same 
-        # TODO: Filter rows of embedding table by tactic id
+        if self.recent_proofstep_limit:
+            end = self.proof_step_embeddings.length
+            start = tf.maximum(0, end - self.recent_proofstep_limit)
+            # [limit, hdim]
+            key_embs = self.proof_step_embeddings.get_slice(start, end)
+            # [limit,]
+            tactic_ids = self.proof_step_tactic_ids.get_slice(start, end)
+            # [batch, limit]
+            tactic_logits = tf.einsum("ik,jk->ji", query_embs, key_embs)
+            if self.recent_proofstep_temp is not None:
+                tactic_logits = tactic_logits / self.recent_proofstep_temp
 
-        # [tactic_cxt, hdim]
-        key_embs = tf.gather(tac_embs, indices=tactic_ctx_ids, batch_dims=0)
+            all_tactic_embs.append(key_embs)
+            all_tactic_logits.append(tactic_logits)
+            all_tactic_ids.append(tactic_ids)
 
-        # TODO: Reduce option 1: Combine duplicate keys by summing or averaging
+        # [selected_tactics, hdim]
+        tactic_embs = tf.concat(all_tactic_embs, axis=0)
+        # [selected_tactics, batch]
+        tactic_logits = tf.concat(all_tactic_logits, axis=0)
+        # [selected_tactics, ]
+        tactic_ids = tf.concat(all_tactic_ids, axis=0)
 
-        # TODO: Don't assume that index and id are the same 
-        # [batch, tactic_cxt]
-        tactic_logits = tf.einsum("ik,jk->ij", query_embs, key_embs)
+        if self.reduction_type == "mean":
+            # Take the mean of all logits for the same tactic
+
+            # [output_tactics,], [selected_tactics, ]
+            tactic_ids, segment_ix = tf.unique(tactic_ids)
+            num_tactics = tf.shape(tactic_ids)[0]
+            # [output_tactics, batch]
+            tactic_logits = tf.math.unsorted_segment_mean(tactic_logits, segment_ix, num_tactics)
+            # [output_tactics, hdim]
+            tactic_embs = tf.math.unsorted_segment_mean(tactic_embs, segment_ix, num_tactics)
+            # [output_tactics, batch, hdim]
+            tactic_embs = tf.tile(tf.expand_dims(tactic_embs, axis=1), multiples=[1, batch_size, 1])
+            
+        elif self.reduction_type == "sum":
+            # Take the sum of all logits for the same tactic
+
+            # [output_tactics,], [selected_tactics, ]
+            tactic_ids, segment_ix = tf.unique(tactic_ids)
+            num_tactics = tf.shape(tactic_ids)[0]
+                        # [output_tactics, batch]
+            tactic_logits = tf.math.unsorted_segment_sum(tactic_logits, segment_ix, num_tactics)
+            # [output_tactics, hdim]
+            tactic_embs = tf.math.unsorted_segment_sum(tactic_embs, segment_ix, num_tactics)
+            # [output_tactics, batch, hdim]
+            tactic_embs = tf.tile(tf.expand_dims(tactic_embs, axis=1), multiples=[1, batch_size, 1])
         
-        # TODO: Reduce option 2: Take max of duplicate logits (and reduce keys)
-        # TODO: Reduce option 3: Take sum of duplicate logits (and sum keys?) (is this the same as option 1?)
-        # TODO: Reduce option 4: Run softmax on logits and sum probs (before converting back to logits) (taking a weighted average of the keys?)
+        elif self.reduction_type == "max":
+            # Take the logit with the highest value among all logits with the same tactic
+
+            # TODO: This requires a segment argmax to handle the embeddings.
+            # Only way I know is make a ragged tensor, expand to a tensor (with -inf for new values), and reduce with argmax
+            # seems expensive and complicated
+
+            # Another way, if I have a batch of 1 (which is what the code does right now), is to
+            # order the logits, and then use unique and unsorted_segment_max
+            # to find the last index in tf.range(...).
+
+            raise NotImplementedError("max reduction not implemented")
         
-        # [batch, tactic_cxt, hdim]
-        batch_key_embs = tf.tile(tf.expand_dims(key_embs, axis=0), multiples=[batch_size, 1, 1])
+        elif self.reduction_type == "softmax":
+            # Convert the logits to probabilities and then sum the probabilities across the same tactic
+            # Embeddings are a weighted average of the probabilities
+
+            # [output_tactics,], [selected_tactics, ]
+            tactic_ids, segment_ix = tf.unique(tactic_ids)
+            num_tactics = tf.shape(tactic_ids)[0]
+            # [selected_tactics, batch]
+            tactic_probs = tf.math.softmax(tactic_logits, axis=-1)
+            # [selected_tactics, batch, hdim]
+            tactic_embs = tf.tile(tf.expand_dims(tactic_embs, axis=1), multiples=[1, batch_size, 1])
+            tactic_embs = tactic_embs * tf.expand_dims(tactic_probs, axis=2)
+            # [output_tactics, batch]
+            tactic_probs = tf.math.unsorted_segment_sum(tactic_probs, segment_ix, num_tactics)
+            tactic_logits = tf.math.log(tactic_probs)
+            # [output_tactics, batch, hdim]
+            tactic_embs = tf.math.unsorted_segment_sum(tactic_embs, segment_ix, num_tactics)
+            tactic_embs = tactic_embs / tf.expand_dims(tactic_probs, axis=2)
         
-        # [tactic_cxt,]
+        elif self.reduction_type == "none":
+            # don't combine logits of the same tactic id
+
+            # [output_tactics, batch, hdim]
+            tactic_embs = tf.tile(tf.expand_dims(tactic_embs, axis=1), multiples=[1, batch_size, 1])
+
+
+        if self.use_learned_tactic_embeddings:
+            # use tactic embeddings from the learned embeddings if the tactic was seen during training
+            trained_tactic_cnt = tf.shape(self.trained_tactic_embeddings)[0]
+            # [output_tactics, ]
+            is_new_tactic_id = tactic_ids > trained_tactic_cnt
+            ids = tf.minimum(tactic_ids, trained_tactic_cnt-1)
+            # [output_tactics, hdim]
+            trained_tactic_embs = tf.gather(self.trained_tactic_embeddings, ids)
+            # [output_tactics, batch, hdim]
+            tactic_embs = tf.where(
+                tf.expand_dims(tf.expand_dims(is_new_tactic_id, axis=1), axis=2),
+                tactic_embs,
+                tf.expand_dims(trained_tactic_embs, axis=1)
+            )
+        
+        # [output_tactics,]
         # TODO: Better to avoid accessing _data directly so that not outside array length
-        tactic_cxt_arg_cnts = tf.gather(self.tactic_id_to_arg_count._data, tactic_ctx_ids)
+        tactic_arg_cnts = tf.gather(self.tactic_id_to_arg_count._data, tactic_ids)
 
-        # ([tactic_cxt, hdim], [batch, tactic_cxt, hdim], [tactic_cxt,])
-        return tactic_logits, batch_key_embs, tactic_cxt_arg_cnts
+        # [batch, output_tactics]
+        tactic_logits = tf.transpose(tactic_logits, perm=[1,0])
+        # [batch, output_tactics, hdim]
+        tactic_embs = tf.transpose(tactic_embs, perm=[1,0,2])
+
+        # ([batch, output_tactics], [batch, output_tactics, hdim], [output_tactics,], [output_tactics,])
+        return tactic_logits, tactic_embs, tactic_ids, tactic_arg_cnts
 
 
 class GlobalArgumentModel(tf.keras.Model):
@@ -895,7 +1012,7 @@ class QueryKeyMul(tf.keras.layers.Layer):
         If outer batch dim is 1 (which is often the case during inference),
         then compute inner product on value tensors directly.
         """
-        tf.assert_equal(tf.shape(keys)[0], 1)
+        tf.assert_equal(tf.shape(keys)[0], 1, "_mul_singleton_batch requires a batch size of 1")
 
         query_values = queries.values  # [args, hdim]
         key_values = keys.values  # [context, hdim]
@@ -1342,13 +1459,10 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
 
         # [tactic_cxt]  (keras.Input adds a batch dimension to the front which in our case is tactic_cxt)
         tactic_cxt_ids = tf.keras.Input(shape=tuple(), dtype=tf.int32, name=self.TACTIC_IDS)
-        # scalar
-        tactic_cxt = tf.shape(tactic_cxt_ids)[0]
-        
         # [batch_size, hdim], ...
         tactic_query_embs, hidden_graph = self._tactic_embeddings_and_hidden_graph(scalar_proofstate_graph)
-        # [batch_size, tactic_cxt], [batch_size, tactic_cxt, hdim]
-        tactic_logits, tactic_key_embs, tactic_cxt_arg_cnts = tactic_inference_task._tactic_logits(query_embs=tactic_query_embs, tactic_ctx_ids=tactic_cxt_ids)     
+        # [batch_size, tactic_logits], [batch_size, tactic_logits, hdim], [tactic_logits,], [tactic_logits,]
+        tactic_logits, tactic_logit_embs, tactic_logit_ids, tactic_logit_arg_cnts = tactic_inference_task._tactic_logits(query_embs=tactic_query_embs, tactic_ctx_ids=tactic_cxt_ids)     
 
         # During argument prediction, the model crashes
         # where there no local or global context, but we choose tactics which take arguments.
@@ -1360,10 +1474,10 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
         no_local_context_proofstates = scalar_proofstate_graph.context['local_context_ids'].row_lengths() == 0
         no_global_context_proofstates = scalar_proofstate_graph.context['global_context_ids'].row_lengths() == 0
         no_context_proofstates = no_local_context_proofstates & no_global_context_proofstates
-        # TODO: How should this data be supplied to the model.  Should it be an input?
-        no_argument_tactics_mask = (tactic_cxt_arg_cnts == 0)
-        all_tactics_mask = tf.ones(tactic_cxt, dtype=tf.bool)
-        # [batch_size, tactic_cxt]
+        # [tactic_logits,]
+        no_argument_tactics_mask = (tactic_logit_arg_cnts == 0)
+        all_tactics_mask = tf.ones(tf.shape(tactic_logit_ids)[0], dtype=tf.bool)
+        # [batch_size, tactic_logits]
         proofstate_tactic_mask = tf.where(
             tf.expand_dims(no_context_proofstates, axis=-1),
             tf.expand_dims(no_argument_tactics_mask, axis=0),
@@ -1376,10 +1490,10 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
             tactic_expand_bound=tactic_expand_bound,
         )
         # [batch_size, top_k_tactics]
-        tactic = tf.gather(tactic_cxt_ids, tactic_ix, batch_dims=0)
-        tactic_arg_cnt = tf.gather(tactic_cxt_arg_cnts, tactic_ix, batch_dims=0)
+        tactic = tf.gather(tactic_logit_ids, tactic_ix, batch_dims=0)
+        tactic_arg_cnt = tf.gather(tactic_logit_arg_cnts, tactic_ix, batch_dims=0)
         # [batch_size, top_k_tactics, hdim]
-        tactic_embs = tf.gather(tactic_key_embs, tactic_ix, batch_dims=1)
+        tactic_embs = tf.gather(tactic_logit_embs, tactic_ix, batch_dims=1)
 
         # Tactic Argument Prediction
 
