@@ -433,18 +433,23 @@ class TacticInferenceTask(tf.keras.layers.Layer):
     def __init__(
         self,
         graph_constants: GraphConstants,
+        tactic_head: tf.keras.layers.Layer,
         tactic_logits_from_embeddings: LogitsFromEmbeddings,
+        hidden_state_dim: int,
         initial_tensor_size: int = 1024,
         recent_proofstep_limit: int = 0,
         recent_proofstep_use_tactic_head = True,
         recent_proofstep_temp: Optional[float] = None,
         select_from_learned_tactics: bool = True,
         reduction_type: str = "none",
-        use_learned_tactic_embeddings: bool = True,
+        use_learned_tactic_embeddings: bool = False,
         name="tactic_inference",
         **kwargs
     ):
         super().__init__(name=name, **kwargs)
+
+        # this is the tactic head stored in the prediction_task
+        self.tactic_head = tactic_head
 
         self.recent_proofstep_use_tactic_head = recent_proofstep_use_tactic_head
         self.recent_proofstep_temp = recent_proofstep_temp
@@ -458,9 +463,15 @@ class TacticInferenceTask(tf.keras.layers.Layer):
 
         # the original trained tactic embeddings
         assert not tactic_logits_from_embeddings._cosine_similarity
-        # [tactics, hdim]
+        # [tactics, tac_hdim]
         self.trained_tactic_embeddings = tactic_logits_from_embeddings._embedding_matrix
-        hdim = tf.shape(self.trained_tactic_embeddings)[1]
+    
+        if self.recent_proofstep_use_tactic_head:
+            # store tactic embeddings (after tactic head)
+            hdim = tf.shape(self.trained_tactic_embeddings)[1]
+        else:
+            # store hidden state (before tactic head)
+            hdim = hidden_state_dim
 
         # the arg counts for all tactics (old and new)
         self.tactic_id_to_arg_count = ResizableArray(value_shape=tuple(), value_dtype=tf.int64, init_tensor_size=len(graph_constants.tactic_index_to_numargs) + initial_tensor_size)
@@ -486,27 +497,48 @@ class TacticInferenceTask(tf.keras.layers.Layer):
     ) -> int:
         self.tactic_id_to_arg_count.push_values(tactic_arg_cnts)
         return self.tactic_id_to_arg_count.length
+    
+    def calc_and_store_tactic_embs(
+        self,
+        hidden_state: tf.Tensor,  # [batch, hdim]
+        tactic_ids: tf.Tensor,  # [batch,]
+    ) -> int:
+        if self.recent_proofstep_use_tactic_head:
+            # run the tactic head to get the embedding
+            # [batch, hdim]
+            tactic_embs = self.tactic_head(hidden_state)
+        else:
+            # use the embedding before the tactic head
+            # TODO(jrute): Consider caching the tactic head output in this case to
+            # avoid recomputing it every proofstate of the search
+            # [batch, embs]
+            tactic_embs = hidden_state
+        
+        return self.store_tactic_embs(tactic_embs=tactic_embs, tactic_ids=tactic_ids)
         
     def _tactic_logits(
         self,
-        query_embs: tf.Tensor,  # [batch, hdim]
+        hidden_state: tf.Tensor,  # [batch, hdim]
         tactic_ctx_ids: tf.Tensor,  # [tactic_cxt, ]
-    ) -> Tuple[tf.Tensor, tf.Tensor, tf.Tensor, tf.Tensor]:  # ([batch, logits], [batch, logits, hdim], [logits,], [logits,])
+    ) -> Tuple[tf.Tensor, tf.Tensor, tf.Tensor, tf.Tensor]:  # ([batch, logits], [batch, logits, tac_hdim], [logits,], [logits,])
         """
         Calculate tactic logits.
         
         Takes into account that some tactics may appear more than once in the key table,
         so it returns the key table with the appropriate key for each logit.
         """
-        batch_size = tf.shape(query_embs)[0]
+        batch_size = tf.shape(hidden_state)[0]
 
+        # [batch, tac_hdim]
+        query_embs = self.tactic_head(hidden_state)
+        
         all_tactic_embs = []
         all_tactic_logits = []
         all_tactic_ids = []
         if self.select_from_learned_tactics:
-            # [tactics, hdim]
+            # [tactics, tac_hdim]
             tac_embs = self.trained_tactic_embeddings
-            # [tactic_cxt, hdim]
+            # [tactic_cxt, tac_hdim]
             key_embs = tf.gather(tac_embs, indices=tactic_ctx_ids, batch_dims=0)
             # [tactic_cxt, batch]
             tactic_logits = tf.einsum("ik,jk->ji", query_embs, key_embs)
@@ -516,6 +548,13 @@ class TacticInferenceTask(tf.keras.layers.Layer):
             all_tactic_ids.append(tactic_ctx_ids)
 
         if self.recent_proofstep_limit:
+            if self.recent_proofstep_use_tactic_head:
+                # [batch, tac_hdim]
+                query_embs_ = query_embs
+            else:
+                # [batch, hidden_hdim]
+                query_embs_ = hidden_state
+
             end = self.proof_step_embeddings.length
             start = tf.maximum(0, end - self.recent_proofstep_limit)
             # [limit, hdim]
@@ -523,15 +562,25 @@ class TacticInferenceTask(tf.keras.layers.Layer):
             # [limit,]
             tactic_ids = self.proof_step_tactic_ids.get_slice(start, end)
             # [batch, limit]
-            tactic_logits = tf.einsum("ik,jk->ji", query_embs, key_embs)
+            tactic_logits = tf.einsum("ik,jk->ji", query_embs_, key_embs)
+            
             if self.recent_proofstep_temp is not None:
                 tactic_logits = tactic_logits / self.recent_proofstep_temp
-
+            
+            if self.recent_proofstep_use_tactic_head:
+                # [limit, tac_hdim]
+                tactic_embs = key_embs
+            else:
+                # returned embs should be the ones after the tactic head
+                # regardless of which ones were used for the key embeddings
+                # [limit, tac_hdim]
+                tactic_embs = self.tactic_head(key_embs)
+            
             all_tactic_embs.append(key_embs)
             all_tactic_logits.append(tactic_logits)
             all_tactic_ids.append(tactic_ids)
 
-        # [selected_tactics, hdim]
+        # [selected_tactics, tac_hdim]
         tactic_embs = tf.concat(all_tactic_embs, axis=0)
         # [selected_tactics, batch]
         tactic_logits = tf.concat(all_tactic_logits, axis=0)
@@ -546,9 +595,9 @@ class TacticInferenceTask(tf.keras.layers.Layer):
             num_tactics = tf.shape(tactic_ids)[0]
             # [output_tactics, batch]
             tactic_logits = tf.math.unsorted_segment_mean(tactic_logits, segment_ix, num_tactics)
-            # [output_tactics, hdim]
+            # [output_tactics, tac_hdim]
             tactic_embs = tf.math.unsorted_segment_mean(tactic_embs, segment_ix, num_tactics)
-            # [output_tactics, batch, hdim]
+            # [output_tactics, batch, tac_hdim]
             tactic_embs = tf.tile(tf.expand_dims(tactic_embs, axis=1), multiples=[1, batch_size, 1])
             
         elif self.reduction_type == "sum":
@@ -559,9 +608,9 @@ class TacticInferenceTask(tf.keras.layers.Layer):
             num_tactics = tf.shape(tactic_ids)[0]
             # [output_tactics, batch]
             tactic_logits = tf.math.unsorted_segment_sum(tactic_logits, segment_ix, num_tactics)
-            # [output_tactics, hdim]
+            # [output_tactics, tac_hdim]
             tactic_embs = tf.math.unsorted_segment_sum(tactic_embs, segment_ix, num_tactics)
-            # [output_tactics, batch, hdim]
+            # [output_tactics, batch, tac_hdim]
             tactic_embs = tf.tile(tf.expand_dims(tactic_embs, axis=1), multiples=[1, batch_size, 1])
         
         elif self.reduction_type == "max":
@@ -590,11 +639,11 @@ class TacticInferenceTask(tf.keras.layers.Layer):
             # [output_tactics,]
             sorted_ixs = tf.gather(sorted_ixs, indices=ixs)
             tactic_logits = tf.gather(tactic_logits, indices=sorted_ixs)
-            # [output_tactics, hdim]
+            # [output_tactics, tac_hdim]
             tactic_embs = tf.gather(tactic_embs, indices=sorted_ixs)
             # [output_tactics, batch,]
             tactic_logits = tf.expand_dims(tactic_logits, axis=1)
-            # [output_tactics, batch, hdim]
+            # [output_tactics, batch, tac_hdim]
             tactic_embs = tf.expand_dims(tactic_embs, axis=1)
         
         elif self.reduction_type == "softmax":
@@ -606,20 +655,20 @@ class TacticInferenceTask(tf.keras.layers.Layer):
             num_tactics = tf.shape(tactic_ids)[0]
             # [selected_tactics, batch]
             tactic_probs = tf.math.softmax(tactic_logits, axis=-1)
-            # [selected_tactics, batch, hdim]
+            # [selected_tactics, batch, tac_hdim]
             tactic_embs = tf.tile(tf.expand_dims(tactic_embs, axis=1), multiples=[1, batch_size, 1])
             tactic_embs = tactic_embs * tf.expand_dims(tactic_probs, axis=2)
             # [output_tactics, batch]
             tactic_probs = tf.math.unsorted_segment_sum(tactic_probs, segment_ix, num_tactics)
             tactic_logits = tf.math.log(tactic_probs)
-            # [output_tactics, batch, hdim]
+            # [output_tactics, batch, tac_hdim]
             tactic_embs = tf.math.unsorted_segment_sum(tactic_embs, segment_ix, num_tactics)
             tactic_embs = tactic_embs / tf.expand_dims(tactic_probs, axis=2)
         
         elif self.reduction_type == "none":
             # don't combine logits of the same tactic id
 
-            # [output_tactics, batch, hdim]
+            # [output_tactics, batch, tac_hdim]
             tactic_embs = tf.tile(tf.expand_dims(tactic_embs, axis=1), multiples=[1, batch_size, 1])
         else:
             raise ValueError(f"Reduction type: {self.reduction_type}")
@@ -630,9 +679,9 @@ class TacticInferenceTask(tf.keras.layers.Layer):
             # [output_tactics, ]
             is_new_tactic_id = tactic_ids > trained_tactic_cnt
             ids = tf.minimum(tactic_ids, trained_tactic_cnt-1)
-            # [output_tactics, hdim]
+            # [output_tactics, tac_hdim]
             trained_tactic_embs = tf.gather(self.trained_tactic_embeddings, ids)
-            # [output_tactics, batch, hdim]
+            # [output_tactics, batch, tac_hdim]
             tactic_embs = tf.where(
                 tf.expand_dims(tf.expand_dims(is_new_tactic_id, axis=1), axis=2),
                 tactic_embs,
@@ -644,23 +693,23 @@ class TacticInferenceTask(tf.keras.layers.Layer):
 
         # [batch, output_tactics]
         tactic_logits = tf.transpose(tactic_logits, perm=[1,0])
-        # [batch, output_tactics, hdim]
+        # [batch, output_tactics, tac_hdim]
         tactic_embs = tf.transpose(tactic_embs, perm=[1,0,2])
 
-        # ([batch, output_tactics], [batch, output_tactics, hdim], [output_tactics,], [output_tactics,])
+        # ([batch, output_tactics], [batch, output_tactics, tac_hdim], [output_tactics,], [output_tactics,])
         return tactic_logits, tactic_embs, tactic_ids, tactic_arg_cnts
 
     def call(
         self,
-        query_embs: tf.Tensor,  # [batch, hdim]
+        hidden_state: tf.Tensor,  # [batch, hdim]
         tactic_ctx_ids: tf.Tensor,  # [tactic_cxt, ]
-    ) -> Tuple[tf.Tensor, tf.Tensor, tf.Tensor, tf.Tensor]: 
+    ) -> Tuple[tf.Tensor, tf.Tensor, tf.Tensor, tf.Tensor]:  # ([batch, logits], [batch, logits, tac_hdim], [logits,], [logits,]) 
         # certain behaviors require passing through a call function to work properly:
         # - using the variables in our resizable arrays
         # - the asserts in teh resizable arrays
         # - if ... else ... logic (which we may incorporate later)
         # I believe it "converts" keras tensors into tf tensors
-        return self._tactic_logits(query_embs=query_embs, tactic_ctx_ids=tactic_ctx_ids)
+        return self._tactic_logits(hidden_state=hidden_state, tactic_ctx_ids=tactic_ctx_ids)
 
 
 class GlobalArgumentModel(tf.keras.Model):
@@ -895,19 +944,13 @@ class TacticPrediction(PredictionTask):
         # ([batch, top_k_tactics], [batch, top_k_tactics])
         return top_k.indices, top_k.values
 
-    def _tactic_embeddings_and_hidden_graph(
+    def _hidden_graph(
         self,
         scalar_proofstate_graph: tfgnn.GraphTensor
-    ) -> Tuple[tf.Tensor, tfgnn.GraphTensor]:
+    ) -> tfgnn.GraphTensor:
         bare_graph = strip_graph(scalar_proofstate_graph)
         embedded_graph = self.graph_embedding(bare_graph)  # noqa [ PyCallingNonCallable ]
-        hidden_graph = self.gnn(embedded_graph)
-        
-        # [batch_size, hdim]
-        tactic_embedding = self.tactic_head(hidden_graph)
-        
-        # [batch_size, hdim], ...
-        return tactic_embedding, hidden_graph
+        return self.gnn(embedded_graph)
 
     def get_config(self):
         config = super().get_config()
@@ -1481,8 +1524,9 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
                                                  name=self.PROOFSTATE_GRAPH)
         scalar_proofstate_graph = proofstate_graph.merge_batch_to_components()
 
-        # [batch, hdim], ...
-        tactic_embeddings, hidden_graph = self._tactic_embeddings_and_hidden_graph(scalar_proofstate_graph)
+        hidden_graph = self._hidden_graph(scalar_proofstate_graph)
+        # [batch_size, hdim]
+        tactic_embeddings = self.tactic_head(hidden_graph.context['hidden_state'])
         # [batch, tactic_num]
         tactic_logits = self.tactic_logits_from_embeddings(tactic_embeddings)
 
@@ -1535,10 +1579,13 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
 
         # [tactic_cxt]  (keras.Input adds a batch dimension to the front which in our case is tactic_cxt)
         tactic_cxt_ids = tf.keras.Input(shape=tuple(), dtype=tf.int32, name=self.TACTIC_IDS)
-        # [batch_size, hdim], ...
-        tactic_query_embs, hidden_graph = self._tactic_embeddings_and_hidden_graph(scalar_proofstate_graph)
+        hidden_graph = self._hidden_graph(scalar_proofstate_graph)
+        
         # [batch_size, tactic_logits], [batch_size, tactic_logits, hdim], [tactic_logits,], [tactic_logits,]
-        tactic_logits, tactic_logit_embs, tactic_logit_ids, tactic_logit_arg_cnts = tactic_inference_task(query_embs=tactic_query_embs, tactic_ctx_ids=tactic_cxt_ids)     
+        tactic_logits, tactic_logit_embs, tactic_logit_ids, tactic_logit_arg_cnts = tactic_inference_task(
+            hidden_state=hidden_graph.context['hidden_state'], 
+            tactic_ctx_ids=tactic_cxt_ids
+        )     
 
         # During argument prediction, the model crashes
         # where there no local or global context, but we choose tactics which take arguments.

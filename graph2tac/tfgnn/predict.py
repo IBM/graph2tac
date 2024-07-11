@@ -587,7 +587,9 @@ class TFGNNPredict(Predict):
         # create tactic inference task
         self.tactic_inference_task = TacticInferenceTask(
             graph_constants=graph_constants,
+            tactic_head=self.prediction_task.tactic_head,
             tactic_logits_from_embeddings=self.prediction_task.tactic_logits_from_embeddings,
+            hidden_state_dim=self.prediction_task._hidden_size
         )
 
         # create definition task
@@ -700,8 +702,11 @@ class TFGNNPredict(Predict):
             graph_tensor_single = self._make_proofstate_graph_tensor(state)
             graph_tensor_stacked = stack_graph_tensors([graph_tensor_single])
             graph_tensor_stacked = graph_tensor_stacked.merge_batch_to_components()
-            embs, _ = self.prediction_task._tactic_embeddings_and_hidden_graph(graph_tensor_stacked)
-            self.tactic_inference_task.store_tactic_embs(embs, [tactic_id])
+            hidden_graph = self.prediction_task._hidden_graph(graph_tensor_stacked)
+            self.tactic_inference_task.calc_and_store_tactic_embs(
+                hidden_state=hidden_graph.context['hidden_state'],
+                tactic_ids=[tactic_id]
+            )
         self._compute_and_push_proofstate_tactic = compute_and_push_proofstate_tactic
         
         @tf.function(input_signature = (tf.TensorSpec(shape=(None, ), dtype=tf.int64), ))

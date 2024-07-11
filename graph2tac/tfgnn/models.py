@@ -802,7 +802,7 @@ class GCNConvolutionGNN(tf.keras.layers.Layer):
 class DenseTacticHead(tf.keras.layers.Layer):
     """
     Tactic head composed of a series of dense hidden layers
-        - inputs should match the `hidden_graph_spec` in `graph_schema.py`.
+        - inputs should match the `hidden_state` in the `hidden_graph_spec` in `graph_schema.py`.
         - outputs a tensor with logits for each base tactic
     """
 
@@ -836,11 +836,9 @@ class DenseTacticHead(tf.keras.layers.Layer):
         return config
 
     def call(self,
-             hidden_graph: tfgnn.GraphTensor,
+             hidden_state: tf.Tensor,
              training: bool = False
              ) -> tf.Tensor:
-        hidden_state = hidden_graph.context['hidden_state']
-
         for hidden_layer in self._hidden_layers:
             hidden_state = hidden_layer(hidden_state, training=training)
 
