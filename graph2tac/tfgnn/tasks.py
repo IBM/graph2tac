@@ -264,7 +264,7 @@ class ResizableArray(tf.keras.layers.Layer):
     **NB: Resizing will require recompiling any `@tf.function` functions which use this layer!**
     
     To prevent accidentally using a compiled resized array or accessing data outside the bounds of the array,
-    use the accessors `get_value` and `get_slice` instead of the underlying tensor.
+    use the accessors `get_value`, `get_slice`, and `gather` instead of the underlying tensor.
     The accessors will throw out-of-bound errors
     as well as errors when calling a previously compiled function after resizing.
     """
@@ -299,7 +299,6 @@ class ResizableArray(tf.keras.layers.Layer):
         
         NB: **Must recompile any `@tf.function` functions after resizing!**
         """
-        print(new_size, self._tensor_size(), self.length)
         assert new_size >= self._tensor_size()
         new_data = tf.zeros(
             shape=(new_size - self._tensor_size(),) + self._value_shape,
@@ -323,47 +322,15 @@ class ResizableArray(tf.keras.layers.Layer):
         else:
             return False
 
-    def set_array_data(
-        self,
-        data: tf.Tensor  # shape: [length,] + value_shape
-    ):
-        assert tf.shape(data)[0] <= self._tensor_size()
-        length = tf.shape(data)[0]
-        self._data.scatter_update(
-            tf.IndexedSlices(
-                data,
-                tf.range(length),
-            )
+    def _assert_size_bounds(self, end: int):
+        return tf.assert_less(
+            end,
+            self._tensor_size() + 1,
+            message="Out of bounds: Inserting a value past the size of the underlying tensor."
         )
-        self.length.assign(length)
     
-    def push_values(
-        self,
-        values: tf.Tensor  # shape: [length_increase,] + value_shape
-    ):
-        new_length = self.length + tf.shape(values)[0]
-        assert new_length <= self._tensor_size(), f"Pushing a value past the size of the underlying tensor {self._tensor_size()}"
-        self._data.scatter_update(
-            tf.IndexedSlices(
-                values,
-                tf.range(self.length, new_length),
-            )
-        )
-        self.length.assign_add(tf.shape(values)[0])
-
-    def push_value(
-        self,
-        value: tf.Tensor  # shape: value_shape
-    ):
-        self.push_values([value])
-
-    def pop_until_length(self, length: int):
-        """Reduce the length of the array.  Has effect of popping all elements after the length."""
-        assert length <= self.length, f"Length after popping is larger than the current length."
-        self.length.assign(length)
-
     def _assert_valid(self):
-        tf.assert_equal(
+        return tf.assert_equal(
             self._valid,
             True,
             message=(
@@ -373,29 +340,89 @@ class ResizableArray(tf.keras.layers.Layer):
         )
     
     def _assert_bounds(self, start: int, end: int):
-        tf.assert_greater(
-            start,
-            -1,
-            message="Out of bounds: Negative indexing not supported."
-        )
-        tf.assert_less(
-            end,
-            self.length + 1,
-            message="Out of bounds: Accessing value past the length of the array."
-        )
+        with tf.control_dependencies([
+            tf.assert_greater(
+                start,
+                -1,
+                message="Out of bounds: Negative indexing not supported."
+            )
+        ]):
+            return tf.assert_less(
+                end,
+                self.length + 1,
+                message="Out of bounds: Accessing value past the length of the array."
+            )
+    
+    def set_array_data(
+        self,
+        data: tf.Tensor  # shape: [length,] + value_shape
+    ):
+        length = tf.shape(data)[0]
+        with tf.control_dependencies([
+            self._assert_valid(),
+            self._assert_size_bounds(length)
+        ]):
+            self._data.scatter_update(
+                tf.IndexedSlices(
+                    tf.cast(data, dtype=self._value_dtype),
+                    tf.range(length),
+                )
+            )
+            self.length.assign(length)
+    
+    def push_values(
+        self,
+        values: tf.Tensor  # shape: [length_increase,] + value_shape
+    ):
+        new_length = self.length + tf.shape(values)[0]
+        with tf.control_dependencies([
+            self._assert_valid(),
+            self._assert_size_bounds(new_length)
+        ]):
+            self._data.scatter_update(
+                tf.IndexedSlices(
+                    tf.cast(values, dtype=self._value_dtype),
+                    tf.range(self.length, new_length),
+                )
+            )
+            self.length.assign_add(tf.shape(values)[0])
+
+    def push_value(
+        self,
+        value: tf.Tensor  # shape: value_shape
+    ):
+        self.push_values([value])
+
+    def pop_until_length(self, length: int):
+        """Reduce the length of the array.  Has effect of popping all elements after the length."""
+        with tf.control_dependencies([
+            self._assert_valid(),
+            self._assert_bounds(0, length),
+        ]):
+            self.length.assign(length)
 
     def get_value(self, ix: int):
         """Get value from the array.  (ix < self.length)"""
-        self._assert_valid()
-        self._assert_bounds(ix, ix+1)
-
-        return self._data[ix]
+        with tf.control_dependencies([
+            self._assert_valid(),
+            self._assert_bounds(ix, ix+1),
+        ]):
+            return self._data[ix]
     
     def get_slice(self, start: int, end: int):
-        self._assert_valid()
-        self._assert_bounds(start, end)
-        
-        return self._data[start:end]
+        with tf.control_dependencies([
+            self._assert_valid(),
+            self._assert_bounds(start, end),
+        ]):
+            return self._data[start:end]
+    
+    def gather(self, indices, **kwargs):
+        with tf.control_dependencies([self._assert_valid()]):
+            return tf.gather(
+                params=self.get_slice(0, self.length),
+                indices=indices,
+                **kwargs
+            )
 
 
 class TacticInferenceTask(tf.keras.layers.Layer):
@@ -413,7 +440,7 @@ class TacticInferenceTask(tf.keras.layers.Layer):
         recent_proofstep_temp: Optional[float] = None,
         select_from_learned_tactics: bool = True,
         reduction_type: str = "none",
-        use_learned_tactic_embeddings: bool = False,
+        use_learned_tactic_embeddings: bool = True,
         name="tactic_inference",
         **kwargs
     ):
@@ -444,6 +471,22 @@ class TacticInferenceTask(tf.keras.layers.Layer):
         self.proof_step_embeddings = ResizableArray(value_shape=(hdim,), value_dtype=tf.float32, init_tensor_size=initial_tensor_size)
         self.proof_step_tactic_ids = ResizableArray(value_shape=tuple(), value_dtype=tf.int32, init_tensor_size=initial_tensor_size)
 
+    def store_tactic_embs(
+        self,
+        tactic_embs: tf.Tensor,  # [batch, hdim]
+        tactic_ids: tf.Tensor,  # [batch,]
+    ) -> int:
+        self.proof_step_embeddings.push_values(tactic_embs)
+        self.proof_step_tactic_ids.push_values(tactic_ids)
+        return self.proof_step_tactic_ids.length
+
+    def store_new_tactic_arg_cnts(
+        self,
+        tactic_arg_cnts: tf.Tensor,  # [batch,]
+    ) -> int:
+        self.tactic_id_to_arg_count.push_values(tactic_arg_cnts)
+        return self.tactic_id_to_arg_count.length
+        
     def _tactic_logits(
         self,
         query_embs: tf.Tensor,  # [batch, hdim]
@@ -514,7 +557,7 @@ class TacticInferenceTask(tf.keras.layers.Layer):
             # [output_tactics,], [selected_tactics, ]
             tactic_ids, segment_ix = tf.unique(tactic_ids)
             num_tactics = tf.shape(tactic_ids)[0]
-                        # [output_tactics, batch]
+            # [output_tactics, batch]
             tactic_logits = tf.math.unsorted_segment_sum(tactic_logits, segment_ix, num_tactics)
             # [output_tactics, hdim]
             tactic_embs = tf.math.unsorted_segment_sum(tactic_embs, segment_ix, num_tactics)
@@ -523,16 +566,36 @@ class TacticInferenceTask(tf.keras.layers.Layer):
         
         elif self.reduction_type == "max":
             # Take the logit with the highest value among all logits with the same tactic
+            # Also take the embedding for that logit
+            # Only works for batch size of 1 right now
+            tf.assert_equal(batch_size, 1, "reduction type  'max' requires having a batch size of 1")
 
-            # TODO: This requires a segment argmax to handle the embeddings.
-            # Only way I know is make a ragged tensor, expand to a tensor (with -inf for new values), and reduce with argmax
-            # seems expensive and complicated
+            # [selected_tactics,]
+            selected_tactics_size = tf.shape(tactic_logits)[0]
+            tactic_logits = tf.reshape(tactic_logits, shape=(selected_tactics_size,))
+            tactic_ids = tf.reshape(tactic_ids, shape=(selected_tactics_size,))
+            
+            # [selected_tactics_sorted]
+            sorted_ixs = tf.argsort(tactic_logits)
+            # [selected_tactics_sorted]
+            tactic_ids = tf.gather(tactic_ids, indices=sorted_ixs)
 
-            # Another way, if I have a batch of 1 (which is what the code does right now), is to
-            # order the logits, and then use unique and unsorted_segment_max
-            # to find the last index in tf.range(...).
-
-            raise NotImplementedError("max reduction not implemented")
+            # [output_tactics,], [selected_tactics_sorted, ]
+            tactic_ids, segment_ix = tf.unique(tactic_ids)
+            num_tactics = tf.shape(tactic_ids)[0]
+            # [selected_tactics_sorted, ]
+            ixs = tf.range(tf.shape(segment_ix)[0], dtype=tf.int32)
+            # [output_tactics,]
+            ixs = tf.math.unsorted_segment_max(ixs, segment_ix, num_tactics)
+            # [output_tactics,]
+            sorted_ixs = tf.gather(sorted_ixs, indices=ixs)
+            tactic_logits = tf.gather(tactic_logits, indices=sorted_ixs)
+            # [output_tactics, hdim]
+            tactic_embs = tf.gather(tactic_embs, indices=sorted_ixs)
+            # [output_tactics, batch,]
+            tactic_logits = tf.expand_dims(tactic_logits, axis=1)
+            # [output_tactics, batch, hdim]
+            tactic_embs = tf.expand_dims(tactic_embs, axis=1)
         
         elif self.reduction_type == "softmax":
             # Convert the logits to probabilities and then sum the probabilities across the same tactic
@@ -558,7 +621,8 @@ class TacticInferenceTask(tf.keras.layers.Layer):
 
             # [output_tactics, batch, hdim]
             tactic_embs = tf.tile(tf.expand_dims(tactic_embs, axis=1), multiples=[1, batch_size, 1])
-
+        else:
+            raise ValueError(f"Reduction type: {self.reduction_type}")
 
         if self.use_learned_tactic_embeddings:
             # use tactic embeddings from the learned embeddings if the tactic was seen during training
@@ -576,8 +640,7 @@ class TacticInferenceTask(tf.keras.layers.Layer):
             )
         
         # [output_tactics,]
-        # TODO: Better to avoid accessing _data directly so that not outside array length
-        tactic_arg_cnts = tf.gather(self.tactic_id_to_arg_count._data, tactic_ids)
+        tactic_arg_cnts = self.tactic_id_to_arg_count.gather(tactic_ids)
 
         # [batch, output_tactics]
         tactic_logits = tf.transpose(tactic_logits, perm=[1,0])
@@ -586,6 +649,18 @@ class TacticInferenceTask(tf.keras.layers.Layer):
 
         # ([batch, output_tactics], [batch, output_tactics, hdim], [output_tactics,], [output_tactics,])
         return tactic_logits, tactic_embs, tactic_ids, tactic_arg_cnts
+
+    def call(
+        self,
+        query_embs: tf.Tensor,  # [batch, hdim]
+        tactic_ctx_ids: tf.Tensor,  # [tactic_cxt, ]
+    ) -> Tuple[tf.Tensor, tf.Tensor, tf.Tensor, tf.Tensor]: 
+        # certain behaviors require passing through a call function to work properly:
+        # - using the variables in our resizable arrays
+        # - the asserts in teh resizable arrays
+        # - if ... else ... logic (which we may incorporate later)
+        # I believe it "converts" keras tensors into tf tensors
+        return self._tactic_logits(query_embs=query_embs, tactic_ctx_ids=tactic_ctx_ids)
 
 
 class GlobalArgumentModel(tf.keras.Model):
@@ -767,6 +842,7 @@ class TacticPrediction(PredictionTask):
     TACTIC: str = 'tactic'
     TACTIC_LOGITS = 'tactic_logits'
     TACTIC_IDS = 'tactic_ids'
+    TACTIC_ARG_CNTS = 'tactic_arg_cnts'
 
     def __init__(self,
                  tactic_embedding_size: int,
@@ -1462,7 +1538,7 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
         # [batch_size, hdim], ...
         tactic_query_embs, hidden_graph = self._tactic_embeddings_and_hidden_graph(scalar_proofstate_graph)
         # [batch_size, tactic_logits], [batch_size, tactic_logits, hdim], [tactic_logits,], [tactic_logits,]
-        tactic_logits, tactic_logit_embs, tactic_logit_ids, tactic_logit_arg_cnts = tactic_inference_task._tactic_logits(query_embs=tactic_query_embs, tactic_ctx_ids=tactic_cxt_ids)     
+        tactic_logits, tactic_logit_embs, tactic_logit_ids, tactic_logit_arg_cnts = tactic_inference_task(query_embs=tactic_query_embs, tactic_ctx_ids=tactic_cxt_ids)     
 
         # During argument prediction, the model crashes
         # where there no local or global context, but we choose tactics which take arguments.
@@ -1491,7 +1567,7 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
         )
         # [batch_size, top_k_tactics]
         tactic = tf.gather(tactic_logit_ids, tactic_ix, batch_dims=0)
-        tactic_arg_cnt = tf.gather(tactic_logit_arg_cnts, tactic_ix, batch_dims=0)
+        tactic_arg_cnts = tf.gather(tactic_logit_arg_cnts, tactic_ix, batch_dims=0)
         # [batch_size, top_k_tactics, hdim]
         tactic_embs = tf.gather(tactic_logit_embs, tactic_ix, batch_dims=1)
 
@@ -1514,13 +1590,13 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
         # [batch*top_k_tactics, None(args), hdim]
         hidden_state_sequences = self._hidden_state_sequences_inference(
             hidden_graph=hidden_graph,
-            tactic_arg_cnt=tactic_arg_cnt,
+            tactic_arg_cnt=tactic_arg_cnts,
             tactic_embs=tactic_embs,
         )
         # [batch*top_k_tactics]
-        tactic_arg_cnt = hidden_state_sequences.row_lengths()
+        tactic_arg_cnt_flat = tf.reshape(tactic_arg_cnts, shape=(batch_size*top_k_tactics_cnt,))
         # [batch]
-        batch_arg_cnt = tf.reduce_sum(tf.reshape(tactic_arg_cnt, shape=[batch_size, top_k_tactics_cnt]), axis=-1)
+        batch_arg_cnt = tf.reduce_sum(tactic_arg_cnts, axis=-1)
         
         # [batch*top_k_tactics, None(args), hdim]
         local_hidden_state_sequences = self.local_arguments_head(hidden_state_sequences)
@@ -1534,7 +1610,7 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
         # [batch*top_k_tactics, None(args), None(context)]
         local_arguments_logits = tf.RaggedTensor.from_row_lengths(
             values=local_arguments_logits.values,  # [batch-tactic-arg, None(context)]
-            row_lengths=tactic_arg_cnt
+            row_lengths=tactic_arg_cnt_flat
         )
         
         # [batch*top_k_tactics, None(args), hdim]
@@ -1549,11 +1625,12 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
         # [batch*top_k_tactics, None(args), None(context)]
         global_arguments_logits = tf.RaggedTensor.from_row_lengths(
             values=global_arguments_logits.values,  # [batch-tactic-arg, None(context)]
-            row_lengths=tactic_arg_cnt
+            row_lengths=tactic_arg_cnt_flat
         )
 
         return tf.keras.Model(inputs={self.PROOFSTATE_GRAPH: proofstate_graph, self.TACTIC_IDS: tactic_cxt_ids},
                               outputs={self.TACTIC: tactic,  # [batch, top_k_tactics]
+                                       self.TACTIC_ARG_CNTS: tactic_arg_cnts,  # [batch, top_k_tactics]
                                        self.TACTIC_LOGITS: top_k_values,  # [batch, top_k_tactics]
                                        self.LOCAL_ARGUMENTS_LOGITS: local_arguments_logits,  # [batch*top_k_tactics, None(args), None(context)]
                                        self.GLOBAL_ARGUMENTS_LOGITS: global_arguments_logits})  # [batch*top_k_tactics, None(args), None(context)]

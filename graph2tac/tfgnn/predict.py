@@ -184,9 +184,8 @@ class SelectBestResults(tf.keras.layers.Layer):
     :param tactic_index_to_numargs: list tactic arg lengths for each tactic
     :param search_expand_bound: maximum number of results to return
     """
-    def __init__(self, tactic_index_to_numargs: List[int], search_expand_bound: int):
+    def __init__(self, search_expand_bound: int):
         super().__init__()
-        self.tactic_index_to_numargs = tf.cast(tf.constant(tactic_index_to_numargs), tf.int32)
         self.search_expand_bound = search_expand_bound
 
         self.beam_search = BeamSearch(
@@ -465,12 +464,10 @@ class SelectBestResults(tf.keras.layers.Layer):
         inference_output: Dict[str, Union[tf.Tensor, tf.RaggedTensor]],
     ):
         tactics = inference_output["tactic"]  # [batch, top_k_tactics]
+        tactic_arg_counts = tf.cast(inference_output["tactic_arg_cnts"], dtype=tf.int32)  # [batch, top_k_tactics]
         tactic_logits = inference_output["tactic_logits"]  # [batch, top_k_tactics]
         local_arguments_logits = inference_output["local_arguments_logits"]  # [batch * top_k_tactics, None(args), None(local_cxt)]
         global_arguments_logits = inference_output["global_arguments_logits"]  # [batch * top_k_tactics, None(args), None(global_cxt)]
-
-        # find arg counts
-        tactic_arg_counts = tf.gather(self.tactic_index_to_numargs, tactics) # [batch, top_k_tactics]
         
         # make last dimension dense
         batch_size = tf.shape(tactics)[0]
@@ -584,7 +581,6 @@ class TFGNNPredict(Predict):
 
         # create task to select best results from prediction task
         self.select_best_results_task = SelectBestResults(
-            tactic_index_to_numargs=self.graph_constants.tactic_index_to_numargs,
             search_expand_bound=self._search_expand_bound
         )
 
@@ -696,6 +692,25 @@ class TFGNNPredict(Predict):
             )
         self._compute_and_replace_definition_embs = compute_and_replace_definition_embs
 
+        @tf.function(input_signature = (LoaderProofstateSpec, tf.TensorSpec(shape=tuple(), dtype=tf.int32)))
+        def compute_and_push_proofstate_tactic(
+            state: LoaderProofstate,
+            tactic_id: int
+        ):
+            graph_tensor_single = self._make_proofstate_graph_tensor(state)
+            graph_tensor_stacked = stack_graph_tensors([graph_tensor_single])
+            graph_tensor_stacked = graph_tensor_stacked.merge_batch_to_components()
+            embs, _ = self.prediction_task._tactic_embeddings_and_hidden_graph(graph_tensor_stacked)
+            self.tactic_inference_task.store_tactic_embs(embs, [tactic_id])
+        self._compute_and_push_proofstate_tactic = compute_and_push_proofstate_tactic
+        
+        @tf.function(input_signature = (tf.TensorSpec(shape=(None, ), dtype=tf.int64), ))
+        def push_new_tactics(
+            tactic_arg_cnts: tf.Tensor,  # [new_tactics, ]  type: int64
+        ):
+            self.tactic_inference_task.store_new_tactic_arg_cnts(tactic_arg_cnts)
+        self._push_new_tactics = push_new_tactics
+        
         inference_model_bare = self.prediction_task.create_inference_model(
             tactic_expand_bound=self._tactic_expand_bound,
             tactic_inference_task=self.tactic_inference_task,
