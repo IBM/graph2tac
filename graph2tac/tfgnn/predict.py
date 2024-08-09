@@ -514,7 +514,6 @@ class TFGNNPredict(Predict):
                  search_expand_bound: int,
                  debug_dir: Optional[Path] = None,
                  checkpoint_number: Optional[int] = None,
-                 exclude_tactics: Optional[List[str]] = None,
                  allocation_reserve: float = 0.5,
                  numpy_output: bool = True,
                  ):
@@ -524,7 +523,6 @@ class TFGNNPredict(Predict):
         @param search_expand_bound: the max number of results to return
         @param debug_dir: set to a directory to dump pickle files for every API call that is made
         @param checkpoint_number: the checkpoint number we want to load (use `None` for the latest checkpoint)
-        @param exclude_tactics: a list of tactic names to exclude from all predictions
         @param allocation_reserve: proportional size of extra allocated space when resizing the nodes embedding array
         @param numpy_output: set to True to return the predictions as a tuple of numpy arrays (for evaluation purposes)
         """
@@ -564,14 +562,6 @@ class TFGNNPredict(Predict):
 
         # to build dummy proofstates we will need to use a tactic taking no arguments
         self._dummy_tactic_id = tf.argmin(graph_constants.tactic_index_to_numargs)  # num_arguments == 0
-
-        # the decoding mechanism currently does not support tactics with more than NUMPY_NDIM_LIMIT
-        self.fixed_tactic_mask = tf.constant(np.array(graph_constants.tactic_index_to_numargs) < NUMPY_NDIM_LIMIT)
-
-        # mask tactics explicitly excluded from predictions
-        if exclude_tactics is not None:
-            exclude_tactics = set(exclude_tactics)
-            self.fixed_tactic_mask &= tf.constant([(tactic_name not in exclude_tactics) for tactic_name in graph_constants.tactic_index_to_string])
 
         # create prediction task
         prediction_yaml_filepath = log_dir / 'config' / 'prediction.yaml'

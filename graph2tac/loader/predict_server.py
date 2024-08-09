@@ -873,6 +873,7 @@ def load_model(config: argparse.Namespace, log_levels: dict) -> Predict:
             config.cpu_thread_count
         )
 
+        # TODO(jrute): This is currently being ignored...
         if config.exclude_tactics is not None:
             with Path(config.exclude_tactics).open('r') as yaml_file:
                 exclude_tactics = yaml.load(yaml_file, Loader=yaml.SafeLoader)
@@ -886,8 +887,7 @@ def load_model(config: argparse.Namespace, log_levels: dict) -> Predict:
                              tactic_expand_bound=config.tactic_expand_bound,
                              search_expand_bound=config.search_expand_bound,
                              debug_dir=config.debug_predict,
-                             checkpoint_number=config.checkpoint_number,
-                             exclude_tactics=exclude_tactics)
+                             checkpoint_number=config.checkpoint_number,)
     elif config.arch == 'hmodel':
         logger.info("importing HPredict class..")
         from graph2tac.loader.hmodel import HPredict
