@@ -1,4 +1,4 @@
-from typing import Tuple, List, Union, Iterable, Callable, Optional, Dict
+from typing import Any, Tuple, List, Union, Iterable, Callable, Optional, Dict
 
 import re
 import yaml
@@ -512,6 +512,7 @@ class TFGNNPredict(Predict):
                  log_dir: Path,
                  tactic_expand_bound: int,
                  search_expand_bound: int,
+                 tactic_inference_knn_config: Optional[Dict[str, Any]] = None,
                  debug_dir: Optional[Path] = None,
                  checkpoint_number: Optional[int] = None,
                  allocation_reserve: float = 0.5,
@@ -521,6 +522,7 @@ class TFGNNPredict(Predict):
         @param log_dir: the directory for the checkpoint that is to be loaded (as passed to the Trainer class)
         @param tactic_expand_bound: the number of top base tactics to consider
         @param search_expand_bound: the max number of results to return
+        @param tactic_inference_knn_config: keyword settings for the tactic inference task
         @param debug_dir: set to a directory to dump pickle files for every API call that is made
         @param checkpoint_number: the checkpoint number we want to load (use `None` for the latest checkpoint)
         @param allocation_reserve: proportional size of extra allocated space when resizing the nodes embedding array
@@ -575,11 +577,14 @@ class TFGNNPredict(Predict):
         )
 
         # create tactic inference task
+        if tactic_inference_knn_config is None:
+            tactic_inference_knn_config = {}
         self.tactic_inference_task = TacticInferenceTask(
             graph_constants=graph_constants,
             tactic_head=self.prediction_task.tactic_head,
             tactic_logits_from_embeddings=self.prediction_task.tactic_logits_from_embeddings,
-            hidden_state_dim=self.prediction_task._hidden_size
+            hidden_state_dim=self.prediction_task._hidden_size,
+            **tactic_inference_knn_config
         )
 
         # create definition task

@@ -566,8 +566,7 @@ class PredictServer:
         self.current_allowed_tactics: List[int] = []
         self.response_history = response_history
 
-        # TODO(jrute): Set with commandline
-        self.proofstate_history_limit = 1000
+        self.knn_proofstep_limit = config.knn_proofstep_limit
 
         if self.config.exclude_tactics is not None:
             with Path(config.exclude_tactics).open('r') as yaml_file:
@@ -623,9 +622,9 @@ class PredictServer:
 
         # allocate space
         num_labels = self.data_server.num_nodes_total
-        logger.info(f"allocating space for {num_labels} defs and {self.proofstate_history_limit} additional proofstates")
+        logger.info(f"allocating space for {num_labels} defs and {self.knn_proofstep_limit} additional proofstates")
         with self.log_cnts.measure_build_network_time():
-            self.model.allocate_definitions(num_labels, self.proofstate_history_limit)
+            self.model.allocate_definitions(num_labels, self.knn_proofstep_limit)
 
         # definition recalculation
         if self.config.update == "all":
@@ -710,7 +709,7 @@ class PredictServer:
                         proof_state = outcome0.before
 
                         # record proofstep
-                        if len(proofstep_data) < self.proofstate_history_limit:
+                        if len(proofstep_data) < self.knn_proofstep_limit:
                             proofstep_data.append({
                                 "proof_state": proof_state,
                                 "tactic": tactic
@@ -761,7 +760,7 @@ class PredictServer:
                     proof_state = proofstep["proof_state"]
                     tactic = proofstep["tactic"]
 
-                    self.profiler.step("proofstate")
+                    self.profiler.step("proofstep")
                     proof_state_graph = self.data_server.proofstate(proof_state.root, proof_state.context)
                     tactic_id = self.data_server.tactic_to_i(tactic)
                     assert tactic_id is not None
@@ -978,6 +977,36 @@ def parse_args() -> argparse.Namespace:
                         default=None,
                         help="a list of tactic names to exclude from predictions")
 
+    parser.add_argument('--knn-proofstep-limit', '--knn_proofstep_limit',
+                        type=int,
+                        default=0,
+                        help="Number of recent proof states to use for k-NN tactic prediction (0 disables k-NN), defaults to 0")
+    
+    parser.add_argument('--knn-keys-ignore-tactic-head', '--knn_keys_ignore_tactic_head',
+                        default=False,
+                        action='store_true',
+                        help="Use pre-tactic-head embeddings for key embeddings in k-NN tactic prediction")
+    
+    parser.add_argument('--knn-logit-temp', '--knn_logit_temp',
+                        type=float,
+                        default=None,
+                        help="Logit temperature for k-NN tactic prediction, defaults to None")
+    
+    parser.add_argument('--knn-only', '--knn_only',
+                        default=False,
+                        action='store_true',
+                        help="Don't use learned tactic embeddings as keys for tactic prediction (`knn_proofstep_limit` must be positive)")
+    
+    parser.add_argument('--knn-duplicate-reduction', '--knn_duplicate_reduction',
+                        type=str,
+                        default="none",
+                        help="How to combine logits if the same tactic is selected multiple times (options: 'none', 'mean', 'sum', 'max', 'softmax'), defaults to 'none'")
+    
+    parser.add_argument('--knn-use-learned-tactic-embeddings-for-arg-prediction', '--knn_use_learned_tactic_embeddings_for_arg_prediction',
+                        default=False,
+                        action='store_true',
+                        help="Use a learned tactic embedding (if one exists) for argument prediction instead of the embedding from the k-NN proof state example")
+    
     parser.add_argument('--paranoic-data-server', '--paranoic_data_server',
                         default=False,
                         action='store_true',
@@ -1012,6 +1041,18 @@ def parse_args() -> argparse.Namespace:
                         type=int, default=15,
                         help='Definition step to stop profiling (exclusive) (default: 15).')
     
+    parser.add_argument('--proofstep-profiler-logdir', '--proofstep_profiler_logdir',
+                        type=Path, default=None,
+                        help='Supply logdir to profile the proofstep processing')
+
+    parser.add_argument('--proofstep-profiler-start', '--proofstep_profiler_start',
+                        type=int, default=10,
+                        help='Proofstep processing steps to start profiling (default: 10).')
+    
+    parser.add_argument('--proofstep-profiler-end', '--proofstep_profiler_end',
+                        type=int, default=15,
+                        help='Proofstep processing steps to stop profiling (exclusive) (default: 15).')
+    
     return parser.parse_args()
 
 def load_model(config: argparse.Namespace, log_levels: dict) -> Predict:
@@ -1041,11 +1082,21 @@ def load_model(config: argparse.Namespace, log_levels: dict) -> Predict:
 
         logger.info("importing TFGNNPredict class...")
         from graph2tac.tfgnn.predict import TFGNNPredict
-        model = TFGNNPredict(log_dir=Path(config.model).expanduser().absolute(),
-                             tactic_expand_bound=config.tactic_expand_bound,
-                             search_expand_bound=config.search_expand_bound,
-                             debug_dir=config.debug_predict,
-                             checkpoint_number=config.checkpoint_number,)
+        model = TFGNNPredict(
+            log_dir=Path(config.model).expanduser().absolute(),
+            tactic_expand_bound=config.tactic_expand_bound,
+            search_expand_bound=config.search_expand_bound,
+            tactic_inference_knn_config={
+                "knn_proofstep_limit": config.knn_proofstep_limit,
+                "knn_keys_ignore_tactic_head": config.knn_keys_ignore_tactic_head,
+                "knn_logit_temp": config.knn_logit_temp,
+                "knn_only": config.knn_only,
+                "knn_duplicate_reduction": config.knn_duplicate_reduction,
+                "knn_use_learned_tactic_embeddings_for_arg_prediction": config.knn_use_learned_tactic_embeddings_for_arg_prediction,
+            },
+            debug_dir=config.debug_predict,
+            checkpoint_number=config.checkpoint_number,
+        )
     elif config.arch == 'hmodel':
         logger.info("importing HPredict class..")
         from graph2tac.loader.hmodel import HPredict
@@ -1088,9 +1139,9 @@ def main_with_return_value() -> ResponseHistory:
 
     log_cnts = LoggingCounters(process_uuid=process_uuid)
     profiler = Profiler(
-        logdir={"pred": config.pred_profiler_logdir, "def": config.def_profiler_logdir},
-        start={"pred": config.pred_profiler_start, "def": config.def_profiler_start},
-        end={"pred": config.pred_profiler_end, "def": config.def_profiler_end},
+        logdir={"pred": config.pred_profiler_logdir, "def": config.def_profiler_logdir, "proofstep": config.proofstep_profiler_logdir},
+        start={"pred": config.pred_profiler_start, "def": config.def_profiler_start, "proofstep": config.proofstep_profiler_start},
+        end={"pred": config.pred_profiler_end, "def": config.def_profiler_end, "proofstep": config.proofstep_profiler_end},
     )
     with log_cnts.measure_build_network_time():
         model = load_model(config, log_levels)

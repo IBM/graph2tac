@@ -437,28 +437,47 @@ class TacticInferenceTask(tf.keras.layers.Layer):
         tactic_logits_from_embeddings: LogitsFromEmbeddings,
         hidden_state_dim: int,
         initial_tensor_size: int = 1024,
-        recent_proofstep_limit: int = 0,
-        recent_proofstep_use_tactic_head = True,
-        recent_proofstep_temp: Optional[float] = None,
-        select_from_learned_tactics: bool = True,
-        reduction_type: str = "none",
-        use_learned_tactic_embeddings: bool = False,
+        knn_proofstep_limit: int = 0,
+        knn_keys_ignore_tactic_head = False,
+        knn_logit_temp: Optional[float] = None,
+        knn_only: bool = False,
+        knn_duplicate_reduction: str = "none",
+        knn_use_learned_tactic_embeddings_for_arg_prediction: bool = False,
         name="tactic_inference",
         **kwargs
     ):
+        """
+        Layer for predicting base tactics during inference, using both trained tactic embeddings and recent proofstates.
+
+        :param graph_constants: graph constants from the model
+        :param tactic_head: trained tactic head layer
+        :param tactic_logits_from_embeddings: trained tactic embedding layer (base tactic prediction layer used in training)
+        :param hidden_state_dim: dimension of proof state hidden emb *before* the tactic head layer (only used if `recent_proofstep_used_tactic_layer` is False)
+        :param initial_tensor_size: initial size of resizable arrays in this layer, defaults to 1024
+        :param knn_proofstep_limit: Number of recent proof states to use for k-NN tactic prediction (0 disables k-NN), defaults to 0
+        :param knn_keys_ignore_tactic_head: Use pre-tactic-head embeddings for key embeddings in k-NN tactic prediction, defaults to False
+        :param knn_logit_temp: Logit temperature for k-NN tactic prediction (None disables it, and is equiv to 1.0), defaults to None
+        :param knn_only: Don't use learned tactic embeddings as keys for tactic prediction (`knn_proofstep_limit` must be positive), defaults to False
+        :param knn_duplicate_reduction: How to combine logits if the same tactic is selected multiple times (options: "none", "mean", "sum", "max", "softmax"), defaults to "none"
+        :param knn_use_learned_tactic_embeddings_for_arg_prediction: Use a learned tactic embedding (if one exists) for argument prediction instead of the embedding from the k-NN proof state example, defaults to False
+        :param name: layer name, defaults to "tactic_inference"
+        """
         super().__init__(name=name, **kwargs)
 
         # this is the tactic head stored in the prediction_task
         self.tactic_head = tactic_head
 
-        self.recent_proofstep_use_tactic_head = recent_proofstep_use_tactic_head
-        self.recent_proofstep_temp = recent_proofstep_temp
-        self.select_from_learned_tactics = select_from_learned_tactics
-        self.recent_proofstep_limit = recent_proofstep_limit
-        self.reduction_type = reduction_type
-        self.use_learned_tactic_embeddings = use_learned_tactic_embeddings
-        assert self.select_from_learned_tactics or self.recent_proofstep_limit, (
-            "Need at least one of select_from_learned_tactics or recent_proofstep_limit."
+        self.knn_keys_ignore_tactic_head = knn_keys_ignore_tactic_head
+        self.knn_logit_temp = knn_logit_temp
+        self.knn_only = knn_only
+        self.knn_proofstep_limit = knn_proofstep_limit
+        self.knn_duplicate_reduction = knn_duplicate_reduction
+        self.knn_use_learned_tactic_embeddings_for_arg_prediction = knn_use_learned_tactic_embeddings_for_arg_prediction
+        assert not self.knn_only or self.knn_proofstep_limit, (
+            "If knn_only then need a positive knn_proofstep_limit."
+        )
+        assert self.knn_duplicate_reduction == "none" or self.knn_proofstep_limit, (
+            "Use 'none' knn_duplicate_reduction if no knn_proofstep_limit"
         )
 
         # the original trained tactic embeddings
@@ -466,7 +485,7 @@ class TacticInferenceTask(tf.keras.layers.Layer):
         # [tactics, tac_hdim]
         self.trained_tactic_embeddings = tactic_logits_from_embeddings._embedding_matrix
     
-        if self.recent_proofstep_use_tactic_head:
+        if not self.knn_keys_ignore_tactic_head:
             # store tactic embeddings (after tactic head)
             hdim = tf.shape(self.trained_tactic_embeddings)[1]
         else:
@@ -522,7 +541,7 @@ class TacticInferenceTask(tf.keras.layers.Layer):
         hidden_state: tf.Tensor,  # [batch, hdim]
         tactic_ids: tf.Tensor,  # [batch,]
     ) -> int:
-        if self.recent_proofstep_use_tactic_head:
+        if not self.knn_keys_ignore_tactic_head:
             # run the tactic head to get the embedding
             # [batch, hdim]
             tactic_embs = self.tactic_head(hidden_state)
@@ -554,7 +573,9 @@ class TacticInferenceTask(tf.keras.layers.Layer):
         all_tactic_embs = []
         all_tactic_logits = []
         all_tactic_ids = []
-        if self.select_from_learned_tactics:
+        if not self.knn_only:
+            # select from learned tactics
+            
             # [tactics, tac_hdim]
             tac_embs = self.trained_tactic_embeddings
             # [tactic_cxt, tac_hdim]
@@ -566,8 +587,8 @@ class TacticInferenceTask(tf.keras.layers.Layer):
             all_tactic_logits.append(tactic_logits)
             all_tactic_ids.append(tactic_ctx_ids)
 
-        if self.recent_proofstep_limit:
-            if self.recent_proofstep_use_tactic_head:
+        if self.knn_proofstep_limit:
+            if not self.knn_keys_ignore_tactic_head:
                 # [batch, tac_hdim]
                 query_embs_ = query_embs
             else:
@@ -575,7 +596,7 @@ class TacticInferenceTask(tf.keras.layers.Layer):
                 query_embs_ = hidden_state
 
             end = self.proof_step_embeddings.length
-            start = tf.maximum(0, end - self.recent_proofstep_limit)
+            start = tf.maximum(0, end - self.knn_proofstep_limit)
             # [limit, hdim]
             key_embs = self.proof_step_embeddings.get_slice(start, end)
             # [limit,]
@@ -583,10 +604,10 @@ class TacticInferenceTask(tf.keras.layers.Layer):
             # [batch, limit]
             tactic_logits = tf.einsum("ik,jk->ji", query_embs_, key_embs)
             
-            if self.recent_proofstep_temp is not None:
-                tactic_logits = tactic_logits / self.recent_proofstep_temp
+            if self.knn_logit_temp is not None:
+                tactic_logits = tactic_logits / self.knn_logit_temp
             
-            if self.recent_proofstep_use_tactic_head:
+            if not self.knn_keys_ignore_tactic_head:
                 # [limit, tac_hdim]
                 tactic_embs = key_embs
             else:
@@ -606,7 +627,7 @@ class TacticInferenceTask(tf.keras.layers.Layer):
         # [selected_tactics, ]
         tactic_ids = tf.concat(all_tactic_ids, axis=0)
 
-        if self.reduction_type == "mean":
+        if self.knn_duplicate_reduction == "mean":
             # Take the mean of all logits for the same tactic
 
             # [output_tactics,], [selected_tactics, ]
@@ -619,7 +640,7 @@ class TacticInferenceTask(tf.keras.layers.Layer):
             # [output_tactics, batch, tac_hdim]
             tactic_embs = tf.tile(tf.expand_dims(tactic_embs, axis=1), multiples=[1, batch_size, 1])
             
-        elif self.reduction_type == "sum":
+        elif self.knn_duplicate_reduction == "sum":
             # Take the sum of all logits for the same tactic
 
             # [output_tactics,], [selected_tactics, ]
@@ -632,7 +653,7 @@ class TacticInferenceTask(tf.keras.layers.Layer):
             # [output_tactics, batch, tac_hdim]
             tactic_embs = tf.tile(tf.expand_dims(tactic_embs, axis=1), multiples=[1, batch_size, 1])
         
-        elif self.reduction_type == "max":
+        elif self.knn_duplicate_reduction == "max":
             # Take the logit with the highest value among all logits with the same tactic
             # Also take the embedding for that logit
             # Only works for batch size of 1 right now
@@ -665,7 +686,7 @@ class TacticInferenceTask(tf.keras.layers.Layer):
             # [output_tactics, batch, tac_hdim]
             tactic_embs = tf.expand_dims(tactic_embs, axis=1)
         
-        elif self.reduction_type == "softmax":
+        elif self.knn_duplicate_reduction == "softmax":
             # Convert the logits to probabilities and then sum the probabilities across the same tactic
             # Embeddings are a weighted average of the probabilities
 
@@ -684,15 +705,15 @@ class TacticInferenceTask(tf.keras.layers.Layer):
             tactic_embs = tf.math.unsorted_segment_sum(tactic_embs, segment_ix, num_tactics)
             tactic_embs = tactic_embs / tf.expand_dims(tactic_probs, axis=2)
         
-        elif self.reduction_type == "none":
+        elif self.knn_duplicate_reduction == "none":
             # don't combine logits of the same tactic id
 
             # [output_tactics, batch, tac_hdim]
             tactic_embs = tf.tile(tf.expand_dims(tactic_embs, axis=1), multiples=[1, batch_size, 1])
         else:
-            raise ValueError(f"Reduction type: {self.reduction_type}")
+            raise ValueError(f"Unrecognized reduction type: {self.knn_duplicate_reduction}")
 
-        if self.use_learned_tactic_embeddings:
+        if self.knn_use_learned_tactic_embeddings_for_arg_prediction:
             # use tactic embeddings from the learned embeddings if the tactic was seen during training
             trained_tactic_cnt = tf.shape(self.trained_tactic_embeddings)[0]
             # [output_tactics, ]
