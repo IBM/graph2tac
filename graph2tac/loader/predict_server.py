@@ -15,6 +15,8 @@ import psutil
 import logging
 import contextlib
 import yaml
+import asyncio
+import capnp
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
 import tensorflow as tf
@@ -27,6 +29,7 @@ from graph2tac.common import logger
 from graph2tac.loader.data_classes import GraphConstants, LoaderProofstate, ProofstateContext, ProofstateMetadata
 from graph2tac.loader.data_server import AbstractDataServer
 from graph2tac.predict import Predict
+from pytact.visualisation_webserver import wrap_visualization
 
 def apply_temperature(confidences: ArrayLike, temperature: float) -> NDArray[np.float64]:
     """
@@ -807,7 +810,7 @@ class PredictServer:
             for action, confidence in zip(actions, confidences)
         ])
 
-    def prediction_loop(self, context: GlobalContextMessage):
+    async def prediction_loop(self, context: GlobalContextMessage):
 
         if self.config.with_meter:
             message_iterator = tqdm.tqdm(context.prediction_requests)
@@ -818,7 +821,7 @@ class PredictServer:
         
         with self.coq_context(context):
 
-            for msg in message_iterator:
+            async for msg in message_iterator:
 
                 if isinstance(msg, ProofState):
 
@@ -837,7 +840,7 @@ class PredictServer:
 
                     with self.log_cnts.measure_t_coq_send():
                         # sending response back to coq
-                        context.prediction_requests.send(response)
+                        await context.prediction_requests.asend(response)
                     self.log_cnts.measure_t_coq_receive_start()
 
                 elif isinstance(msg, CheckAlignmentMessage):
@@ -848,10 +851,10 @@ class PredictServer:
                     )
                     logger.info("sending checkAlignment response to coq")
                     self.response_history.record_response(response)
-                    context.prediction_requests.send(response)
+                    await context.prediction_requests.asend(response)
 
                 elif isinstance(msg, GlobalContextMessage):
-                    self.prediction_loop(msg)
+                    await self.prediction_loop(msg)
 
                 else:
                     raise Exception("Capnp protocol error")
@@ -862,14 +865,23 @@ class PredictServer:
             logger.summary(self.log_cnts.summary_log_message())
             self.log_cnts.reset_definition_counters()
 
-    def start_prediction_loop(self, capnp_socket: socket.socket, record_file: Optional[BinaryIO]):
+    async def start_prediction_loop(
+            self, capnp_socket: socket.socket, visualize: bool, record_file: Optional[BinaryIO]):
         self.log_cnts.start_session()
-        self.prediction_loop(capnp_message_generator(capnp_socket, record_file))
+        capnp_stream = await capnp.AsyncIoStream.create_connection(sock=capnp_socket)
+        messages_generator = capnp_message_generator(capnp_stream, record_file)
+        if visualize:
+            messages_generator = await wrap_visualization(messages_generator)
+        await self.prediction_loop(messages_generator)
 
-    def start_prediction_loop_with_replay(self, replay_file: Path, record_file: Optional[BinaryIO]):
+    async def start_prediction_loop_with_replay(
+            self, replay_file: Path, visualize: bool, record_file: Optional[BinaryIO]):
         with open(replay_file, "rb") as f:
             self.log_cnts.start_session()
-            self.prediction_loop(capnp_message_generator_from_file(f, record=record_file))
+            messages_generator = capnp_message_generator_from_file(f, record=record_file)
+            if visualize:
+                messages_generator = await wrap_visualization(messages_generator)
+            await self.prediction_loop(messages_generator)
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -1044,7 +1056,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--def-profiler-end', '--def_profiler_end',
                         type=int, default=15,
                         help='Definition step to stop profiling (exclusive) (default: 15).')
-    
+
     parser.add_argument('--proofstep-profiler-logdir', '--proofstep_profiler_logdir',
                         type=Path, default=None,
                         help='Supply logdir to profile the proofstep processing')
@@ -1057,6 +1069,9 @@ def parse_args() -> argparse.Namespace:
                         type=int, default=15,
                         help='Proofstep processing steps to stop profiling (exclusive) (default: 15).')
     
+    parser.add_argument('--with-visualization', action='store_true', default = False,
+                        help='Launch a visualization webserver')
+
     return parser.parse_args()
 
 def load_model(config: argparse.Namespace, log_levels: dict) -> Predict:
@@ -1116,7 +1131,7 @@ def load_model(config: argparse.Namespace, log_levels: dict) -> Predict:
     logger.info(f"initializing predict network from {Path(config.model).expanduser().absolute()}")
     return model
 
-def main_with_return_value() -> ResponseHistory:
+async def main_with_return_value() -> ResponseHistory:
     sys.setrecursionlimit(10000)
     config = parse_args()
 
@@ -1159,7 +1174,7 @@ def main_with_return_value() -> ResponseHistory:
 
     with record_context as record_file:
         if config.replay_file is not None:
-            predict_server.start_prediction_loop_with_replay(config.replay_file, record_file)
+            await predict_server.start_prediction_loop_with_replay(config.replay_file, config.with_visualization, record_file)
         elif config.tcp:
             logger.info(f"starting tcp/ip server on port {config.port}")
             addr = (config.host, config.port)
@@ -1180,7 +1195,7 @@ def main_with_return_value() -> ResponseHistory:
                     capnp_socket, remote_addr = server_sock.accept()
                     logger.info(f"coq client connected {remote_addr}")
 
-                    predict_server.start_prediction_loop(capnp_socket, record_file)
+                    await predict_server.start_prediction_loop(capnp_socket, config.with_visualization, record_file)
                     logger.info(f"coq client disconnected {remote_addr}")
             finally:
                 logger.info(f'closing the server on port {config.port}')
@@ -1188,12 +1203,12 @@ def main_with_return_value() -> ResponseHistory:
         else:
             logger.info("starting stdin server")
             capnp_socket = socket.socket(fileno=sys.stdin.fileno())
-            predict_server.start_prediction_loop(capnp_socket, record_file)
+            await predict_server.start_prediction_loop(capnp_socket, config.with_visualization, record_file)
     
     return response_history  # return for testing purposes
 
 def main():
-    main_with_return_value()
+    asyncio.run(capnp.run(main_with_return_value()))
 
 if __name__ == '__main__':
     main()
