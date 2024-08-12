@@ -1,5 +1,7 @@
 From Tactician Require Export Ltac1.Record.
 From Tactician Require Export Ltac1.
+(* Model used: Unclear. What is the purpose of this test? Should it be running against a trained model
+   with this file as a dataset? Unknown right now. *)
 Set Tactician Neural Executable "g2t-server --arch tfgnn --log_level=info --tf_log_level=critical --tactic_expand_bound=2 --total_expand_bound=10 --search_expand_bound=4 --model MODEL --record record_file.bin".
 Global Set Default Proof Mode "Tactician Ltac1".
 
