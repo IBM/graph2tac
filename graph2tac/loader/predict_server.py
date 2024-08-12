@@ -699,7 +699,7 @@ class PredictServer:
         proofstep_data = []
         visited_tactics = []
         visited_tactics_set = set()
-        for d in msg.definitions.definitions():  # already in reverse order
+        for d in msg.definitions.definitions(full=False):  # already in reverse order
             if d.proof is not None:
                 for proofstep in d.proof:
                     if proofstep.tactic is not None:
