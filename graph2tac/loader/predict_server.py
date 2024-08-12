@@ -893,10 +893,10 @@ class PredictServer:
             self.log_cnts.reset_definition_counters()
 
     async def start_prediction_loop(
-            self, capnp_socket: socket.socket, visualize: bool, record_file: Optional[BinaryIO]):
+            self, capnp_socket: socket.socket, rpc: bool, visualize: bool, record_file: Optional[BinaryIO]):
         self.log_cnts.start_session()
         capnp_stream = await capnp.AsyncIoStream.create_connection(sock=capnp_socket)
-        messages_generator = capnp_message_generator(capnp_stream, record_file)
+        messages_generator = capnp_message_generator(capnp_stream, rpc, record_file)
         if visualize:
             messages_generator = await wrap_visualization(messages_generator)
         await self.prediction_loop(messages_generator)
@@ -1144,6 +1144,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--with-visualization', action='store_true', default = False,
                         help='Launch a visualization webserver')
 
+    parser.add_argument('--rpc', action='store_true', default = False,
+                        help='Use capnproto RPC to communicate with Coq')
+
     return parser.parse_args()
 
 def load_model(config: argparse.Namespace, log_levels: dict) -> Predict:
@@ -1275,7 +1278,7 @@ async def main_with_return_value() -> ResponseHistory:
                     capnp_socket, remote_addr = server_sock.accept()
                     logger.info(f"coq client connected {remote_addr}")
 
-                    await predict_server.start_prediction_loop(capnp_socket, config.with_visualization, record_file)
+                    await predict_server.start_prediction_loop(capnp_socket, config.rpc, config.with_visualization, record_file)
                     logger.info(f"coq client disconnected {remote_addr}")
             finally:
                 logger.info(f'closing the server on port {config.port}')
@@ -1283,8 +1286,8 @@ async def main_with_return_value() -> ResponseHistory:
         else:
             logger.info("starting stdin server")
             capnp_socket = socket.socket(fileno=sys.stdin.fileno())
-            await predict_server.start_prediction_loop(capnp_socket, config.with_visualization, record_file)
-    
+            await predict_server.start_prediction_loop(capnp_socket, config.rpc, config.with_visualization, record_file)
+
     return response_history  # return for testing purposes
 
 def main():
