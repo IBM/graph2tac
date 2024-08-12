@@ -619,6 +619,8 @@ class TFGNNPredict(Predict):
         extra_label_num = round(self._allocation_reserve*node_label_num)
         if extra_label_num > 0: self._allocate_definitions(node_label_num + extra_label_num)
         
+        self._context_stack = []
+
         self._compile_network()
 
     def _allocate_definitions(self, new_node_label_num) -> None: # explicit change of the network array
@@ -635,20 +637,37 @@ class TFGNNPredict(Predict):
         )
 
     @predict_api_debugging
-    def allocate_definitions(self, new_node_label_num : int) -> None:
+    def allocate_definitions(self, new_node_label_num: int, new_proofstate_data_size: int) -> None:
         if self.prediction_task_type != GLOBAL_ARGUMENT_PREDICTION:
             # no need to update anything if we are not going to use the global context
             return
 
-        if new_node_label_num <= self.graph_constants.node_label_num:
-            # already have sufficient array
-            return
+        recompile = False 
+        if new_node_label_num > self.graph_constants.node_label_num:
+            new_node_label_num += round(self._allocation_reserve*new_node_label_num)
 
-        new_node_label_num += round(self._allocation_reserve*new_node_label_num)
-
-        self._allocate_definitions(new_node_label_num)
-        self._compile_network()
-
+            self._allocate_definitions(new_node_label_num)
+            recompile = True
+        
+        if self.tactic_inference_task.allocate_space(increase=new_proofstate_data_size):
+            recompile = True
+        
+        if recompile:
+            self._compile_network()
+    
+    @predict_api_debugging
+    def push_context(self) -> None:
+        self._context_stack.append({
+            "proof_step_cnt": self.tactic_inference_task.proof_step_tactic_ids.length.numpy(),
+            "tactic_cnt": self.tactic_inference_task.tactic_id_to_arg_count.length.numpy(),
+        })
+    
+    @predict_api_debugging
+    def pop_context(self) -> None:
+        prev_cxt_state = self._context_stack.pop()
+        self._pop_tactic_embs(prev_cxt_state["proof_step_cnt"])
+        self._pop_tactics(prev_cxt_state["tactic_cnt"])
+    
     @predict_api_debugging
     def compute_new_definitions(self, new_cluster_subgraphs: List[LoaderDefinition]) -> None:
         if self.definition_task is None:
@@ -657,6 +676,16 @@ class TFGNNPredict(Predict):
         assert len(new_cluster_subgraphs) == 1
         self._compute_and_replace_definition_embs(new_cluster_subgraphs[0])
 
+    @predict_api_debugging
+    def add_new_tactic(self, tactic_id: int, tactic_arity: int):
+        num_tactics = self._push_new_tactics([tactic_arity])
+        id = num_tactics - 1
+        assert id == tactic_id, f"New tactic stored with id {id}, when expected id is {tactic_id}."
+
+    @predict_api_debugging
+    def compute_new_proofstep(self, proof_state: LoaderProofstate, tactic_id: int) -> None:
+        self._compute_and_push_proofstate_tactic(proof_state, tactic_id)
+    
     @tf.function(input_signature = (LoaderProofstateSpec,))
     def _make_proofstate_graph_tensor(self, state : LoaderProofstate):
         action = LoaderAction(
@@ -702,9 +731,23 @@ class TFGNNPredict(Predict):
         @tf.function(input_signature = (tf.TensorSpec(shape=(None, ), dtype=tf.int64), ))
         def push_new_tactics(
             tactic_arg_cnts: tf.Tensor,  # [new_tactics, ]  type: int64
-        ):
-            self.tactic_inference_task.store_new_tactic_arg_cnts(tactic_arg_cnts)
+        ) -> int:
+            return self.tactic_inference_task.store_new_tactic_arg_cnts(tactic_arg_cnts)
         self._push_new_tactics = push_new_tactics
+
+        @tf.function(input_signature = (tf.TensorSpec(shape=tuple(), dtype=tf.int32), ))
+        def pop_tactic_embs(
+            emb_cnt: int,  # type: int64
+        ) -> None:
+            return self.tactic_inference_task.pop_tactic_embs(emb_cnt)
+        self._pop_tactic_embs = pop_tactic_embs
+
+        @tf.function(input_signature = (tf.TensorSpec(shape=tuple(), dtype=tf.int32), ))
+        def pop_tactics(
+            tactic_cnt: int,  # type: int64
+        ) -> None:
+            return self.tactic_inference_task.pop_tactics(tactic_cnt)
+        self._pop_tactics = pop_tactics
         
         inference_model_bare = self.prediction_task.create_inference_model(
             tactic_expand_bound=self._tactic_expand_bound,

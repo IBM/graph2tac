@@ -82,11 +82,12 @@ class Predict:
             self._debug_message_number = 0
 
     @predict_api_debugging
-    def allocate_definitions(self, new_node_label_num) -> None:
+    def allocate_definitions(self, new_node_label_num: int, new_proofstate_data_size: int) -> None:
         """
         [ Public API ] Prepares sufficient size for (new) model's definition
 
         @param new_node_label_num: required size of the array of nodes stored in the model
+        @param new_proofstate_data_size: additional size to allocate for new proofstate_data_size
         """
         raise NotImplementedError('allocate_definitions should be implemented by sub-classes')
 
@@ -117,3 +118,33 @@ class Predict:
         @param new_cluster_subgraphs: a list of definition clusters
         """
         raise NotImplementedError('compute_new_definitions should be implemented by sub-classes')
+    
+    @predict_api_debugging
+    def compute_new_proofstep(self, proofstate : LoaderProofstate, tactic_id: int) -> None:
+        """
+        [ Public API ] Processes proof states in the model for use in tactic prediction.
+
+        @param proofstate: proof state
+        """
+        raise NotImplementedError('compute_new_proofstep should be implemented by sub-classes')
+
+    @predict_api_debugging
+    def add_new_tactic(self, tactic_id: int, tactic_arity: int):
+        """
+        [ Public API ] Register tactic not already in graph constants.
+        """
+        raise NotImplementedError('add_new_tactic should be implemented by sub-classes')
+
+    @predict_api_debugging
+    def push_context(self) -> None:
+        """
+        [ Public API ] Register start of context for backtracking.  (Dual to pop_context.)
+        """
+        raise NotImplementedError('push_context should be implemented by sub-classes')
+    
+    @predict_api_debugging
+    def pop_context(self) -> None:
+        """
+        [ Public API ] Backtrack to state of previous context.  (Dual to push_context.)
+        """
+        raise NotImplementedError('pop_context should be implemented by sub-classes')

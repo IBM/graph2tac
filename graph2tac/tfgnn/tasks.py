@@ -316,7 +316,7 @@ class ResizableArray(tf.keras.layers.Layer):
         """
         new_length = self.length + length_increase
         if new_length > self._tensor_size():
-            new_size = int(np.ceil(float(self._tensor_size()) * (1.0 + size_buffer_percent)))
+            new_size = int(np.ceil(float(new_length) * (1.0 + size_buffer_percent)))
             self._resize(new_size)
             return True
         else:
@@ -482,6 +482,12 @@ class TacticInferenceTask(tf.keras.layers.Layer):
         self.proof_step_embeddings = ResizableArray(value_shape=(hdim,), value_dtype=tf.float32, init_tensor_size=initial_tensor_size)
         self.proof_step_tactic_ids = ResizableArray(value_shape=tuple(), value_dtype=tf.int32, init_tensor_size=initial_tensor_size)
 
+    def allocate_space(self, increase: int) -> bool:
+        increased1 = self.tactic_id_to_arg_count.check_and_resize_if_needed(length_increase=increase)
+        increased2 = self.proof_step_embeddings.check_and_resize_if_needed(length_increase=increase)
+        increased3 = self.proof_step_tactic_ids.check_and_resize_if_needed(length_increase=increase)
+        return increased1 or increased2 or increased3
+
     def store_tactic_embs(
         self,
         tactic_embs: tf.Tensor,  # [batch, hdim]
@@ -497,6 +503,19 @@ class TacticInferenceTask(tf.keras.layers.Layer):
     ) -> int:
         self.tactic_id_to_arg_count.push_values(tactic_arg_cnts)
         return self.tactic_id_to_arg_count.length
+    
+    def pop_tactic_embs(
+        self,
+        new_cnt: int
+    ) -> None:
+        self.proof_step_embeddings.pop_until_length(new_cnt)
+        self.proof_step_tactic_ids.pop_until_length(new_cnt)
+
+    def pop_tactics(
+        self,
+        new_cnt: int
+    ) -> None:
+        self.tactic_id_to_arg_count.pop_until_length(new_cnt)
     
     def calc_and_store_tactic_embs(
         self,
