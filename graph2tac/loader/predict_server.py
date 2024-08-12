@@ -313,6 +313,7 @@ class DynamicDataServer(AbstractDataServer):
         super().__init__(graph_constants.data_config)
         self.paranoic = paranoic # checks consistency on each update
 
+        self._tactic_i_to_string = list(graph_constants.tactic_index_to_string)
         self._tactic_i_to_hash = list(graph_constants.tactic_index_to_hash)
         self._tactic_to_i = {
             h : i
@@ -534,7 +535,8 @@ class DynamicDataServer(AbstractDataServer):
         return tactic_i < self._train_tactics
     
     def tactic_name(self, tactic_i: int) -> str:
-        return self._node_i_to_name[tactic_i]
+        # useful for debugging
+        return self._tactic_i_to_string[tactic_i]
 
     def add_new_tactic(self, tactic) -> None:
         tactic_i = len(self._tactic_i_to_hash)
@@ -702,7 +704,9 @@ class PredictServer:
                 for proofstep in d.proof:
                     if proofstep.tactic is not None:
                         tactic = proofstep.tactic
-                        if tactic.base_text in self.excluded_tactics:
+                        if tactic.base_text in self.excluded_tactics:  # this doesn't work
+                            continue
+                        if not proofstep.outcomes:
                             continue
                         outcome0 = proofstep.outcomes[0]
                         tactic_arity = len(outcome0.tactic_arguments)
@@ -719,7 +723,7 @@ class PredictServer:
                             recorded_proofstate = False
                         
                         # record tactic
-                        if tactic.indent not in visited_tactics_set:
+                        if tactic.ident not in visited_tactics_set:
                             visited_tactics.append({
                                 "tactic": tactic,
                                 "arity": tactic_arity,
