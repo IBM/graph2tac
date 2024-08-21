@@ -443,6 +443,7 @@ class TacticInferenceTask(tf.keras.layers.Layer):
         knn_only: bool = False,
         knn_duplicate_reduction: str = "none",
         knn_use_learned_tactic_embeddings_for_arg_prediction: bool = False,
+        knn_dist: str = "inner_product",
         name="tactic_inference",
         **kwargs
     ):
@@ -460,6 +461,7 @@ class TacticInferenceTask(tf.keras.layers.Layer):
         :param knn_only: Don't use learned tactic embeddings as keys for tactic prediction (`knn_proofstep_limit` must be positive), defaults to False
         :param knn_duplicate_reduction: How to combine logits if the same tactic is selected multiple times (options: "none", "mean", "sum", "max", "softmax"), defaults to "none"
         :param knn_use_learned_tactic_embeddings_for_arg_prediction: Use a learned tactic embedding (if one exists) for argument prediction instead of the embedding from the k-NN proof state example, defaults to False
+        :param knn_dist: The distance to use in the knn.  Options: "inner_prod", "cosine", "euclidean".
         :param name: layer name, defaults to "tactic_inference"
         """
         super().__init__(name=name, **kwargs)
@@ -473,6 +475,7 @@ class TacticInferenceTask(tf.keras.layers.Layer):
         self.knn_proofstep_limit = knn_proofstep_limit
         self.knn_duplicate_reduction = knn_duplicate_reduction
         self.knn_use_learned_tactic_embeddings_for_arg_prediction = knn_use_learned_tactic_embeddings_for_arg_prediction
+        self.knn_dist = knn_dist
         assert not self.knn_only or self.knn_proofstep_limit, (
             "If knn_only then need a positive knn_proofstep_limit."
         )
@@ -601,8 +604,30 @@ class TacticInferenceTask(tf.keras.layers.Layer):
             key_embs = self.proof_step_embeddings.get_slice(start, end)
             # [limit,]
             tactic_ids = self.proof_step_tactic_ids.get_slice(start, end)
-            # [batch, limit]
-            tactic_logits = tf.einsum("ik,jk->ji", query_embs_, key_embs)
+            if self.knn_dist == "inner_prod":
+                # [batch, limit]
+                tactic_logits = tf.einsum("ik,jk->ji", query_embs_, key_embs)
+            elif self.knn_dist == "cosine":
+                # [batch, hdim]
+                query_embs_ = query_embs_ / tf.norm(query_embs_, axis=-1, keepdims=True)
+                # [limit, hdim]
+                key_embs_ = key_embs / tf.norm(key_embs, axis=-1, keepdims=True)
+                # [batch, limit]
+                tactic_logits = tf.einsum("ik,jk->ji", query_embs_, key_embs_)
+            elif self.knn_dist == "euclidean":
+                # use negative euclidean distance
+                # -(x - y)**2 = -x**2 - y**2 + 2xy
+                # [batch, limit]
+                tactic_logits = (
+                    # [batch, 1]
+                    -tf.expand_dims(tf.einsum("jk,jk->j", query_embs_, query_embs_), axis=1) +
+                    # [1, limit]
+                    -tf.expand_dims(tf.einsum("ik,ik->i", key_embs_, key_embs_), axis=0) +
+                    # [batch, limit]
+                    2 * tf.einsum("ik,jk->ji", query_embs_, key_embs)
+                )
+            else:
+                raise Exception(f"Unsupported knn_dist: {self.knn_dist}")
             
             if self.knn_logit_temp is not None:
                 tactic_logits = tactic_logits / self.knn_logit_temp

@@ -1015,6 +1015,11 @@ def parse_args() -> argparse.Namespace:
                         action='store_true',
                         help="Use a learned tactic embedding (if one exists) for argument prediction instead of the embedding from the k-NN proof state example")
     
+    parser.add_argument('--knn-dist', '--knn_dist',
+                        type=str,
+                        default="inner_product",
+                        help="The distance to use in the knn (options: 'inner_prod', 'cosine', 'euclidean'), defaults to 'inner_prod'")
+    
     parser.add_argument('--paranoic-data-server', '--paranoic_data_server',
                         default=False,
                         action='store_true',
@@ -1101,6 +1106,7 @@ def load_model(config: argparse.Namespace, log_levels: dict) -> Predict:
                 "knn_only": config.knn_only,
                 "knn_duplicate_reduction": config.knn_duplicate_reduction,
                 "knn_use_learned_tactic_embeddings_for_arg_prediction": config.knn_use_learned_tactic_embeddings_for_arg_prediction,
+                "knn_dist": config.knn_dist,
             },
             debug_dir=config.debug_predict,
             checkpoint_number=config.checkpoint_number,
