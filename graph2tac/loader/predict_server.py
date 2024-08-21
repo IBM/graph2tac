@@ -571,6 +571,12 @@ class PredictServer:
         self.knn_proofstep_limit = config.knn_proofstep_limit
 
         if self.config.exclude_tactics is not None:
+            # TODO(jrute): To support excluded tactics, we need
+            # to either require all excluded tactics are already registered
+            # since that is the only place where we have tactic names
+            # otherwise we have to turn on tactic.base_text which we could
+            # do in tactician, but that would slow things down
+            raise Exception("--exclude-tactics not supported")
             with Path(config.exclude_tactics).open('r') as yaml_file:
                 excluded_tactics = yaml.load(yaml_file, Loader=yaml.SafeLoader)
             logger.info(f'excluding tactics {self.excluded_tactics}')
@@ -695,6 +701,7 @@ class PredictServer:
         self._align_tactics(msg)
 
         # find proofsteps
+        # TODO(jrute): Support excluding tactics with excluded_tactics (see note above)
         # TODO(jrute): This code will not do anything until switching to newer version of pytact
         proofstep_data = []
         visited_tactics = []
@@ -704,8 +711,7 @@ class PredictServer:
                 for proofstep in d.proof:
                     if proofstep.tactic is not None:
                         tactic = proofstep.tactic
-                        if tactic.base_text in self.excluded_tactics:  # this doesn't work
-                            continue
+
                         if not proofstep.outcomes:
                             continue
                         outcome0 = proofstep.outcomes[0]
