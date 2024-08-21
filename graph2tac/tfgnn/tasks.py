@@ -439,6 +439,9 @@ class TacticInferenceTask(tf.keras.layers.Layer):
         initial_tensor_size: int = 1024,
         knn_proofstep_limit: int = 0,
         knn_keys_ignore_tactic_head = False,
+        knn_logit_normalize_mean: bool = False,
+        knn_logit_normalize_max: bool = False,
+        knn_logit_normalize_var: bool = False,
         knn_logit_temp: Optional[float] = None,
         knn_only: bool = False,
         knn_duplicate_reduction: str = "none",
@@ -457,6 +460,9 @@ class TacticInferenceTask(tf.keras.layers.Layer):
         :param initial_tensor_size: initial size of resizable arrays in this layer, defaults to 1024
         :param knn_proofstep_limit: Number of recent proof states to use for k-NN tactic prediction (0 disables k-NN), defaults to 0
         :param knn_keys_ignore_tactic_head: Use pre-tactic-head embeddings for key embeddings in k-NN tactic prediction, defaults to False
+        :param knn_logit_normalize_mean:Normalize logits mean to 0 (independently for knn and trained tactics), defaults to False
+        :param knn_logit_normalize_max: Use same max score for top predictions from each of knn and trained tactics, defaults to False
+        :param knn_logit_normalize_var: Normalize knn logits to have same variance as trained tactic logits, defaults to False
         :param knn_logit_temp: Logit temperature for k-NN tactic prediction (None disables it, and is equiv to 1.0), defaults to None
         :param knn_only: Don't use learned tactic embeddings as keys for tactic prediction (`knn_proofstep_limit` must be positive), defaults to False
         :param knn_duplicate_reduction: How to combine logits if the same tactic is selected multiple times (options: "none", "mean", "sum", "max", "softmax"), defaults to "none"
@@ -470,6 +476,9 @@ class TacticInferenceTask(tf.keras.layers.Layer):
         self.tactic_head = tactic_head
 
         self.knn_keys_ignore_tactic_head = knn_keys_ignore_tactic_head
+        self.knn_logit_normalize_mean = knn_logit_normalize_mean
+        self.knn_logit_normalize_max = knn_logit_normalize_max
+        self.knn_logit_normalize_var = knn_logit_normalize_var
         self.knn_logit_temp = knn_logit_temp
         self.knn_only = knn_only
         self.knn_proofstep_limit = knn_proofstep_limit
@@ -481,6 +490,15 @@ class TacticInferenceTask(tf.keras.layers.Layer):
         )
         assert self.knn_duplicate_reduction == "none" or self.knn_proofstep_limit, (
             "Use 'none' knn_duplicate_reduction if no knn_proofstep_limit"
+        )
+        assert not (self.knn_logit_normalize_mean and self.knn_logit_normalize_max), (
+            "Cannot use both knn_logit_normalize_mean and knn_logit_normalize_max"
+        )
+        assert not (self.knn_logit_normalize_var and self.knn_logit_temp), (
+            "Cannot use both knn_logit_normalize_var and knn_logit_temp"
+        )
+        assert not (self.knn_logit_normalize_var and self.knn_only), (
+            "Cannot use both knn_logit_normalize_var when using knn_only"
         )
 
         # the original trained tactic embeddings
@@ -586,6 +604,18 @@ class TacticInferenceTask(tf.keras.layers.Layer):
             # [tactic_cxt, batch]
             tactic_logits = tf.einsum("ik,jk->ji", query_embs, key_embs)
             
+            if self.knn_logit_normalize_var:
+                # store std for use in normalizing variance of the knn logits
+                # [batch,]
+                std = tf.math.reduce_std(tactic_logits, axis=0)
+            
+            if self.knn_logit_normalize_max:
+                # [limit, batch]
+                tactic_logits = tactic_logits - tf.reduce_max(tactic_logits, axis=0, keepdims=True)
+            elif self.knn_logit_normalize_mean:
+                # [limit, batch]
+                tactic_logits = tactic_logits - tf.reduce_mean(tactic_logits, axis=0, keepdims=True)
+            
             all_tactic_embs.append(key_embs)
             all_tactic_logits.append(tactic_logits)
             all_tactic_ids.append(tactic_ctx_ids)
@@ -605,32 +635,43 @@ class TacticInferenceTask(tf.keras.layers.Layer):
             # [limit,]
             tactic_ids = self.proof_step_tactic_ids.get_slice(start, end)
             if self.knn_dist == "inner_prod":
-                # [batch, limit]
+                # [limit, batch]
                 tactic_logits = tf.einsum("ik,jk->ji", query_embs_, key_embs)
             elif self.knn_dist == "cosine":
                 # [batch, hdim]
                 query_embs_ = query_embs_ / tf.norm(query_embs_, axis=-1, keepdims=True)
                 # [limit, hdim]
                 key_embs_ = key_embs / tf.norm(key_embs, axis=-1, keepdims=True)
-                # [batch, limit]
+                # [limit, batch]
                 tactic_logits = tf.einsum("ik,jk->ji", query_embs_, key_embs_)
             elif self.knn_dist == "euclidean":
                 # use negative euclidean distance
                 # -(x - y)**2 = -x**2 - y**2 + 2xy
-                # [batch, limit]
+                # [limit, batch]
                 tactic_logits = (
-                    # [batch, 1]
-                    -tf.expand_dims(tf.einsum("jk,jk->j", query_embs_, query_embs_), axis=1) +
-                    # [1, limit]
-                    -tf.expand_dims(tf.einsum("ik,ik->i", key_embs_, key_embs_), axis=0) +
-                    # [batch, limit]
+                    # [1, batch]
+                    -tf.expand_dims(tf.einsum("jk,jk->j", query_embs_, query_embs_), axis=0) +
+                    # [limit, 1]
+                    -tf.expand_dims(tf.einsum("ik,ik->i", key_embs, key_embs), axis=1) +
+                    # [limit, batch]
                     2 * tf.einsum("ik,jk->ji", query_embs_, key_embs)
                 )
             else:
                 raise Exception(f"Unsupported knn_dist: {self.knn_dist}")
             
             if self.knn_logit_temp is not None:
+                # [limit, batch]
                 tactic_logits = tactic_logits / self.knn_logit_temp
+            elif self.knn_logit_normalize_var:
+                # [limit, batch]
+                tactic_logits = tactic_logits * tf.expand_dims(std, axis=0) / tf.math.reduce_std(tactic_logits, axis=0, keepdims=True)
+            
+            if self.knn_logit_normalize_max:
+                # [limit, batch]
+                tactic_logits = tactic_logits - tf.reduce_max(tactic_logits, axis=0, keepdims=True)
+            elif self.knn_logit_normalize_mean:
+                # [limit, batch]
+                tactic_logits = tactic_logits - tf.reduce_mean(tactic_logits, axis=0, keepdims=True)
             
             if not self.knn_keys_ignore_tactic_head:
                 # [limit, tac_hdim]

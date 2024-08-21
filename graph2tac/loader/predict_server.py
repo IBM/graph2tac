@@ -995,6 +995,21 @@ def parse_args() -> argparse.Namespace:
                         action='store_true',
                         help="Use pre-tactic-head embeddings for key embeddings in k-NN tactic prediction")
     
+    parser.add_argument('--knn-logit-normalize-mean', '--knn_logit_normalize_mean',
+                        default=False,
+                        action='store_true',
+                        help="Normalize logits mean to 0 (independently for knn and trained tactics)")
+    
+    parser.add_argument('--knn-logit-normalize-max', '--knn_logit_normalize_max',
+                        default=False,
+                        action='store_true',
+                        help="Use same max score for top predictions from each of knn and trained tactics")
+    
+    parser.add_argument('--knn-logit-normalize-var', '--knn_logit_normalize_var',
+                        default=False,
+                        action='store_true',
+                        help="Normalize knn logits to have same variance as trained tactic logits")
+    
     parser.add_argument('--knn-logit-temp', '--knn_logit_temp',
                         type=float,
                         default=None,
@@ -1102,6 +1117,9 @@ def load_model(config: argparse.Namespace, log_levels: dict) -> Predict:
             tactic_inference_knn_config={
                 "knn_proofstep_limit": config.knn_proofstep_limit,
                 "knn_keys_ignore_tactic_head": config.knn_keys_ignore_tactic_head,
+                "knn_logit_normalize_mean": config.knn_logit_normalize_mean,
+                "knn_logit_normalize_max": config.knn_logit_normalize_max,
+                "knn_logit_normalize_var": config.knn_logit_normalize_var,
                 "knn_logit_temp": config.knn_logit_temp,
                 "knn_only": config.knn_only,
                 "knn_duplicate_reduction": config.knn_duplicate_reduction,
