@@ -641,7 +641,7 @@ class TacticInferenceTask(tf.keras.layers.Layer):
                 # [limit, tac_hdim]
                 tactic_embs = self.tactic_head(key_embs)
             
-            all_tactic_embs.append(key_embs)
+            all_tactic_embs.append(tactic_embs)
             all_tactic_logits.append(tactic_logits)
             all_tactic_ids.append(tactic_ids)
 
