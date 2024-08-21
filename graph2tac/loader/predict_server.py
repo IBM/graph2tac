@@ -712,30 +712,28 @@ class PredictServer:
                     if proofstep.tactic is not None:
                         tactic = proofstep.tactic
 
-                        if not proofstep.outcomes:
-                            continue
-                        outcome0 = proofstep.outcomes[0]
-                        tactic_arity = len(outcome0.tactic_arguments)
-                        proof_state = outcome0.before
+                        for outcome in proofstep.outcomes:
+                            tactic_arity = len(outcome.tactic_arguments)
+                            proof_state = outcome.before
 
-                        # record proofstep
-                        if len(proofstep_data) < self.knn_proofstep_limit:
-                            proofstep_data.append({
-                                "proof_state": proof_state,
-                                "tactic": tactic
-                            })
-                            recorded_proofstate = True
-                        else:
-                            recorded_proofstate = False
-                        
-                        # record tactic
-                        if tactic.ident not in visited_tactics_set:
-                            visited_tactics.append({
-                                "tactic": tactic,
-                                "arity": tactic_arity,
-                                "recorded_proofstate": recorded_proofstate
-                            })
-                            visited_tactics_set.add(tactic.ident)
+                            # record proofstep
+                            if len(proofstep_data) < self.knn_proofstep_limit:
+                                proofstep_data.append({
+                                    "proof_state": proof_state,
+                                    "tactic": tactic
+                                })
+                                recorded_proofstate = True
+                            else:
+                                recorded_proofstate = False
+                            
+                            # record tactic
+                            if tactic.ident not in visited_tactics_set:
+                                visited_tactics.append({
+                                    "tactic": tactic,
+                                    "arity": tactic_arity,
+                                    "recorded_proofstate": recorded_proofstate
+                                })
+                                visited_tactics_set.add(tactic.ident)
         # want most recent proofs last so we reverse proof step data
         proofstep_data.reverse()
         visited_tactics.reverse()
