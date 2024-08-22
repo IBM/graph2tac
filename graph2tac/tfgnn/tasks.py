@@ -446,7 +446,7 @@ class TacticInferenceTask(tf.keras.layers.Layer):
         knn_only: bool = False,
         knn_duplicate_reduction: str = "none",
         knn_use_learned_tactic_embeddings_for_arg_prediction: bool = False,
-        knn_dist: str = "inner_product",
+        knn_dist: str = "inner_prod",
         name="tactic_inference",
         **kwargs
     ):

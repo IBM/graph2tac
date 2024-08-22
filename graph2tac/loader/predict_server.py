@@ -1032,7 +1032,7 @@ def parse_args() -> argparse.Namespace:
     
     parser.add_argument('--knn-dist', '--knn_dist',
                         type=str,
-                        default="inner_product",
+                        default="inner_prod",
                         help="The distance to use in the knn (options: 'inner_prod', 'cosine', 'euclidean'), defaults to 'inner_prod'")
     
     parser.add_argument('--paranoic-data-server', '--paranoic_data_server',
