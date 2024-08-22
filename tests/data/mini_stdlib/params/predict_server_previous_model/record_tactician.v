@@ -1,4 +1,5 @@
-Set Tactician Neural Executable "g2t-server --arch tfgnn --log_level=info --tf_log_level=critical --tactic_expand_bound=3 --total_expand_bound=10 --search_expand_bound=4 --model MODEL --record record_file.bin".
+(* Model used: Output of the test_training_hmodel[propchain_dep-hmodel] test *)
+Set Tactician Neural Executable "g2t-server --arch hmodel --log_level=info --tf_log_level=critical --tactic_expand_bound=3 --total_expand_bound=10 --search_expand_bound=4 --model MODEL --record record_file.bin".
 From Tactician Require Import Ltac1.
 
 Tactician Neural Alignment.
