@@ -1307,7 +1307,7 @@ class QueryKeyMulGlobal(tf.keras.layers.Layer):
             # so logits can be in a wider or narrower range -1/temp to 1/temp
 
             assert temp is not None
-            self._temp = temp
+            self._temp = tf.constant(0.008) # hard coded for testing old stdlib model because of bug during training
         self.query_key_mul = QueryKeyMul()
 
     def unit_normalize_tensor(self, x: tf.Tensor) ->  tf.Tensor:
