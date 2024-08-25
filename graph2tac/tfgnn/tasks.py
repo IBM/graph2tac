@@ -465,7 +465,7 @@ class TacticInferenceTask(tf.keras.layers.Layer):
         :param knn_logit_normalize_var: Normalize knn logits to have same variance as trained tactic logits, defaults to False
         :param knn_logit_temp: Logit temperature for k-NN tactic prediction (None disables it, and is equiv to 1.0), defaults to None
         :param knn_only: Don't use learned tactic embeddings as keys for tactic prediction (`knn_proofstep_limit` must be positive), defaults to False
-        :param knn_duplicate_reduction: How to combine logits if the same tactic is selected multiple times (options: "none", "mean", "sum", "max", "softmax"), defaults to "none"
+        :param knn_duplicate_reduction: How to combine logits if the same tactic is selected multiple times (options: "none", "mean", "sum", "max", "softmax", "frequency", "order"), defaults to "none"
         :param knn_use_learned_tactic_embeddings_for_arg_prediction: Use a learned tactic embedding (if one exists) for argument prediction instead of the embedding from the k-NN proof state example, defaults to False
         :param knn_dist: The distance to use in the knn.  Options: "inner_prod", "cosine", "euclidean".
         :param name: layer name, defaults to "tactic_inference"
@@ -760,7 +760,7 @@ class TacticInferenceTask(tf.keras.layers.Layer):
             tactic_ids, segment_ix = tf.unique(tactic_ids)
             num_tactics = tf.shape(tactic_ids)[0]
             # [selected_tactics, batch]
-            tactic_probs = tf.math.softmax(tactic_logits, axis=-1)
+            tactic_probs = tf.math.softmax(tactic_logits, axis=0)
             # [selected_tactics, batch, tac_hdim]
             tactic_embs = tf.tile(tf.expand_dims(tactic_embs, axis=1), multiples=[1, batch_size, 1])
             tactic_embs = tactic_embs * tf.expand_dims(tactic_probs, axis=2)
@@ -770,6 +770,66 @@ class TacticInferenceTask(tf.keras.layers.Layer):
             # [output_tactics, batch, tac_hdim]
             tactic_embs = tf.math.unsorted_segment_sum(tactic_embs, segment_ix, num_tactics)
             tactic_embs = tactic_embs / tf.expand_dims(tactic_probs, axis=2)
+        
+        elif self.knn_duplicate_reduction == "frequency":
+            # Ignore the logits and use the log of the tactic frequencies
+            # Embeddings are the mean of all embeddings for a given tactic
+
+            # TODO: Don't repeat so much code with the softmax reduction
+
+            # [output_tactics,], [selected_tactics, ]
+            tactic_ids, segment_ix = tf.unique(tactic_ids)
+            num_tactics = tf.shape(tactic_ids)[0]
+            # [output_tactics, batch]
+            tactic_counts = tf.math.unsorted_segment_sum(tf.ones_like(tactic_logits), segment_ix, num_tactics)
+            tactic_freq = tactic_counts / num_tactics 
+            tactic_logits = tf.math.log(tactic_freq)
+            # [selected_tactics, batch, tac_hdim]
+            tactic_embs = tf.tile(tf.expand_dims(tactic_embs, axis=1), multiples=[1, batch_size, 1])
+            # [output_tactics, batch, tac_hdim]
+            tactic_embs = tf.math.unsorted_segment_mean(tactic_embs, segment_ix, num_tactics)
+        
+        elif self.knn_duplicate_reduction == "order":
+            # Deduplicate the logits by taking the maximum logit for each tactic
+            # Sort the logits and return only log(2^-(n+1)) = -log(2) * (n+1) for the nth highest logit
+            # Embeddings are the embedding of the maximum logit for each tactic
+            # Only works for batch size of 1 right now
+
+            # TODO(jrute): Don't repeat so much code with the "max" reduction
+
+            tf.assert_equal(batch_size, 1, "reduction type 'order' requires having a batch size of 1")
+
+            # [selected_tactics,]
+            selected_tactics_size = tf.shape(tactic_logits)[0]
+            tactic_logits = tf.reshape(tactic_logits, shape=(selected_tactics_size,))
+            tactic_ids = tf.reshape(tactic_ids, shape=(selected_tactics_size,))
+            
+            # [selected_tactics_sorted]
+            sorted_ixs = tf.argsort(tactic_logits)
+            # [selected_tactics_sorted]
+            tactic_ids = tf.gather(tactic_ids, indices=sorted_ixs)
+
+            # [output_tactics,], [selected_tactics_sorted, ]
+            tactic_ids, segment_ix = tf.unique(tactic_ids)
+            num_tactics = tf.shape(tactic_ids)[0]
+            # [selected_tactics_sorted, ]
+            ixs = tf.range(tf.shape(segment_ix)[0], dtype=tf.int32)
+            # [output_tactics,]
+            ixs = tf.math.unsorted_segment_max(ixs, segment_ix, num_tactics)
+            # [output_tactics,]
+            sorted_ixs = tf.gather(sorted_ixs, indices=ixs)
+            tactic_logits = tf.gather(tactic_logits, indices=sorted_ixs)
+            # [output_tactics, tac_hdim]
+            tactic_embs = tf.gather(tactic_embs, indices=sorted_ixs)
+            # [output_tactics, batch,]
+            tactic_logits = tf.expand_dims(tactic_logits, axis=1)
+            # [output_tactics, batch, tac_hdim]
+            tactic_embs = tf.expand_dims(tactic_embs, axis=1)
+
+            # [output_tactics, batch,]
+            tactic_sort = tf.argsort(tactic_logits, axis=0, direction="DESCENDING", stable=True)
+            # [output_tactics, batch,]
+            tactic_logits = -np.log(2) * (tactic_sort + 1)
         
         elif self.knn_duplicate_reduction == "none":
             # don't combine logits of the same tactic id

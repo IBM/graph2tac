@@ -1023,7 +1023,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--knn-duplicate-reduction', '--knn_duplicate_reduction',
                         type=str,
                         default="none",
-                        help="How to combine logits if the same tactic is selected multiple times (options: 'none', 'mean', 'sum', 'max', 'softmax'), defaults to 'none'")
+                        help="How to combine logits if the same tactic is selected multiple times (options: 'none', 'mean', 'sum', 'max', 'softmax', 'frequency', 'order'), defaults to 'none'")
     
     parser.add_argument('--knn-use-learned-tactic-embeddings-for-arg-prediction', '--knn_use_learned_tactic_embeddings_for_arg_prediction',
                         default=False,
