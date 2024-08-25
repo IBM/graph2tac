@@ -1008,17 +1008,21 @@ class PredictionTask:
 
     @staticmethod
     def from_yaml_config(graph_constants: GraphConstants,
-                         yaml_filepath: Path
+                         yaml_filepath: Path,
+                         hard_code_arg_pred_logit_temp: bool = False,
                          ) -> Union["TacticPrediction", "LocalArgumentPrediction", "GlobalArgumentPrediction"]:
         """
         Create an instance of this class from a YAML configuration file.
 
         @param graph_constants: a GraphConstants object for the graphs that will be consumed by the model
         @param yaml_filepath: the filepath to a YAML file containing all other arguments to the constructor
+        @param hard_code_arg_pred_logit_temp: Debug parameter needed for compatibility with an old model with a bug
         @return: a PredictionTask object
         """
         with yaml_filepath.open() as yaml_file:
             task_config = yaml.load(yaml_file, Loader=yaml.SafeLoader)
+
+        task_config["hard_code_arg_pred_logit_temp"] = hard_code_arg_pred_logit_temp
 
         prediction_task_type = task_config.pop('prediction_task_type')
         prediction_task_constructor = get_prediction_task_constructor(prediction_task_type)
@@ -1350,6 +1354,8 @@ class QueryKeyMulGlobal(tf.keras.layers.Layer):
     :param name: layer name
     :type name: str
     :param cosine_similarity: Whether to use cosine similarlity with learned temperature parameter.
+    :param temp: Temperature
+    :param hard_code_arg_pred_logit_temp: For debugging only. (Needed for compatibility with a particular previously trained model which had a bug.)
     :type name: str
     """
     def __init__(
@@ -1357,6 +1363,7 @@ class QueryKeyMulGlobal(tf.keras.layers.Layer):
         name="query_key_mul_global",
         cosine_similarity: bool = True,
         temp: Optional[tf.Variable] = None,
+        hard_code_arg_pred_logit_temp: bool = False,
         **kwargs
     ):
         super().__init__(name=name, **kwargs)
@@ -1366,8 +1373,13 @@ class QueryKeyMulGlobal(tf.keras.layers.Layer):
             # we add a learned temperature parameter
             # so logits can be in a wider or narrower range -1/temp to 1/temp
 
-            assert temp is not None
-            self._temp = temp
+            if hard_code_arg_pred_logit_temp:
+                # an old model we still use for testing didn't save the learned temp in its model weights
+                # this hard codes it for that one particular case
+                self._temp = tf.constant(0.008)
+            else:
+                assert temp is not None
+                self._temp = temp
         self.query_key_mul = QueryKeyMul()
 
     def unit_normalize_tensor(self, x: tf.Tensor) ->  tf.Tensor:
@@ -1547,12 +1559,14 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
                  dynamic_global_context: bool = False,
                  global_cosine_similarity: bool = False,
                  sum_loss_over_tactic: bool = False,
+                 hard_code_arg_pred_logit_temp: bool = False,
                  **kwargs):
         """
         @param dynamic_global_context: whether to restrict the global context to available definitions only
         @param global_cosine_similarity: whether to use cosine similarity to calculate global arg logits
         @param sum_loss_over_tactic: whether to sum the argument losses over the tactic
         @param kwargs: arguments to be passed to the LocalArgumentPrediction constructor
+        @param hard_code_arg_pred_logit_temp: Debug parameter needed for compatibility with an old model with a bug
         """
         super().__init__(**kwargs)
         self._dynamic_global_context = dynamic_global_context
@@ -1573,7 +1587,8 @@ class GlobalArgumentPrediction(LocalArgumentPrediction):
         )
         self.global_logits = QueryKeyMulGlobal(
             cosine_similarity=self._global_cosine_similarity,
-            temp=self.global_arguments_logits._temp if self._global_cosine_similarity else None
+            temp=self.global_arguments_logits._temp if self._global_cosine_similarity else None,
+            hard_code_arg_pred_logit_temp=hard_code_arg_pred_logit_temp
         )
 
         # we use trivial lambda layers to appropriately rename outputs

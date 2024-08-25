@@ -517,6 +517,7 @@ class TFGNNPredict(Predict):
                  checkpoint_number: Optional[int] = None,
                  allocation_reserve: float = 0.5,
                  numpy_output: bool = True,
+                 hard_code_arg_pred_logit_temp: bool = False
                  ):
         """
         @param log_dir: the directory for the checkpoint that is to be loaded (as passed to the Trainer class)
@@ -527,6 +528,7 @@ class TFGNNPredict(Predict):
         @param checkpoint_number: the checkpoint number we want to load (use `None` for the latest checkpoint)
         @param allocation_reserve: proportional size of extra allocated space when resizing the nodes embedding array
         @param numpy_output: set to True to return the predictions as a tuple of numpy arrays (for evaluation purposes)
+        @param hard_code_arg_pred_logit_temp: Debug parameter needed for compatibility with a particular old trained model
         """
 
         self._exporter = DataToTFGNN()
@@ -567,8 +569,11 @@ class TFGNNPredict(Predict):
 
         # create prediction task
         prediction_yaml_filepath = log_dir / 'config' / 'prediction.yaml'
-        self.prediction_task = PredictionTask.from_yaml_config(graph_constants=graph_constants,
-                                                               yaml_filepath=prediction_yaml_filepath)
+        self.prediction_task = PredictionTask.from_yaml_config(
+            graph_constants=graph_constants,
+            yaml_filepath=prediction_yaml_filepath,
+            hard_code_arg_pred_logit_temp=hard_code_arg_pred_logit_temp
+        )
         self.prediction_task_type = self.prediction_task.get_config()['prediction_task_type']
 
         # create task to select best results from prediction task

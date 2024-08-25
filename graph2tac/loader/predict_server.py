@@ -985,6 +985,11 @@ def parse_args() -> argparse.Namespace:
                         default=None,
                         help="a list of tactic names to exclude from predictions")
 
+    parser.add_argument('--hard-code-arg-pred-logit-temp', '--hard_code_arg_pred_logit_temp',
+                        default=False,
+                        action='store_true',
+                        help="For debugging only. (Needed for compatibility with a particular previously trained model which had a bug.)")
+    
     parser.add_argument('--knn-proofstep-limit', '--knn_proofstep_limit',
                         type=int,
                         default=0,
@@ -1128,6 +1133,7 @@ def load_model(config: argparse.Namespace, log_levels: dict) -> Predict:
             },
             debug_dir=config.debug_predict,
             checkpoint_number=config.checkpoint_number,
+            hard_code_arg_pred_logit_temp=config.hard_code_arg_pred_logit_temp,
         )
     elif config.arch == 'hmodel':
         logger.info("importing HPredict class..")
