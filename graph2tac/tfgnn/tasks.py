@@ -782,7 +782,7 @@ class TacticInferenceTask(tf.keras.layers.Layer):
             num_tactics = tf.shape(tactic_ids)[0]
             # [output_tactics, batch]
             tactic_counts = tf.math.unsorted_segment_sum(tf.ones_like(tactic_logits), segment_ix, num_tactics)
-            tactic_freq = tactic_counts / num_tactics 
+            tactic_freq = tactic_counts / tf.cast(num_tactics, tf.float32)
             tactic_logits = tf.math.log(tactic_freq)
             # [selected_tactics, batch, tac_hdim]
             tactic_embs = tf.tile(tf.expand_dims(tactic_embs, axis=1), multiples=[1, batch_size, 1])
@@ -829,7 +829,7 @@ class TacticInferenceTask(tf.keras.layers.Layer):
             # [output_tactics, batch,]
             tactic_sort = tf.argsort(tactic_logits, axis=0, direction="DESCENDING", stable=True)
             # [output_tactics, batch,]
-            tactic_logits = -np.log(2) * (tactic_sort + 1)
+            tactic_logits = -np.log(2.0) * tf.cast(tactic_sort + 1, tf.float32)
         
         elif self.knn_duplicate_reduction == "none":
             # don't combine logits of the same tactic id
