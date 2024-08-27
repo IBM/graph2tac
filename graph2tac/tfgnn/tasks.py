@@ -759,14 +759,18 @@ class TacticInferenceTask(tf.keras.layers.Layer):
             # [output_tactics,], [selected_tactics, ]
             tactic_ids, segment_ix = tf.unique(tactic_ids)
             num_tactics = tf.shape(tactic_ids)[0]
+            
+            # [output_tactics, batch]
+            maxs = tf.math.unsorted_segment_max(tactic_logits, segment_ix, num_tactics)
             # [selected_tactics, batch]
-            tactic_probs = tf.math.softmax(tactic_logits, axis=0)
+            maxs_ = tf.gather(maxs, segment_ix)
+            tactic_probs = tf.exp(tactic_logits - maxs_)
             # [selected_tactics, batch, tac_hdim]
             tactic_embs = tf.tile(tf.expand_dims(tactic_embs, axis=1), multiples=[1, batch_size, 1])
             tactic_embs = tactic_embs * tf.expand_dims(tactic_probs, axis=2)
             # [output_tactics, batch]
             tactic_probs = tf.math.unsorted_segment_sum(tactic_probs, segment_ix, num_tactics)
-            tactic_logits = tf.math.log(tactic_probs)
+            tactic_logits = tf.math.log(tactic_probs) + maxs
             # [output_tactics, batch, tac_hdim]
             tactic_embs = tf.math.unsorted_segment_sum(tactic_embs, segment_ix, num_tactics)
             tactic_embs = tactic_embs / tf.expand_dims(tactic_probs, axis=2)
