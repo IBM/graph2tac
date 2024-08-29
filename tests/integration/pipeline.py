@@ -307,7 +307,7 @@ class Pipeline:
 
 
     @staticmethod
-    def run_predict_server(tmp_path: Path, record_file: Path, params_dir: Path, model_dir: Path) -> dict:
+    async def run_predict_server(tmp_path: Path, record_file: Path, params_dir: Path, model_dir: Path) -> dict:
         """Run training and return results for comparison"""
         import graph2tac.loader.predict_server  # put import here so it doesn't break other tests if it crashes
         from tensorflow.python.eager import context
@@ -334,8 +334,8 @@ class Pipeline:
 
         # use context manager to pass command line arguments to our main method
         with patch.object(sys, 'argv', [str(a) for a in server_args]):
-            history = graph2tac.loader.predict_server.main_with_return_value()
-        
+            history = await graph2tac.loader.predict_server.main_with_return_value()
+
         # clean up the results to be standardized and easy for the testing system
         responses =  history.data["responses"]
         for response in responses:

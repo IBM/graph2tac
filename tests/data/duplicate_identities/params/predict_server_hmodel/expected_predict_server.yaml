@@ -37,7 +37,98 @@
 - _type: CheckAlignmentResponse
   contents:
     unknown_definitions:
+    - node-0-3-Duplicates.X.t
+    - node-0-1-Tactician.Ltac1.Record.private_constant_placeholder
+    - node-0-0-Duplicates.Unnamed_thm
+    unknown_tactics: []
+- _type: TacticPredictionsGraph
+  contents:
+    predictions:
+    - arguments: []
+      confidence: 0.0
+      ident: 4249207563281686782
+- _type: TacticPredictionsGraph
+  contents:
+    predictions:
+    - arguments: []
+      confidence: 0.0
+      ident: 4249207563281686782
+- _type: TacticPredictionsGraph
+  contents:
+    predictions:
+    - arguments: []
+      confidence: 0.0
+      ident: 7975258090277046354
+- _type: TacticPredictionsGraph
+  contents:
+    predictions:
+    - arguments: []
+      confidence: 0.0
+      ident: 4249207563281686782
+- _type: TacticPredictionsGraph
+  contents:
+    predictions:
+    - arguments: []
+      confidence: 0.0
+      ident: 4249207563281686782
+- _type: TacticPredictionsGraph
+  contents:
+    predictions:
+    - arguments: []
+      confidence: 0.0
+      ident: 7975258090277046354
+- _type: CheckAlignmentResponse
+  contents:
+    unknown_definitions:
+    - node-0-4-Duplicates.X.u
+    - node-0-3-Duplicates.t
+    - node-0-1-Tactician.Ltac1.Record.private_constant_placeholder
+    - node-0-0-Duplicates.Unnamed_thm
+    unknown_tactics: []
+- _type: TacticPredictionsGraph
+  contents:
+    predictions:
+    - arguments: []
+      confidence: 0.0
+      ident: 4249207563281686782
+- _type: TacticPredictionsGraph
+  contents:
+    predictions:
+    - arguments: []
+      confidence: 0.0
+      ident: 4249207563281686782
+- _type: TacticPredictionsGraph
+  contents:
+    predictions:
+    - arguments: []
+      confidence: 0.0
+      ident: 7975258090277046354
+- _type: TacticPredictionsGraph
+  contents:
+    predictions:
+    - arguments: []
+      confidence: 0.0
+      ident: 4249207563281686782
+- _type: TacticPredictionsGraph
+  contents:
+    predictions:
+    - arguments: []
+      confidence: 0.0
+      ident: 4249207563281686782
+- _type: TacticPredictionsGraph
+  contents:
+    predictions:
+    - arguments: []
+      confidence: 0.0
+      ident: 7975258090277046354
+- _type: CheckAlignmentResponse
+  contents:
+    unknown_definitions:
+    - node-0-5-Duplicates.u
+    - node-0-4-Duplicates.t
     - node-0-3-Tactician.Ltac1.Record.private_constant_placeholder
+    - node-0-2-Duplicates.M1.t
+    - node-0-0-Duplicates.Unnamed_thm
     unknown_tactics: []
 - _type: TacticPredictionsGraph
   contents:
@@ -63,136 +154,6 @@
     - arguments: []
       confidence: 0.0
       ident: 4249207563281686782
-- _type: TacticPredictionsGraph
-  contents:
-    predictions:
-    - arguments: []
-      confidence: 0.0
-      ident: 4249207563281686782
-- _type: TacticPredictionsGraph
-  contents:
-    predictions:
-    - arguments: []
-      confidence: 0.0
-      ident: 7975258090277046354
-- _type: CheckAlignmentResponse
-  contents:
-    unknown_definitions:
-    - node-0-4-Tactician.Ltac1.Record.private_constant_placeholder
-    unknown_tactics: []
-- _type: TacticPredictionsGraph
-  contents:
-    predictions:
-    - arguments: []
-      confidence: 0.0
-      ident: 4249207563281686782
-- _type: TacticPredictionsGraph
-  contents:
-    predictions:
-    - arguments: []
-      confidence: 0.0
-      ident: 4249207563281686782
-- _type: TacticPredictionsGraph
-  contents:
-    predictions:
-    - arguments: []
-      confidence: 0.0
-      ident: 7975258090277046354
-- _type: TacticPredictionsGraph
-  contents:
-    predictions:
-    - arguments: []
-      confidence: 0.0
-      ident: 4249207563281686782
-- _type: TacticPredictionsGraph
-  contents:
-    predictions:
-    - arguments: []
-      confidence: 0.0
-      ident: 7975258090277046354
-- _type: TacticPredictionsGraph
-  contents:
-    predictions:
-    - arguments: []
-      confidence: 0.0
-      ident: 4249207563281686782
-- _type: TacticPredictionsGraph
-  contents:
-    predictions:
-    - arguments: []
-      confidence: 0.0
-      ident: 4249207563281686782
-- _type: TacticPredictionsGraph
-  contents:
-    predictions:
-    - arguments: []
-      confidence: 0.0
-      ident: 7975258090277046354
-- _type: TacticPredictionsGraph
-  contents:
-    predictions:
-    - arguments: []
-      confidence: 0.0
-      ident: 4249207563281686782
-- _type: TacticPredictionsGraph
-  contents:
-    predictions:
-    - arguments: []
-      confidence: 0.0
-      ident: 7975258090277046354
-- _type: CheckAlignmentResponse
-  contents:
-    unknown_definitions:
-    - node-0-5-Tactician.Ltac1.Record.private_constant_placeholder
-    unknown_tactics: []
-- _type: TacticPredictionsGraph
-  contents:
-    predictions:
-    - arguments: []
-      confidence: 0.0
-      ident: 4249207563281686782
-- _type: TacticPredictionsGraph
-  contents:
-    predictions:
-    - arguments: []
-      confidence: 0.0
-      ident: 4249207563281686782
-- _type: TacticPredictionsGraph
-  contents:
-    predictions:
-    - arguments: []
-      confidence: 0.0
-      ident: 7975258090277046354
-- _type: TacticPredictionsGraph
-  contents:
-    predictions:
-    - arguments: []
-      confidence: 0.0
-      ident: 4249207563281686782
-- _type: TacticPredictionsGraph
-  contents:
-    predictions:
-    - arguments: []
-      confidence: 0.0
-      ident: 7975258090277046354
-- _type: TacticPredictionsGraph
-  contents:
-    predictions:
-    - arguments: []
-      confidence: 0.0
-      ident: 4249207563281686782
-- _type: TacticPredictionsGraph
-  contents:
-    predictions:
-    - arguments: []
-      confidence: 0.0
-      ident: 4249207563281686782
-- _type: TacticPredictionsGraph
-  contents:
-    predictions:
-    - arguments: []
-      confidence: 0.0
-      ident: 7975258090277046354
 - _type: TacticPredictionsGraph
   contents:
     predictions:
