@@ -1015,6 +1015,11 @@ def parse_args() -> argparse.Namespace:
                         action='store_true',
                         help="Normalize knn logits to have same variance as trained tactic logits")
     
+    parser.add_argument('--knn-logit-normalize-std', '--knn_logit_normalize_std',
+                        type=float,
+                        default=None,
+                        help="Normalize knn logits to have specific standard deviation, defaults to None")
+    
     parser.add_argument('--knn-logit-temp', '--knn_logit_temp',
                         type=float,
                         default=None,
@@ -1125,6 +1130,7 @@ def load_model(config: argparse.Namespace, log_levels: dict) -> Predict:
                 "knn_logit_normalize_mean": config.knn_logit_normalize_mean,
                 "knn_logit_normalize_max": config.knn_logit_normalize_max,
                 "knn_logit_normalize_var": config.knn_logit_normalize_var,
+                "knn_logit_normalize_std": config.knn_logit_normalize_std,
                 "knn_logit_temp": config.knn_logit_temp,
                 "knn_only": config.knn_only,
                 "knn_duplicate_reduction": config.knn_duplicate_reduction,

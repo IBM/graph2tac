@@ -442,6 +442,7 @@ class TacticInferenceTask(tf.keras.layers.Layer):
         knn_logit_normalize_mean: bool = False,
         knn_logit_normalize_max: bool = False,
         knn_logit_normalize_var: bool = False,
+        knn_logit_normalize_std: Optional[float] = None,
         knn_logit_temp: Optional[float] = None,
         knn_only: bool = False,
         knn_duplicate_reduction: str = "none",
@@ -463,6 +464,7 @@ class TacticInferenceTask(tf.keras.layers.Layer):
         :param knn_logit_normalize_mean:Normalize logits mean to 0 (independently for knn and trained tactics), defaults to False
         :param knn_logit_normalize_max: Use same max score for top predictions from each of knn and trained tactics, defaults to False
         :param knn_logit_normalize_var: Normalize knn logits to have same variance as trained tactic logits, defaults to False
+        :param knn_logit_normalize_std: Normalize knn logits to have specific std, defaults to False
         :param knn_logit_temp: Logit temperature for k-NN tactic prediction (None disables it, and is equiv to 1.0), defaults to None
         :param knn_only: Don't use learned tactic embeddings as keys for tactic prediction (`knn_proofstep_limit` must be positive), defaults to False
         :param knn_duplicate_reduction: How to combine logits if the same tactic is selected multiple times (options: "none", "mean", "sum", "max", "softmax", "frequency", "order"), defaults to "none"
@@ -479,6 +481,7 @@ class TacticInferenceTask(tf.keras.layers.Layer):
         self.knn_logit_normalize_mean = knn_logit_normalize_mean
         self.knn_logit_normalize_max = knn_logit_normalize_max
         self.knn_logit_normalize_var = knn_logit_normalize_var
+        self.knn_logit_normalize_std = knn_logit_normalize_std
         self.knn_logit_temp = knn_logit_temp
         self.knn_only = knn_only
         self.knn_proofstep_limit = knn_proofstep_limit
@@ -496,6 +499,12 @@ class TacticInferenceTask(tf.keras.layers.Layer):
         )
         assert not (self.knn_logit_normalize_var and self.knn_logit_temp), (
             "Cannot use both knn_logit_normalize_var and knn_logit_temp"
+        )
+        assert not (self.knn_logit_normalize_std and self.knn_logit_temp), (
+            "Cannot use both knn_logit_normalize_std and knn_logit_temp"
+        )
+        assert not (self.knn_logit_normalize_var and self.knn_logit_normalize_std), (
+            "Cannot use both knn_logit_normalize_var and knn_logit_normalize_std"
         )
         assert not (self.knn_logit_normalize_var and self.knn_only), (
             "Cannot use both knn_logit_normalize_var when using knn_only"
@@ -665,6 +674,9 @@ class TacticInferenceTask(tf.keras.layers.Layer):
             elif self.knn_logit_normalize_var:
                 # [limit, batch]
                 tactic_logits = tactic_logits * tf.expand_dims(std, axis=0) / tf.math.reduce_std(tactic_logits, axis=0, keepdims=True)
+            elif self.knn_logit_normalize_std is not None:
+                # [limit, batch]
+                tactic_logits = tactic_logits * self.knn_logit_normalize_std / tf.math.reduce_std(tactic_logits, axis=0, keepdims=True)
             
             if self.knn_logit_normalize_max:
                 # [limit, batch]
