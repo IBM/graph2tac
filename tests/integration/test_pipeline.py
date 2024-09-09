@@ -93,9 +93,10 @@ def test_load_previous_model(request: pytest.FixtureRequest, tmp_path: Path, dat
         model_dir=model_dir
     )
 
+@pytest.mark.asyncio
 @pytest.mark.filterwarnings("ignore:Converting sparse IndexedSlices")  # have pytest ignore this warning
 @pytest.mark.parametrize("dataset,train_params,predict_params", ParamSets.params_for_step("predict_server"))
-def test_predict_server(request: pytest.FixtureRequest, tmp_path: Path, dataset: str, train_params: str, predict_params: str, overwrite: bool):
+async def test_predict_server(request: pytest.FixtureRequest, tmp_path: Path, dataset: str, train_params: str, predict_params: str, overwrite: bool):
     """
     Test the full pipeline for running the predict server
 
@@ -122,10 +123,10 @@ def test_predict_server(request: pytest.FixtureRequest, tmp_path: Path, dataset:
     # predict
     predict_server_params_dir = ParamSets.params_dir(dataset, predict_params)
     record_file = predict_server_params_dir / "record_file.bin"
-    predict_server_results = Pipeline.run_predict_server(
-        tmp_path=tmp_path, 
-        record_file=record_file, 
-        params_dir=predict_server_params_dir, 
+    predict_server_results = await Pipeline.run_predict_server(
+        tmp_path=tmp_path,
+        record_file=record_file,
+        params_dir=predict_server_params_dir,
         model_dir=model_dir
     )
     ExpectedResults.assert_results_match_expected(
