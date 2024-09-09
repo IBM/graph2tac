@@ -830,8 +830,11 @@ class TacticInferenceTask(tf.keras.layers.Layer):
             # [output_tactics, batch, tac_hdim]
             tactic_embs = tf.expand_dims(tactic_embs, axis=1)
 
+            # [output_tactics_sorted, batch,]
+            sorted_ixs = tf.argsort(tactic_logits, axis=0, stable=True)
+            # invert the permutation (and reverse) to get the (reverse) sorting order
             # [output_tactics, batch,]
-            tactic_sort = tf.argsort(tactic_logits, axis=0, direction="DESCENDING", stable=True)
+            tactic_sort = tf.argsort(sorted_ixs, axis=0, direction="DESCENDING")
             # [output_tactics, batch,]
             tactic_logits = -np.log(2.0) * tf.cast(tactic_sort + 1, tf.float32)
         
