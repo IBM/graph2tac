@@ -467,7 +467,7 @@ class TacticInferenceTask(tf.keras.layers.Layer):
         :param knn_logit_normalize_std: Normalize knn logits to have specific std, defaults to False
         :param knn_logit_temp: Logit temperature for k-NN tactic prediction (None disables it, and is equiv to 1.0), defaults to None
         :param knn_only: Don't use learned tactic embeddings as keys for tactic prediction (`knn_proofstep_limit` must be positive), defaults to False
-        :param knn_duplicate_reduction: How to combine logits if the same tactic is selected multiple times (options: "none", "mean", "sum", "max", "softmax", "frequency", "order"), defaults to "none"
+        :param knn_duplicate_reduction: How to combine logits if the same tactic is selected multiple times (options: "none", "mean", "sum", "max", "softmax", "frequency", 4), defaults to "none"
         :param knn_use_learned_tactic_embeddings_for_arg_prediction: Use a learned tactic embedding (if one exists) for argument prediction instead of the embedding from the k-NN proof state example, defaults to False
         :param knn_dist: The distance to use in the knn.  Options: "inner_prod", "cosine", "euclidean".
         :param name: layer name, defaults to "tactic_inference"
@@ -843,10 +843,11 @@ class TacticInferenceTask(tf.keras.layers.Layer):
             tactic_embs = tf.expand_dims(tactic_embs, axis=1)
 
             # [output_tactics_sorted, batch,]
-            sorted_ixs = tf.argsort(tactic_logits, axis=0, stable=True)
-            # invert the permutation (and reverse) to get the (reverse) sorting order
+            sorted_ixs = tf.argsort(tactic_logits, axis=0, stable=True, direction="DESCENDING")
+            # invert the permutation to get the reverse sorting order
+            # TODO: This could be done more efficiently, but likely not a big deal
             # [output_tactics, batch,]
-            tactic_sort = tf.argsort(sorted_ixs, axis=0, direction="DESCENDING")
+            tactic_sort = tf.argsort(sorted_ixs, axis=0)
             # [output_tactics, batch,]
             tactic_logits = -np.log(2.0) * tf.cast(tactic_sort + 1, tf.float32)
         
