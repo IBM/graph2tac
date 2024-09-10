@@ -1072,18 +1072,6 @@ def parse_args() -> argparse.Namespace:
                         type=int, default=15,
                         help='Prediction step to stop profiling (exclusive) (default: 15).')
 
-    parser.add_argument('--def-profiler-logdir', '--def_profiler_logdir',
-                        type=Path, default=None,
-                        help='Supply logdir to profile the definition steps')
-
-    parser.add_argument('--def-profiler-start', '--def_profiler_start',
-                        type=int, default=10,
-                        help='Defintion step to start profiling (default: 10).')
-    
-    parser.add_argument('--def-profiler-end', '--def_profiler_end',
-                        type=int, default=15,
-                        help='Definition step to stop profiling (exclusive) (default: 15).')
-    
     parser.add_argument('--proofstep-profiler-logdir', '--proofstep_profiler_logdir',
                         type=Path, default=None,
                         help='Supply logdir to profile the proofstep processing')
@@ -1095,6 +1083,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--proofstep-profiler-end', '--proofstep_profiler_end',
                         type=int, default=15,
                         help='Proofstep processing steps to stop profiling (exclusive) (default: 15).')
+    
+    parser.add_argument('--def-profiler-logdir', '--def_profiler_logdir',
+                        type=Path, default=None,
+                        help='Supply logdir to profile the definition steps')
+
+    parser.add_argument('--def-profiler-start', '--def_profiler_start',
+                        type=int, default=10,
+                        help='Defintion step to start profiling (default: 10).')
+    
+    parser.add_argument('--def-profiler-end', '--def_profiler_end',
+                        type=int, default=15,
+                        help='Definition step to stop profiling (exclusive) (default: 15).')
     
     return parser.parse_args()
 
