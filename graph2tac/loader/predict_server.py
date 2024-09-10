@@ -1010,6 +1010,11 @@ def parse_args() -> argparse.Namespace:
                         action='store_true',
                         help="Use same max score for top predictions from each of knn and trained tactics")
     
+    parser.add_argument('--knn-logit-normalize-prob', '--knn_logit_normalize_prob',
+                        default=False,
+                        action='store_true',
+                        help="Normalize logits to be a log probability distribution (independently for knn and trained tactics)")
+    
     parser.add_argument('--knn-logit-normalize-var', '--knn_logit_normalize_var',
                         default=False,
                         action='store_true',
@@ -1129,6 +1134,7 @@ def load_model(config: argparse.Namespace, log_levels: dict) -> Predict:
                 "knn_keys_ignore_tactic_head": config.knn_keys_ignore_tactic_head,
                 "knn_logit_normalize_mean": config.knn_logit_normalize_mean,
                 "knn_logit_normalize_max": config.knn_logit_normalize_max,
+                "knn_logit_normalize_prob": config.knn_logit_normalize_prob,
                 "knn_logit_normalize_var": config.knn_logit_normalize_var,
                 "knn_logit_normalize_std": config.knn_logit_normalize_std,
                 "knn_logit_temp": config.knn_logit_temp,

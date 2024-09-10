@@ -441,6 +441,7 @@ class TacticInferenceTask(tf.keras.layers.Layer):
         knn_keys_ignore_tactic_head = False,
         knn_logit_normalize_mean: bool = False,
         knn_logit_normalize_max: bool = False,
+        knn_logit_normalize_prob: bool = False,
         knn_logit_normalize_var: bool = False,
         knn_logit_normalize_std: Optional[float] = None,
         knn_logit_temp: Optional[float] = None,
@@ -461,8 +462,9 @@ class TacticInferenceTask(tf.keras.layers.Layer):
         :param initial_tensor_size: initial size of resizable arrays in this layer, defaults to 1024
         :param knn_proofstep_limit: Number of recent proof states to use for k-NN tactic prediction (0 disables k-NN), defaults to 0
         :param knn_keys_ignore_tactic_head: Use pre-tactic-head embeddings for key embeddings in k-NN tactic prediction, defaults to False
-        :param knn_logit_normalize_mean:Normalize logits mean to 0 (independently for knn and trained tactics), defaults to False
+        :param knn_logit_normalize_mean: Normalize logits mean to 0 (independently for knn and trained tactics), defaults to False
         :param knn_logit_normalize_max: Use same max score for top predictions from each of knn and trained tactics, defaults to False
+        :param knn_logit_normalize_mean: Normalize logits to be a log probability distribution (independently for knn and trained tactics), defaults to False
         :param knn_logit_normalize_var: Normalize knn logits to have same variance as trained tactic logits, defaults to False
         :param knn_logit_normalize_std: Normalize knn logits to have specific std, defaults to False
         :param knn_logit_temp: Logit temperature for k-NN tactic prediction (None disables it, and is equiv to 1.0), defaults to None
@@ -480,6 +482,7 @@ class TacticInferenceTask(tf.keras.layers.Layer):
         self.knn_keys_ignore_tactic_head = knn_keys_ignore_tactic_head
         self.knn_logit_normalize_mean = knn_logit_normalize_mean
         self.knn_logit_normalize_max = knn_logit_normalize_max
+        self.knn_logit_normalize_prob = knn_logit_normalize_prob
         self.knn_logit_normalize_var = knn_logit_normalize_var
         self.knn_logit_normalize_std = knn_logit_normalize_std
         self.knn_logit_temp = knn_logit_temp
@@ -496,6 +499,12 @@ class TacticInferenceTask(tf.keras.layers.Layer):
         )
         assert not (self.knn_logit_normalize_mean and self.knn_logit_normalize_max), (
             "Cannot use both knn_logit_normalize_mean and knn_logit_normalize_max"
+        )
+        assert not (self.knn_logit_normalize_mean and self.knn_logit_normalize_prob), (
+            "Cannot use both knn_logit_normalize_mean and knn_logit_normalize_prob"
+        )
+        assert not (self.knn_logit_normalize_max and self.knn_logit_normalize_prob), (
+            "Cannot use both knn_logit_normalize_max and knn_logit_normalize_prob"
         )
         assert not (self.knn_logit_normalize_var and self.knn_logit_temp), (
             "Cannot use both knn_logit_normalize_var and knn_logit_temp"
@@ -624,6 +633,15 @@ class TacticInferenceTask(tf.keras.layers.Layer):
             elif self.knn_logit_normalize_mean:
                 # [limit, batch]
                 tactic_logits = tactic_logits - tf.reduce_mean(tactic_logits, axis=0, keepdims=True)
+            elif self.knn_logit_normalize_prob:
+                # log softmax to normalize logits to be log probabilities
+                # [limit, batch]
+                tactic_logits = tactic_logits - tf.reduce_max(tactic_logits, axis=0, keepdims=True)
+                tactic_exp_logits = tf.exp(tactic_logits)
+                # [1, batch]
+                tactic_cum_prob = tf.expand_dims(tf.reduce_sum(tactic_exp_logits, axis=0), axis=0)
+                # [limit, batch]
+                tactic_logits = tactic_logits - tf.math.log(tactic_cum_prob)
             
             all_tactic_embs.append(key_embs)
             all_tactic_logits.append(tactic_logits)
@@ -677,6 +695,15 @@ class TacticInferenceTask(tf.keras.layers.Layer):
             elif self.knn_logit_normalize_std is not None:
                 # [limit, batch]
                 tactic_logits = tactic_logits * self.knn_logit_normalize_std / tf.math.reduce_std(tactic_logits, axis=0, keepdims=True)
+            elif self.knn_logit_normalize_prob:
+                # log softmax to normalize logits to be log probabilities
+                # [limit, batch]
+                tactic_logits = tactic_logits - tf.reduce_max(tactic_logits, axis=0, keepdims=True)
+                tactic_exp_logits = tf.exp(tactic_logits)
+                # [1, batch]
+                tactic_cum_prob = tf.expand_dims(tf.reduce_sum(tactic_exp_logits, axis=0), axis=0)
+                # [limit, batch]
+                tactic_logits = tactic_logits - tf.math.log(tactic_cum_prob)
             
             if self.knn_logit_normalize_max:
                 # [limit, batch]
