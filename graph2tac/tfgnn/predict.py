@@ -708,6 +708,7 @@ class TFGNNPredict(Predict):
         return x
 
     def _compile_network(self):
+        logger.warn(f'Compiling the model')
         @tf.function(input_signature = (LoaderDefinitionSpec,))
         def compute_and_replace_definition_embs(loader_definition):
             graph_tensor = self._exporter.definition_to_graph_tensor(loader_definition)
