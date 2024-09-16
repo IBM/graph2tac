@@ -316,6 +316,7 @@ class DynamicDataServer(AbstractDataServer):
         super().__init__(graph_constants.data_config)
         self.paranoic = paranoic # checks consistency on each update
 
+        self._tactic_i_to_numargs = list(graph_constants.tactic_index_to_numargs)
         self._tactic_i_to_string = list(graph_constants.tactic_index_to_string)
         self._tactic_i_to_hash = list(graph_constants.tactic_index_to_hash)
         self._tactic_to_i = {
@@ -537,6 +538,10 @@ class DynamicDataServer(AbstractDataServer):
         """Check if tactic was seen during training (i.e. is in the graph constants file)"""
         return tactic_i < self._train_tactics
     
+    def tactic_numargs(self, tactic_i: int) -> int:
+        """Check if tactic was seen during training (i.e. is in the graph constants file)"""
+        return self._tactic_i_to_numargs[tactic_i]
+    
     def tactic_name(self, tactic_i: int) -> str:
         # useful for debugging
         return self._tactic_i_to_string[tactic_i]
@@ -586,6 +591,8 @@ class PredictServer:
         else:
             excluded_tactics = []
         self.excluded_tactics = set(excluded_tactics)
+        
+        self.max_arg_count = config.max_arg_count
 
     def _push_context(self):
         """Record lengths of lists so can backtrack to previous states. (Dual method to `_pop_context`.)"""
@@ -610,10 +617,16 @@ class PredictServer:
         current_allowed_tactics = []
         for tactic in msg.tactics:
             tactic_i = self.data_server.tactic_to_i(tactic)
-            if tactic_i is not None and self.data_server.is_training_tactic(tactic_i):
-                if self.data_server.tactic_name in self.excluded_tactics:
-                    continue
-                current_allowed_tactics.append(tactic_i)
+            if tactic_i is None:
+                continue
+            if not self.data_server.is_training_tactic(tactic_i):
+                continue
+            if self.data_server.tactic_name(tactic_i) in self.excluded_tactics:
+                continue
+            if self.max_arg_count is not None and self.data_server.tactic_numargs(tactic_i) > self.max_arg_count:
+                continue
+            current_allowed_tactics.append(tactic_i)
+            
         self.current_allowed_tactics = current_allowed_tactics
 
     def _enter_coq_context(self, msg : GlobalContextMessage):
@@ -709,6 +722,7 @@ class PredictServer:
         proofstep_data = []
         visited_tactics = []
         visited_tactics_set = set()
+        msg_tactics = set(tactic.ident for tactic in msg.tactics)  # TODO(jrute): Remove when stop using msg.tactics
         for d in msg.definitions.definitions(full=False):  # already in reverse order
             if d.proof is not None:
                 for proofstep in d.proof:
@@ -717,7 +731,14 @@ class PredictServer:
 
                         for outcome in proofstep.outcomes:
                             tactic_arity = len(outcome.tactic_arguments)
+                            if self.max_arg_count and tactic_arity > self.max_arg_count:
+                                continue
+
                             proof_state = outcome.before
+
+                            if tactic.ident not in msg_tactics:
+                                logger.warning(f"Skipping tactic not found in msg.tactics. Arity: {tactic_arity}. Occurs in proof of {d.name}.")
+                                continue
 
                             # record proofstep
                             if len(proofstep_data) < self.knn_proofstep_limit:
@@ -996,6 +1017,11 @@ def parse_args() -> argparse.Namespace:
                         type=Path,
                         default=None,
                         help="a list of tactic names to exclude from predictions")
+    
+    parser.add_argument('--max_tactic_args', '--max_tactic_args',
+                        type=int,
+                        default=255,
+                        help="exclude any tactic with more than this many arguments (default: 255)")
 
     parser.add_argument('--hard-code-arg-pred-logit-temp', '--hard_code_arg_pred_logit_temp',
                         default=False,
