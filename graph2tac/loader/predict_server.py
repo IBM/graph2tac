@@ -1018,7 +1018,7 @@ def parse_args() -> argparse.Namespace:
                         default=None,
                         help="a list of tactic names to exclude from predictions")
     
-    parser.add_argument('--max_tactic_args', '--max_tactic_args',
+    parser.add_argument('--max-tactic-args', '--max_tactic_args',
                         type=int,
                         default=255,
                         help="exclude any tactic with more than this many arguments (default: 255)")
