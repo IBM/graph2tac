@@ -736,9 +736,9 @@ class PredictServer:
 
                             proof_state = outcome.before
 
-                            if tactic.ident not in msg_tactics:
-                                logger.warning(f"Skipping tactic not found in msg.tactics. Arity: {tactic_arity}. Occurs in proof of {d.name}.")
-                                continue
+                            #if tactic.ident not in msg_tactics:
+                            #    logger.warning(f"Skipping tactic not found in msg.tactics. Arity: {tactic_arity}. Occurs in proof of {d.name}.")
+                            #    continue
 
                             # record proofstep
                             if len(proofstep_data) < self.knn_proofstep_limit:
