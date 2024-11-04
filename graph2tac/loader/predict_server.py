@@ -589,7 +589,7 @@ class PredictServer:
             excluded_tactics = []
         self.excluded_tactics = set(excluded_tactics)
         
-        self.max_arg_count = config.max_arg_count
+        self.max_tactic_args = config.max_tactic_args
 
     def _push_context(self):
         """Record lengths of lists so can backtrack to previous states. (Dual method to `_pop_context`.)"""
@@ -620,7 +620,7 @@ class PredictServer:
                 continue
             if self.data_server.tactic_name(tactic_i) in self.excluded_tactics:
                 continue
-            if self.max_arg_count is not None and self.data_server.tactic_numargs(tactic_i) > self.max_arg_count:
+            if self.max_tactic_args is not None and self.data_server.tactic_numargs(tactic_i) > self.max_tactic_args:
                 continue
             current_allowed_tactics.append(tactic_i)
             
@@ -728,7 +728,7 @@ class PredictServer:
 
                         for outcome in proofstep.outcomes:
                             tactic_arity = len(outcome.tactic_arguments)
-                            if self.max_arg_count and tactic_arity > self.max_arg_count:
+                            if self.max_tactic_args and tactic_arity > self.max_tactic_args:
                                 continue
 
                             proof_state = outcome.before
