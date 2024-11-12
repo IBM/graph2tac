@@ -609,6 +609,10 @@ class PredictServer:
         self.inside_context = False
 
     def _align_tactics(self, msg : GlobalContextMessage):
+        if not msg.tactics:
+            # no tactics, so we are using the new way to get tactics
+            return
+        
         # TODO(jrute): Remove when stop using msg.tactics
         # current_allowed_tactics only include tactics with trained embeddings
         current_allowed_tactics = []
@@ -711,6 +715,7 @@ class PredictServer:
                 logger.info(f"No cluster to update.")
         
         # tactic alignment
+        # TODO(jrute): Remove when we stop using msg.tactics for tactic alignment
         self._align_tactics(msg)
 
         # find proofsteps
@@ -719,7 +724,6 @@ class PredictServer:
         proofstep_data = []
         visited_tactics = []
         visited_tactics_set = set()
-        msg_tactics = set(tactic.ident for tactic in msg.tactics)  # TODO(jrute): Remove when stop using msg.tactics
         for d in msg.definitions.definitions(full=False):  # already in reverse order
             if d.proof is not None:
                 for proofstep in d.proof:
@@ -732,10 +736,6 @@ class PredictServer:
                                 continue
 
                             proof_state = outcome.before
-
-                            #if tactic.ident not in msg_tactics:
-                            #    logger.warning(f"Skipping tactic not found in msg.tactics. Arity: {tactic_arity}. Occurs in proof of {d.name}.")
-                            #    continue
 
                             # record proofstep
                             if len(proofstep_data) < self.knn_proofstep_limit:
@@ -774,8 +774,7 @@ class PredictServer:
                     tactic_id = self.data_server.tactic_to_i(tactic)
                     self.model.add_new_tactic(tactic_id, tactic_arity)
             elif tactic_id not in all_allowed_tactics:
-                # TODO(jrute): Add this line in when we stop using msg.tactics
-                #self.current_allowed_tactics.append(tactic_id)
+                self.current_allowed_tactics.append(tactic_id)
                 all_allowed_tactics.add(tactic_id)
 
 
