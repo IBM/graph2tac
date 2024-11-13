@@ -254,8 +254,12 @@ def predict_evaluation(
     data = []
     embeddings = []
 
+    cnt = 0
     for split, proofstates in [("train", train_proofstates), ("valid", valid_proofstates)]:
         for proof_state, action, i in tqdm.tqdm(proofstates):
+            cnt += 1
+            if cnt >= 175000:
+                break
             model.compute_new_proofstep(
                 proof_state=proof_state,
                 tactic_id=action.tactic_id
