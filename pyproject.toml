@@ -42,7 +42,7 @@ dependencies=[
     "psutil",
     "pyyaml",
     "graphviz",
-    "pytactician @ git+https://git@github.com/coq-tactician/coq-tactician-api@8ae836d45bd96059c5742db1d3cdd0efd58d3197",
+    "pytactician @ git+https://git@github.com/coq-tactician/coq-tactician-api@301cd02019189601b7089ef712d6bed8d6a91e60",
     "pytest",
     "pytest-asyncio",
 ]
