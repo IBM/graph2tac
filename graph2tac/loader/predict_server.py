@@ -608,27 +608,29 @@ class PredictServer:
 
         self.inside_context = False
 
+    def _is_current_allowed_tactic(self, tactic_i: int) -> bool:
+        # current_allowed_tactics only include tactics with trained embeddings
+        if not self.data_server.is_training_tactic(tactic_i):
+            return False
+        if self.data_server.tactic_name(tactic_i) in self.excluded_tactics:
+            return False
+        if self.max_tactic_args is not None and self.data_server.tactic_numargs(tactic_i) > self.max_tactic_args:
+            return False
+        return True
+
     def _align_tactics(self, msg : GlobalContextMessage):
         if not msg.tactics:
             # no tactics, so we are using the new way to get tactics
             return
         
         # TODO(jrute): Remove when stop using msg.tactics
-        # current_allowed_tactics only include tactics with trained embeddings
-        current_allowed_tactics = []
+        self.current_allowed_tactics = []
         for tactic in msg.tactics:
             tactic_i = self.data_server.tactic_to_i(tactic)
             if tactic_i is None:
                 continue
-            if not self.data_server.is_training_tactic(tactic_i):
-                continue
-            if self.data_server.tactic_name(tactic_i) in self.excluded_tactics:
-                continue
-            if self.max_tactic_args is not None and self.data_server.tactic_numargs(tactic_i) > self.max_tactic_args:
-                continue
-            current_allowed_tactics.append(tactic_i)
-            
-        self.current_allowed_tactics = current_allowed_tactics
+            if self._is_current_allowed_tactic(tactic_i):
+                self.current_allowed_tactics.append(tactic_i)
 
     def _enter_coq_context(self, msg : GlobalContextMessage):
         """
@@ -774,7 +776,8 @@ class PredictServer:
                     tactic_id = self.data_server.tactic_to_i(tactic)
                     self.model.add_new_tactic(tactic_id, tactic_arity)
             elif tactic_id not in all_allowed_tactics:
-                self.current_allowed_tactics.append(tactic_id)
+                if self._is_current_allowed_tactic(tactic_id):
+                    self.current_allowed_tactics.append(tactic_id)
                 all_allowed_tactics.add(tactic_id)
 
 
