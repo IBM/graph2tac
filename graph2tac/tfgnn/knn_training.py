@@ -1,9 +1,12 @@
+import argparse
 from collections import Counter, defaultdict
 import json
+import gzip
 from pathlib import Path
 import sys
 from typing import Any
 import numpy as np
+import numpy.typing as npt
 import tqdm
 import tensorflow as tf
 
@@ -26,49 +29,94 @@ import tensorflow as tf
 # for each datapoint do max and softmax to see if tactic is correct
   # 
 
-def get_examples(name_i_to_indices: dict[int, list[int]], global_cxt: list[int], size: int):
-    global_cxt = sorted(global_cxt)
-    output = []
-    for name_i in reversed(global_cxt):
-        for i in reversed(name_i_to_indices[name_i]):
+
+class DataProcessor:
+    data: list[dict[str, Any]]
+
+    def __init__(self, data_path: Path, limit: int|None):
+        self.data_path = data_path
+        self.counter = 0
+        self.data = []
+        self.name_i_to_indices = defaultdict(list)
+        self.bad_examples = set()
+        self.limit = limit
+    
+    def _reached_limit(self):
+        return (self.limit is not None and self.counter >= self.limit)
+    
+    def _get_most_recent_n_examples(self, name_i_to_indices: dict[int, list[int]], global_cxt: list[int], size: int):
+        global_cxt = sorted(global_cxt)
+        output = []
+        for name_i in reversed(global_cxt):
+            for i in reversed(name_i_to_indices[name_i]):
+                if len(output) >= size:
+                    break
+                output.append(i)
             if len(output) >= size:
                 break
-            output.append(i)
-        if len(output) >= size:
-            break
-    if len(output) < size:
-        output.extend([-1] * (size - len(output))) 
-    assert len(output) == size, len(output)
-    return output
+        if len(output) < size:
+            output.extend([-1] * (size - len(output))) 
+        assert len(output) == size, len(output)
+        return output
 
+    def _process_line(self, line: str):
+        if self._reached_limit():
+            return
 
-def process_data(data_jsonl: Path, limit=None) -> list[dict[str, Any]]:
-    data = []
-    name_i_to_indices = defaultdict(list)
-    bad_examples = set()
-    with data_jsonl.open() as f:
-        cnt = 0
-        for i, l in enumerate(tqdm.tqdm(f)):
-            if limit is not None and cnt >= limit:
-                break
-            cnt += 1
+        i = self.counter
+        self.counter += 1
 
-            datapoint = json.loads(l)
-            global_cxt = datapoint["global_context"]
-            
-            last_thousand = get_examples(name_i_to_indices, global_cxt, 1000)
-            data.append({
-                "tactic_id": datapoint["tactic_id"],
-                "name_id": datapoint["metadata_name_id"],
-                "prev_indices": last_thousand
-            })
-            name_i_to_indices[datapoint["metadata_name_id"]].append(i)
+        datapoint = json.loads(line)
+        global_cxt = datapoint["global_context"]
+        
+        last_thousand = self._get_most_recent_n_examples(self.name_i_to_indices, global_cxt, 1000)
+        self.data.append({
+            "tactic_id": datapoint["tactic_id"],
+            "name_id": datapoint["metadata_name_id"],
+            "prev_indices": last_thousand
+        })
+        self.name_i_to_indices[datapoint["metadata_name_id"]].append(i)
 
-            if datapoint["metadata_name_id"] != max(datapoint["global_context"], default=0) + 1:
-                bad_examples.add(datapoint["metadata_name_id"])
+        if datapoint["metadata_name_id"] != max(datapoint["global_context"], default=0) + 1:
+            self.bad_examples.add(datapoint["metadata_name_id"])
+
+    def _process_jsonl_file(self, data_jsonl: Path, disable_progress_bar: None|bool = None):
+        with data_jsonl.open() as f:
+            for line in tqdm.tqdm(f, disable=disable_progress_bar):
+                self._process_line(line)
     
-    print("ID not at end of global context", len(bad_examples))
-    return data
+    def _process_jsonl_gz_file(self, data_jsonl_gz: Path, disable_progress_bar: None|bool = None):
+        with gzip.open(data_jsonl_gz) as f:
+            for line in tqdm.tqdm(f, leave=False, disable=disable_progress_bar):
+                self._process_line(line)
+
+    def _process_path(self, data_path: Path, disable_progress_bar: None|bool = None):
+        if self._reached_limit():
+            return
+
+        if data_path.is_dir():
+            # process files in order by there index
+            # files are of format data123.jsonl or data123.jsonl.gz
+            data_files = sorted(data_path.glob("data*.jsonl*"), key=lambda p: int(p.stem[4:].split(".")[0]))
+            for data_file in tqdm.tqdm(data_files, disable=disable_progress_bar):
+                self._process_path(data_file, disable_progress_bar=True)
+        elif data_path.is_file() and data_path.suffix == ".jsonl":
+            self._process_jsonl_file(data_path, disable_progress_bar=disable_progress_bar)
+        elif data_path.is_file() and data_path.suffix == ".gz":
+            self._process_jsonl_gz_file(data_path, disable_progress_bar=disable_progress_bar)
+        else:
+            raise ValueError(f"Incorrect file: {data_path}")
+    
+    def process(self):
+        self._process_path(self.data_path)
+
+    @staticmethod
+    def process_data(data_dir: Path, limit: None | int) -> list[dict[str, Any]]:
+        data_processor = DataProcessor(data_dir, limit=limit)
+        data_processor.process()
+        print("ID not at end of global context", len(data_processor.bad_examples))
+        return data_processor.data
+
 
 def process_names(name_jsonl: Path) -> list[str]:
     with name_jsonl.open() as f:
@@ -80,6 +128,14 @@ def process_tactics(tactic_jsonl: Path) -> list[str]:
         tactic = [tactic for tactic in f]
     return tactic
 
+def process_all_embeddings(emb_dir: Path) -> npt.NDArray:
+    data = []
+    emb_files = sorted(emb_dir.glob("embeddings*.npy"), key=lambda p: int(p.stem[len("embeddings"):].split(".")[0]))
+    for emb_file in emb_files:
+        embs = np.load(emb_file)
+        data.append(embs[:, 0])
+    return np.concatenate(data, axis=0)
+
 def check_if_tactic_is_in_history(data: list[dict[str, Any]]):
     checks = 0
     count = 0
@@ -88,7 +144,7 @@ def check_if_tactic_is_in_history(data: list[dict[str, Any]]):
         if any(i != -1 and data[i]["tactic_id"] == tactic_id for i in d["prev_indices"]):
             checks += 1
         count += 1
-    print(checks, count)
+    print("Tactics in history:", checks, "Total data size:", count)
 
 def check_libraries(data: list[dict[str, Any]], names: list[str]):
     prefixes = Counter()
@@ -99,8 +155,7 @@ def check_libraries(data: list[dict[str, Any]], names: list[str]):
         prefixes[prefix] += 1
         double_prefix = ".".join(names[name_id].split(".")[:2])
         double_prefixes[double_prefix] += 1
-    print(prefixes)
-    print(double_prefixes)
+    print("Num of prefixes: ", prefixes, "Number of double prefixes:", double_prefixes)
 
 #def count_if_id_not_where_expected(data: list[dict[str, Any]], names: list[str]):
 #    good = Counter()
@@ -496,6 +551,13 @@ def train_model(data, names, embeddings, num_tactics):
     )
 
     train_query, train_keys, train_tactic_ids, train_correct, valid_query, valid_keys, valid_tactic_ids, valid_correct = train_valid_datasets3(data, names, num_tactics)
+    num_valid_samples = len(valid_query)
+    if num_valid_samples > 5000:
+        valid_subsample = np.random.choice(np.arange(num_valid_samples), size=5000, replace=False)
+        valid_query = valid_query[valid_subsample]
+        valid_keys = valid_keys[valid_subsample]
+        valid_tactic_ids = valid_tactic_ids[valid_subsample]
+        valid_correct = valid_correct[valid_subsample]
 
     model.fit(
         x=[train_query, train_keys, train_tactic_ids],
@@ -559,16 +621,45 @@ def softmax_accuracy_from_model(data: list[dict[str, Any]], names, model, embedd
 
 # TODO: train matrix
 # TODO: breakdown on train/valid
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description='graph2tac knn model trainer')
+
+    parser.add_argument(
+        "--data-dir", "--data_dir",
+        type=Path,
+        required=True,
+        help="Location of the data"
+    )
+
+    parser.add_argument(
+        "--output-dir", "--output_dir",
+        type=Path,
+        required=True,
+        help="Location of the output"
+    )
+
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="How many datapoints to use"
+    )
+
 
 if __name__ == "__main__":
     data_dir = Path(sys.argv[1])
-    data = process_data(data_dir / "data.jsonl", limit=100000)
+    data = DataProcessor.process_data(data_dir / "data", limit=500000)
+    
     check_if_tactic_is_in_history(data)
     names = process_names(data_dir / "context_names.jsonl")
     check_libraries(data, names)
     count_proofstates_with_new_tactics(data, names)
-    embeddings = np.load(data_dir / "embeddings.npy")  
-    print(embeddings.shape)
+    if (data_dir / "embeddings").is_dir():
+        embeddings = process_all_embeddings(data_dir / "embeddings")
+    else:
+        embeddings = np.load(data_dir / "embeddings.npy")
+    print("Embeddings shape:", embeddings.shape)
     tactics = process_tactics(data_dir / "tactic_names.jsonl")
     num_tactics = len(tactics)
 
