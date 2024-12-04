@@ -349,11 +349,13 @@ class SelectBestResults(tf.keras.layers.Layer):
 
         # decode
         # note, we have already removed all padding tokens
-        tf.assert_greater(arg_tokens.values, tf.constant(PAD, tf.int32))
-        tf.assert_greater(tactic_token, tf.constant(PAD, tf.int64))
-        # so we can shift the index
-        tactic_ix = tactic_token - 1  # [batch-beam]
-        arg_ix = arg_tokens - 1  # [batch-beam, None(args)]
+        with tf.control_dependencies([
+            tf.assert_greater(tactic_token, tf.constant(PAD, tf.int64)),
+            tf.assert_greater(arg_tokens.values, tf.constant(PAD, tf.int32)),
+        ]):
+            # so we can shift the index
+            tactic_ix = tactic_token - 1  # [batch-beam]
+            arg_ix = arg_tokens - 1  # [batch-beam, None(args)]
         
         return tactic_ix, arg_ix, log_probs, batch_ix
     

@@ -691,10 +691,16 @@ class TacticInferenceTask(tf.keras.layers.Layer):
                 tactic_logits = tactic_logits / self.knn_logit_temp
             elif self.knn_logit_normalize_var:
                 # [limit, batch]
-                tactic_logits = tactic_logits * tf.expand_dims(std, axis=0) / tf.math.reduce_std(tactic_logits, axis=0, keepdims=True)
+                # add epsilon to std to avoid rare std = 0 case
+                std = tf.expand_dims(std, axis=0) + .000001
+                knn_std = tf.math.reduce_std(tactic_logits, axis=0, keepdims=True) + .000001
+                tactic_logits = tactic_logits * std / knn_std
             elif self.knn_logit_normalize_std is not None:
                 # [limit, batch]
-                tactic_logits = tactic_logits * self.knn_logit_normalize_std / tf.math.reduce_std(tactic_logits, axis=0, keepdims=True)
+                # add epsilon to std to avoid rare std = 0 case
+                std = self.knn_logit_normalize_std + .000001
+                knn_std = tf.math.reduce_std(tactic_logits, axis=0, keepdims=True) + .000001
+                tactic_logits = tactic_logits * std / knn_std
             
             if self.knn_logit_normalize_max:
                 # [limit, batch]
@@ -909,8 +915,14 @@ class TacticInferenceTask(tf.keras.layers.Layer):
         # [batch, output_tactics, tac_hdim]
         tactic_embs = tf.transpose(tactic_embs, perm=[1,0,2])
 
-        # ([batch, output_tactics], [batch, output_tactics, tac_hdim], [output_tactics,], [output_tactics,])
-        return tactic_logits, tactic_embs, tactic_ids, tactic_arg_cnts
+        # check for NaN (or Inf) in tactic_logits since that could lead to subtle issues later
+        # -Inf is ok (b/c it is prob 0), so we test exp of tactic_logits
+        exp_tactic_logits = tf.exp(tactic_logits - tf.reduce_max(tactic_logits, axis=-1, keepdims=True))
+        with tf.control_dependencies([
+            tf.debugging.assert_all_finite(exp_tactic_logits, message="Tactic logits have NaN")
+        ]): 
+            # ([batch, output_tactics], [batch, output_tactics, tac_hdim], [output_tactics,], [output_tactics,])
+            return tactic_logits, tactic_embs, tactic_ids, tactic_arg_cnts
 
     def call(
         self,
