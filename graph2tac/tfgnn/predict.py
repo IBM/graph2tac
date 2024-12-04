@@ -737,6 +737,20 @@ class TFGNNPredict(Predict):
                 tactic_ids=[tactic_id]
             )
         self._compute_and_push_proofstate_tactic = compute_and_push_proofstate_tactic
+
+        @tf.function(input_signature = (LoaderProofstateSpec,))
+        def compute_proofstate_emb(
+            state: LoaderProofstate,
+        ):
+            graph_tensor_single = self._make_proofstate_graph_tensor(state)
+            graph_tensor_stacked = stack_graph_tensors([graph_tensor_single])
+            graph_tensor_stacked = graph_tensor_stacked.merge_batch_to_components()
+            hidden_graph = self.prediction_task._hidden_graph(graph_tensor_stacked)
+            emb = self.tactic_inference_task.calc_tactic_embs(
+                hidden_state=hidden_graph.context['hidden_state'],
+            )
+            return emb
+        self._compute_proofstate_emb = compute_proofstate_emb
         
         @tf.function(input_signature = (tf.TensorSpec(shape=(None, ), dtype=tf.int64), ))
         def push_new_tactics(

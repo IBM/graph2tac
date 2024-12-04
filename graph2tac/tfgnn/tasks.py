@@ -575,6 +575,23 @@ class TacticInferenceTask(tf.keras.layers.Layer):
     ) -> None:
         self.tactic_id_to_arg_count.pop_until_length(new_cnt)
     
+    def calc_tactic_embs(
+        self,
+        hidden_state: tf.Tensor,  # [batch, hdim]
+    ) -> tf.Tensor:
+        if not self.knn_keys_ignore_tactic_head:
+            # run the tactic head to get the embedding
+            # [batch, hdim]
+            tactic_embs = self.tactic_head(hidden_state)
+        else:
+            # use the embedding before the tactic head
+            # TODO(jrute): Consider caching the tactic head output in this case to
+            # avoid recomputing it every proofstate of the search
+            # [batch, embs]
+            tactic_embs = hidden_state
+        
+        return tactic_embs
+    
     def calc_and_store_tactic_embs(
         self,
         hidden_state: tf.Tensor,  # [batch, hdim]
