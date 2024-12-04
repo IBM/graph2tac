@@ -1,15 +1,21 @@
 from collections import defaultdict
+import gzip
 import json
-from typing import Optional
+from typing import Any, Optional
 
 import argparse
 import pickle
 from pathlib import Path
 import numpy as np
+import numpy.typing as npt
 import tqdm
 
-from graph2tac.loader.data_server import DataServer, LoaderProofstate
+from graph2tac.loader.data_server import DataServer, LoaderProofstate, LoaderAction
 from graph2tac.loader.predict_server import load_model, Predict
+
+#from pympler.tracker import SummaryTracker
+#tracker = SummaryTracker()
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -27,6 +33,20 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         required=True,
         help="Location of the output"
+    )
+
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="How many datapoints to extract (default is all of them)"
+    )
+
+    parser.add_argument(
+        "--file_size",
+        type=int,
+        default=100000,
+        help="How many datapoints pre file (default is 100,000)"
     )
 
     parser.add_argument('--model', type=Path, required=True,
@@ -223,66 +243,120 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def predict_evaluation(
-    data_server: DataServer,
-    model: Predict,
-):
-    all_cluster_subgraphs = data_server.def_cluster_subgraphs() 
-    train_proofstates = data_server.data_train()
-    valid_proofstates = data_server.data_valid()
+class DataExtractor:
+    def __init__(self, data_server: DataServer, model: Predict, output_dir: Path):
+        self.data_server = data_server
+        self.model = model
+        self.output_dir = output_dir
 
-    # each name could have many is
-    name_to_is = defaultdict(list)
-    for i, name in enumerate(model.graph_constants.label_to_names):
-        name_to_is[name].append(i)
+        self.all_cluster_subgraphs = self.data_server.def_cluster_subgraphs() 
+        self.train_proofstates = self.data_server.data_train()
+        self.valid_proofstates = self.data_server.data_valid()
 
-    # verify that the alignment is the same
-    # TODO(jrute): Make it so that we don't have to run on the exact same data used for training
-    assert len(data_server._node_i_to_name) == len(model.graph_constants.label_to_names), "Dataset (from data) and graph constants (from model) don't align"
-    assert data_server._node_i_to_name == model.graph_constants.label_to_names, "Dataset (from data) and graph constants (from model) don't align"
-    assert len(data_server._tactic_i_to_string) == len(model.graph_constants.tactic_index_to_string), "Dataset (from data) and graph constants (from model) don't align"
-    assert data_server._tactic_i_to_string == model.graph_constants.tactic_index_to_string, "Dataset (from data) and graph constants (from model) don't align"
+        # each name could have many is
+        self.name_to_is: dict[str, list[int]] = defaultdict(list)
+        for i, name in enumerate(self.model.graph_constants.label_to_names):
+            self.name_to_is[name].append(i)
 
-    #model.allocate_definitions(
-    #    len(all_cluster_subgraphs),
-    #    len(train_proofstates) + len(valid_proofstates),
-    #)
-    #for df in tqdm.tqdm(all_cluster_subgraphs):
-    #    model.compute_new_definitions([df])
-    #    #print("Names", df.definition_names)
+        # verify that the alignment is the same
+        # TODO(jrute): Make it so that we don't have to run on the exact same data used for training
+        assert len(self.data_server._node_i_to_name) == len(self.model.graph_constants.label_to_names), "Dataset (from data) and graph constants (from model) don't align"
+        assert self.data_server._node_i_to_name == self.model.graph_constants.label_to_names, "Dataset (from data) and graph constants (from model) don't align"
+        assert len(self.data_server._tactic_i_to_string) == len(self.model.graph_constants.tactic_index_to_string), "Dataset (from data) and graph constants (from model) don't align"
+        assert self.data_server._tactic_i_to_string == self.model.graph_constants.tactic_index_to_string, "Dataset (from data) and graph constants (from model) don't align"
+
+        #model.allocate_definitions(
+        #    len(all_cluster_subgraphs),
+        #    len(train_proofstates) + len(valid_proofstates),
+        #)
+        #for df in tqdm.tqdm(all_cluster_subgraphs):
+        #    model.compute_new_definitions([df])
+        #    #print("Names", df.definition_names)
     
-    data = []
-    embeddings = []
+    def compute_and_process_datapoint(
+        self,
+        i: int,
+        split: str,
+        proof_state: LoaderProofstate,
+        action: LoaderAction,
+    ) -> tuple[dict[str, Any], npt.NDArray[np.float32]]:
+        #self.model.compute_new_proofstep(
+        #    proof_state=proof_state,
+        #    tactic_id=action.tactic_id
+        #)
+        emb = self.model._compute_proofstate_emb(proof_state).numpy()
+        name = proof_state.metadata.name.decode("utf8")
+        indices = self.name_to_is[name]
+        min_i = max(proof_state.graph.nodes) + 1
+        for index in indices:
+            if index < min_i:
+                continue
+        assert index >= min_i, (min_i, indices)
+        datapoint = {
+            "id": int(i),
+            "metadata_name_id": index,
+            "metadata_step": int(proof_state.metadata.step),
+            "tactic_id": int(action.tactic_id),
+            "split": split,
+            "global_context": [int(cxt_id) for cxt_id in proof_state.context.global_context]
+        }
+        # TODO(jrute): The tactic_inference_tack and _pop_tactic_embs is specific to the tfgnn model
+        #emb = self.model.tactic_inference_task.proof_step_embeddings.get_value(self.model.tactic_inference_task.proof_step_embeddings.length-1) # type: ignore
+        #self.model._pop_tactic_embs(0) # type: ignore
+        
+        return datapoint, emb 
+    
+    def save_metadata(self):
+        with (self.output_dir / "context_names.jsonl").open("w") as f:
+            for x in self.model.graph_constants.label_to_names:
+                print(x, file=f)
+        
+        with (self.output_dir / "tactic_names.jsonl").open("w") as f:
+            for x in self.model.graph_constants.tactic_index_to_string:
+                print(x, file=f)
+        
+    def save_data(self, file_ix: int, data: list[dict[str, Any]], embeddings: npt.ArrayLike):
+        data_jsonl_gz_file = self.output_dir / f"data/data{file_ix}.jsonl.gz"
+        with gzip.open(data_jsonl_gz_file, "wb") as f:
+            file_contents = "\n".join(json.dumps(x) for x in data)
+            f.write(file_contents.encode())
 
-    cnt = 0
-    for split, proofstates in [("train", train_proofstates), ("valid", valid_proofstates)]:
-        for proof_state, action, i in tqdm.tqdm(proofstates):
-            cnt += 1
-            if cnt >= 175000:
-                break
-            model.compute_new_proofstep(
-                proof_state=proof_state,
-                tactic_id=action.tactic_id
-            )
-            name = proof_state.metadata.name.decode("utf8")
-            indices = name_to_is[name]
-            min_i = max(proof_state.graph.nodes) + 1
-            for index in indices:
-                if index < min_i:
-                    continue
-            assert index >= min_i, (min_i, indices)
-            data.append({
-                "id": int(i),
-                "metadata_name_id": index,
-                "metadata_step": int(proof_state.metadata.step),
-                "tactic_id": int(action.tactic_id),
-                "split": split,
-                "global_context": [int(cxt_id) for cxt_id in proof_state.context.global_context]
-            })
-            embeddings.append(model.tactic_inference_task.proof_step_embeddings.get_value(model.tactic_inference_task.proof_step_embeddings.length-1))
-            model._pop_tactic_embs(0)
+        np.save(self.output_dir / f"embeddings/embeddings{file_ix}.npy", np.array(embeddings))
 
-    return data, embeddings
+    def compute_and_save_data(self, limit: Optional[int], file_size: int):
+        self.save_metadata()
+                
+        data = []
+        embeddings = []
+
+        cnt = 0
+        file_ix = 0
+        for split, proofstates in [("train", self.train_proofstates), ("valid", self.valid_proofstates)]:
+            for proof_state, action, i in tqdm.tqdm(proofstates):
+                cnt += 1
+                if limit is not None and cnt >= limit:
+                    break
+
+                datapoint, emb = self.compute_and_process_datapoint(
+                    i=i,
+                    split=split,
+                    proof_state=proof_state,
+                    action=action
+                )
+                data.append(datapoint)
+                embeddings.append(emb)
+
+                # to save memory, periodically save data
+                if len(data) == file_size:
+                    self.save_data(file_ix, data, embeddings)
+                    file_ix += 1
+                    data = []
+                    embeddings = []
+                    #tracker.print_diff()
+
+        if data:
+            self.save_data(file_ix, data, embeddings)
+
 
 def main():
     args = parse_args()
@@ -315,24 +389,15 @@ def main():
         yaml_filepath=args.model.expanduser().resolve() / "config/dataset.yaml"
     )
 
-    data, embeddings = predict_evaluation(
+    data_extractor = DataExtractor(
+        model=model,
         data_server=data_server,
-        model=model
+        output_dir=args.output_dir
     )
-
-    with (args.output_dir / "data.jsonl").open("w") as f:
-        for x in data:
-            print(json.dumps(x), file=f)
-    
-    with (args.output_dir / "context_names.jsonl").open("w") as f:
-        for x in model.graph_constants.label_to_names:
-            print(x, file=f)
-    
-    with (args.output_dir / "tactic_names.jsonl").open("w") as f:
-        for x in model.graph_constants.tactic_index_to_string:
-            print(x, file=f)
-
-    np.save(args.output_dir / "embeddings.npy", np.array(embeddings))
+    data_extractor.compute_and_save_data(
+        limit=args.limit,
+        file_size=args.file_size
+    )
     
 
     #results = predict_evaluation(
