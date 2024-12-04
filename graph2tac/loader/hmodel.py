@@ -153,7 +153,7 @@ class HPredict(Predict):
         self._label_to_idx = dict()
 
     @predict_api_debugging
-    def allocate_definitions(self, new_node_label_num : int) -> None:
+    def allocate_definitions(self, new_node_label_num : int, new_proofstate_data_size: int) -> None:
         pass
 
     @predict_api_debugging
@@ -161,6 +161,22 @@ class HPredict(Predict):
         """
         a list of cluster states on which we run dummy runs
         """
+        pass
+
+    @predict_api_debugging
+    def compute_new_proofstep(self, proofstate : LoaderProofstate, tactic_id: int) -> None:
+        pass
+
+    @predict_api_debugging
+    def add_new_tactic(self, tactic_id: int, tactic_arity: int):
+        pass
+
+    @predict_api_debugging
+    def push_context(self) -> None:
+        pass
+    
+    @predict_api_debugging
+    def pop_context(self) -> None:
         pass
 
     @predict_api_debugging

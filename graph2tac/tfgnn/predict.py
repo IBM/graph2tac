@@ -1,4 +1,4 @@
-from typing import Tuple, List, Union, Iterable, Callable, Optional, Dict
+from typing import Any, Tuple, List, Union, Iterable, Callable, Optional, Dict
 
 import re
 import yaml
@@ -11,7 +11,7 @@ from pathlib import Path
 
 from graph2tac.loader.data_classes import DataConfig, GraphConstants, LoaderGraph, ProofstateMetadata, ProofstateContext, LoaderAction, LoaderActionSpec, LoaderProofstate, LoaderProofstateSpec, LoaderDefinition, LoaderDefinitionSpec
 from graph2tac.loader.data_server import DataToTFGNN
-from graph2tac.tfgnn.tasks import PredictionTask, DefinitionTask, GLOBAL_ARGUMENT_PREDICTION
+from graph2tac.tfgnn.tasks import PredictionTask, DefinitionTask, GLOBAL_ARGUMENT_PREDICTION, TacticInferenceTask
 from graph2tac.tfgnn.train import Trainer
 from graph2tac.common import logger
 from graph2tac.predict import Predict, predict_api_debugging, NUMPY_NDIM_LIMIT
@@ -184,9 +184,8 @@ class SelectBestResults(tf.keras.layers.Layer):
     :param tactic_index_to_numargs: list tactic arg lengths for each tactic
     :param search_expand_bound: maximum number of results to return
     """
-    def __init__(self, tactic_index_to_numargs: List[int], search_expand_bound: int):
+    def __init__(self, search_expand_bound: int):
         super().__init__()
-        self.tactic_index_to_numargs = tf.cast(tf.constant(tactic_index_to_numargs), tf.int32)
         self.search_expand_bound = search_expand_bound
 
         self.beam_search = BeamSearch(
@@ -350,11 +349,13 @@ class SelectBestResults(tf.keras.layers.Layer):
 
         # decode
         # note, we have already removed all padding tokens
-        tf.assert_greater(arg_tokens.values, tf.constant(PAD, tf.int32))
-        tf.assert_greater(tactic_token, tf.constant(PAD, tf.int64))
-        # so we can shift the index
-        tactic_ix = tactic_token - 1  # [batch-beam]
-        arg_ix = arg_tokens - 1  # [batch-beam, None(args)]
+        with tf.control_dependencies([
+            tf.assert_greater(tactic_token, tf.constant(PAD, tf.int64)),
+            tf.assert_greater(arg_tokens.values, tf.constant(PAD, tf.int32)),
+        ]):
+            # so we can shift the index
+            tactic_ix = tactic_token - 1  # [batch-beam]
+            arg_ix = arg_tokens - 1  # [batch-beam, None(args)]
         
         return tactic_ix, arg_ix, log_probs, batch_ix
     
@@ -465,12 +466,10 @@ class SelectBestResults(tf.keras.layers.Layer):
         inference_output: Dict[str, Union[tf.Tensor, tf.RaggedTensor]],
     ):
         tactics = inference_output["tactic"]  # [batch, top_k_tactics]
+        tactic_arg_counts = tf.cast(inference_output["tactic_arg_cnts"], dtype=tf.int32)  # [batch, top_k_tactics]
         tactic_logits = inference_output["tactic_logits"]  # [batch, top_k_tactics]
         local_arguments_logits = inference_output["local_arguments_logits"]  # [batch * top_k_tactics, None(args), None(local_cxt)]
         global_arguments_logits = inference_output["global_arguments_logits"]  # [batch * top_k_tactics, None(args), None(global_cxt)]
-
-        # find arg counts
-        tactic_arg_counts = tf.gather(self.tactic_index_to_numargs, tactics) # [batch, top_k_tactics]
         
         # make last dimension dense
         batch_size = tf.shape(tactics)[0]
@@ -515,21 +514,23 @@ class TFGNNPredict(Predict):
                  log_dir: Path,
                  tactic_expand_bound: int,
                  search_expand_bound: int,
+                 tactic_inference_knn_config: Optional[Dict[str, Any]] = None,
                  debug_dir: Optional[Path] = None,
                  checkpoint_number: Optional[int] = None,
-                 exclude_tactics: Optional[List[str]] = None,
                  allocation_reserve: float = 0.5,
                  numpy_output: bool = True,
+                 hard_code_arg_pred_logit_temp: bool = False
                  ):
         """
         @param log_dir: the directory for the checkpoint that is to be loaded (as passed to the Trainer class)
         @param tactic_expand_bound: the number of top base tactics to consider
         @param search_expand_bound: the max number of results to return
+        @param tactic_inference_knn_config: keyword settings for the tactic inference task
         @param debug_dir: set to a directory to dump pickle files for every API call that is made
         @param checkpoint_number: the checkpoint number we want to load (use `None` for the latest checkpoint)
-        @param exclude_tactics: a list of tactic names to exclude from all predictions
         @param allocation_reserve: proportional size of extra allocated space when resizing the nodes embedding array
         @param numpy_output: set to True to return the predictions as a tuple of numpy arrays (for evaluation purposes)
+        @param hard_code_arg_pred_logit_temp: Debug parameter needed for compatibility with a particular old trained model
         """
 
         self._exporter = DataToTFGNN()
@@ -568,24 +569,29 @@ class TFGNNPredict(Predict):
         # to build dummy proofstates we will need to use a tactic taking no arguments
         self._dummy_tactic_id = tf.argmin(graph_constants.tactic_index_to_numargs)  # num_arguments == 0
 
-        # the decoding mechanism currently does not support tactics with more than NUMPY_NDIM_LIMIT
-        self.fixed_tactic_mask = tf.constant(np.array(graph_constants.tactic_index_to_numargs) < NUMPY_NDIM_LIMIT)
-
-        # mask tactics explicitly excluded from predictions
-        if exclude_tactics is not None:
-            exclude_tactics = set(exclude_tactics)
-            self.fixed_tactic_mask &= tf.constant([(tactic_name not in exclude_tactics) for tactic_name in graph_constants.tactic_index_to_string])
-
         # create prediction task
         prediction_yaml_filepath = log_dir / 'config' / 'prediction.yaml'
-        self.prediction_task = PredictionTask.from_yaml_config(graph_constants=graph_constants,
-                                                               yaml_filepath=prediction_yaml_filepath)
+        self.prediction_task = PredictionTask.from_yaml_config(
+            graph_constants=graph_constants,
+            yaml_filepath=prediction_yaml_filepath,
+            hard_code_arg_pred_logit_temp=hard_code_arg_pred_logit_temp
+        )
         self.prediction_task_type = self.prediction_task.get_config()['prediction_task_type']
 
         # create task to select best results from prediction task
         self.select_best_results_task = SelectBestResults(
-            tactic_index_to_numargs=self.graph_constants.tactic_index_to_numargs,
             search_expand_bound=self._search_expand_bound
+        )
+
+        # create tactic inference task
+        if tactic_inference_knn_config is None:
+            tactic_inference_knn_config = {}
+        self.tactic_inference_task = TacticInferenceTask(
+            graph_constants=graph_constants,
+            tactic_head=self.prediction_task.tactic_head,
+            tactic_logits_from_embeddings=self.prediction_task.tactic_logits_from_embeddings,
+            hidden_state_dim=self.prediction_task._hidden_size,
+            **tactic_inference_knn_config
         )
 
         # create definition task
@@ -625,6 +631,8 @@ class TFGNNPredict(Predict):
         extra_label_num = round(self._allocation_reserve*node_label_num)
         if extra_label_num > 0: self._allocate_definitions(node_label_num + extra_label_num)
         
+        self._context_stack = []
+
         self._compile_network()
 
     def _allocate_definitions(self, new_node_label_num) -> None: # explicit change of the network array
@@ -641,20 +649,37 @@ class TFGNNPredict(Predict):
         )
 
     @predict_api_debugging
-    def allocate_definitions(self, new_node_label_num : int) -> None:
+    def allocate_definitions(self, new_node_label_num: int, new_proofstate_data_size: int) -> None:
         if self.prediction_task_type != GLOBAL_ARGUMENT_PREDICTION:
             # no need to update anything if we are not going to use the global context
             return
 
-        if new_node_label_num <= self.graph_constants.node_label_num:
-            # already have sufficient array
-            return
+        recompile = False 
+        if new_node_label_num > self.graph_constants.node_label_num:
+            new_node_label_num += round(self._allocation_reserve*new_node_label_num)
 
-        new_node_label_num += round(self._allocation_reserve*new_node_label_num)
-
-        self._allocate_definitions(new_node_label_num)
-        self._compile_network()
-
+            self._allocate_definitions(new_node_label_num)
+            recompile = True
+        
+        if self.tactic_inference_task.allocate_space(increase=new_proofstate_data_size):
+            recompile = True
+        
+        if recompile:
+            self._compile_network()
+    
+    @predict_api_debugging
+    def push_context(self) -> None:
+        self._context_stack.append({
+            "proof_step_cnt": self.tactic_inference_task.proof_step_tactic_ids.length.numpy(),
+            "tactic_cnt": self.tactic_inference_task.tactic_id_to_arg_count.length.numpy(),
+        })
+    
+    @predict_api_debugging
+    def pop_context(self) -> None:
+        prev_cxt_state = self._context_stack.pop()
+        self._pop_tactic_embs(prev_cxt_state["proof_step_cnt"])
+        self._pop_tactics(prev_cxt_state["tactic_cnt"])
+    
     @predict_api_debugging
     def compute_new_definitions(self, new_cluster_subgraphs: List[LoaderDefinition]) -> None:
         if self.definition_task is None:
@@ -663,6 +688,16 @@ class TFGNNPredict(Predict):
         assert len(new_cluster_subgraphs) == 1
         self._compute_and_replace_definition_embs(new_cluster_subgraphs[0])
 
+    @predict_api_debugging
+    def add_new_tactic(self, tactic_id: int, tactic_arity: int):
+        num_tactics = self._push_new_tactics([tactic_arity])
+        id = num_tactics - 1
+        assert id == tactic_id, f"New tactic stored with id {id}, when expected id is {tactic_id}."
+
+    @predict_api_debugging
+    def compute_new_proofstep(self, proof_state: LoaderProofstate, tactic_id: int) -> None:
+        self._compute_and_push_proofstate_tactic(proof_state, tactic_id)
+    
     @tf.function(input_signature = (LoaderProofstateSpec,))
     def _make_proofstate_graph_tensor(self, state : LoaderProofstate):
         action = LoaderAction(
@@ -690,23 +725,57 @@ class TFGNNPredict(Predict):
             )
         self._compute_and_replace_definition_embs = compute_and_replace_definition_embs
 
+        @tf.function(input_signature = (LoaderProofstateSpec, tf.TensorSpec(shape=tuple(), dtype=tf.int32)))
+        def compute_and_push_proofstate_tactic(
+            state: LoaderProofstate,
+            tactic_id: int
+        ):
+            graph_tensor_single = self._make_proofstate_graph_tensor(state)
+            graph_tensor_stacked = stack_graph_tensors([graph_tensor_single])
+            graph_tensor_stacked = graph_tensor_stacked.merge_batch_to_components()
+            hidden_graph = self.prediction_task._hidden_graph(graph_tensor_stacked)
+            self.tactic_inference_task.calc_and_store_tactic_embs(
+                hidden_state=hidden_graph.context['hidden_state'],
+                tactic_ids=[tactic_id]
+            )
+        self._compute_and_push_proofstate_tactic = compute_and_push_proofstate_tactic
+        
+        @tf.function(input_signature = (tf.TensorSpec(shape=(None, ), dtype=tf.int64), ))
+        def push_new_tactics(
+            tactic_arg_cnts: tf.Tensor,  # [new_tactics, ]  type: int64
+        ) -> int:
+            return self.tactic_inference_task.store_new_tactic_arg_cnts(tactic_arg_cnts)
+        self._push_new_tactics = push_new_tactics
+
+        @tf.function(input_signature = (tf.TensorSpec(shape=tuple(), dtype=tf.int32), ))
+        def pop_tactic_embs(
+            emb_cnt: int,  # type: int64
+        ) -> None:
+            return self.tactic_inference_task.pop_tactic_embs(emb_cnt)
+        self._pop_tactic_embs = pop_tactic_embs
+
+        @tf.function(input_signature = (tf.TensorSpec(shape=tuple(), dtype=tf.int32), ))
+        def pop_tactics(
+            tactic_cnt: int,  # type: int64
+        ) -> None:
+            return self.tactic_inference_task.pop_tactics(tactic_cnt)
+        self._pop_tactics = pop_tactics
+        
         inference_model_bare = self.prediction_task.create_inference_model(
             tactic_expand_bound=self._tactic_expand_bound,
-            graph_constants=self.graph_constants
+            tactic_inference_task=self.tactic_inference_task,
         )
         allowed_model_tactics_spec = tf.TensorSpec(shape=(None,), dtype=tf.int32)
         @tf.function(input_signature = (LoaderProofstateSpec, allowed_model_tactics_spec))
-        def inference_model(state, allowed_model_tactics):
-            tactic_mask = tf.scatter_nd(
-                indices = tf.expand_dims(allowed_model_tactics, axis = 1),
-                updates = tf.ones_like(allowed_model_tactics, dtype=bool),
-                shape = [self.graph_constants.tactic_num]
-            )
+        def inference_model(
+            state: LoaderProofstate,
+            allowed_model_tactics: tf.Tensor,  # [tactic_cxt]
+        ):
             graph_tensor_single = self._make_proofstate_graph_tensor(state)
             graph_tensor_stacked = stack_graph_tensors([graph_tensor_single])
             inference_output = inference_model_bare({
                 self.prediction_task.PROOFSTATE_GRAPH: graph_tensor_stacked,
-                self.prediction_task.TACTIC_MASK: tf.expand_dims(tactic_mask, axis=0),
+                self.prediction_task.TACTIC_IDS: allowed_model_tactics,
             })
             return self.select_best_results_task(inference_output)
         self._inference_model = inference_model

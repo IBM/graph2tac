@@ -4,7 +4,7 @@ from dataclasses import dataclass
 import sys
 import socket
 from pathlib import Path
-from typing import BinaryIO, Optional, Union, Dict
+from typing import BinaryIO, List, Optional, Union, Dict
 import numpy as np
 from numpy.typing import NDArray, ArrayLike
 import tqdm
@@ -173,6 +173,10 @@ class LoggingCounters:
     """Time (in seconds) to update the definitions processing most recent 'intitialize' message"""
     n_def_clusters_updated: int = 0
     """Number of definition clusters updated when processing most recent 'initialize' message"""
+    process_proof_steps_time: float = 0.0
+    """Time (in seconds) to process proof steps"""
+    n_proof_steps_processed: int = 0
+    """Number of proof steps processed in total"""
     proc = psutil.Process()
     """This process, used to get memory and cpu statistics."""
     total_mem: float = 0.0
@@ -205,6 +209,14 @@ class LoggingCounters:
         t1 = time.time()
         self.n_def_clusters_updated += n_def_clusters_updated
         self.update_def_time += t1 - t0
+    
+    @contextmanager
+    def measure_process_proof_step_time(self, n_proof_steps_processed):
+        t0 = time.time()
+        yield
+        t1 = time.time()
+        self.n_proof_steps_processed += n_proof_steps_processed
+        self.process_proof_steps_time += t1 - t0
 
     @contextmanager
     def measure_t_coq_send(self):
@@ -277,6 +289,8 @@ class LoggingCounters:
             "Initialize|Network build time (s)" : f"{self.build_network_time:.6f}",
             "Initialize|Def clusters to update" : f"{self.n_def_clusters_updated}",
             "Initialize|Def update time (s)" : f"{self.update_def_time:.6f}",
+            "Initialize|Proof steps to process" : f"{self.n_proof_steps_processed}",
+            "Initialize|Proof step process time (s)" : f"{self.process_proof_steps_time:.6f}",
             "Predict|Messages cnt" : f"{n_steps}",
             "Predict|Avg predict time (s/msg)" : f"{self.t_predict/n_steps:.6f}",
             "Predict|Max predict time (s/msg)" : f"{self.max_t_predict:.6f}",
@@ -300,11 +314,13 @@ class DynamicDataServer(AbstractDataServer):
         self.paranoic = paranoic # checks consistency on each update
 
         self._tactic_i_to_numargs = list(graph_constants.tactic_index_to_numargs)
+        self._tactic_i_to_string = list(graph_constants.tactic_index_to_string)
         self._tactic_i_to_hash = list(graph_constants.tactic_index_to_hash)
         self._tactic_to_i = {
             h : i
             for i,h in enumerate(self._tactic_i_to_hash)
         }
+        self._train_tactics = len(self._tactic_i_to_hash)
 
         self._node_i_to_name = graph_constants.label_to_names
         self._node_i_to_ident = graph_constants.label_to_ident
@@ -338,12 +354,6 @@ class DynamicDataServer(AbstractDataServer):
         return len(self._active_i_to_node_i)
 
     def align_definitions(self, definitions):
-
-        self._context_stack.append((
-            len(self._active_i_to_node_i),
-            len(self._node_i_to_name)
-        ))
-
         for d in definitions:
             node_i = self._ident_to_node_i.get(d.node.identity, None)
             if node_i is None:
@@ -359,11 +369,26 @@ class DynamicDataServer(AbstractDataServer):
 
         if self.paranoic: self.consistency_check()
 
-    def pop(self):
-        (
-            num_nodes_active,
-            num_nodes_total,
-        ) = self._context_stack.pop()
+    def push_context(self):
+        """Record lengths of lists so can backtrack to previous states. (Dual method to `pop_context`.)"""
+        assert len(self._tactic_i_to_hash) == len(self._tactic_to_i)
+        
+        self._context_stack.append({
+            # definitions
+            "num_nodes_active": len(self._active_i_to_node_i),
+            "num_nodes_total": len(self._node_i_to_name),
+            # tactics
+            "num_tactics": len(self._tactic_i_to_hash)
+        })
+    
+    def pop_context(self):
+        """Backtrack context to previous state. (Dual method to `push_context`.)"""
+        prev_cxt_state = self._context_stack.pop()
+        
+        # definitions
+
+        num_nodes_active = prev_cxt_state["num_nodes_active"]
+        num_nodes_total = prev_cxt_state["num_nodes_total"]
 
         for ident in self._node_i_to_ident[num_nodes_total:]:
             del self._ident_to_node_i[ident]
@@ -381,6 +406,12 @@ class DynamicDataServer(AbstractDataServer):
 
         if self.paranoic: self.consistency_check()
 
+        # tactics
+
+        while len(self._tactic_i_to_hash) > prev_cxt_state["num_tactics"]:
+            tactic_hash = self._tactic_i_to_hash.pop()
+            del self._tactic_to_i[tactic_hash]
+    
     def consistency_check(self):
         """
         (debugging) Checks concictency of:
@@ -429,7 +460,7 @@ class DynamicDataServer(AbstractDataServer):
         for node, node_i in self._node_to_node_i.items():
             assert node.identity == self._node_i_to_ident[node_i]
 
-    def proofstate(self, root, local_context):
+    def proofstate(self, root, local_context) -> LoaderProofstate:
         graph, node_to_i = self._downward_closure([root])
         root_i = 0
         local_context_i = [node_to_i[n] for n in local_context]
@@ -447,10 +478,10 @@ class DynamicDataServer(AbstractDataServer):
             metadata=dummy_proofstate_info
         )
 
-    def check_alignment(self, tactics, definitions):
+    def check_alignment(self, tactics, definitions) -> CheckAlignmentResponse:
         unaligned_tactics = [
             tactic.ident for tactic in tactics
-            if tactic.ident not in self._tactic_to_i
+            if not self.is_training_tactic(self._tactic_to_i.get(tactic.ident, self._train_tactics))
         ]
         unaligned_definitions = [
             d for d in definitions
@@ -485,20 +516,38 @@ class DynamicDataServer(AbstractDataServer):
             self,
             node_i : int,
             history : int, # how many pop's away is the studied timepoint
-    ):
+    ) -> bool:
         if node_i < self._base_node_label_num: return True
         if not history:
             num_nodes_active = self.num_nodes_active
         elif history <= len(self._context_stack):
-            num_nodes_active = self._context_stack[-history][0]
+            num_nodes_active = self._context_stack[-history]["num_nodes_active"]
         else:
             return False
 
         active_i = self._node_i_to_active_i.get(node_i, num_nodes_active)
         return active_i < num_nodes_active
 
-    def tactic_to_i(self, tactic):
+    def tactic_to_i(self, tactic) -> Optional[int]:
         return self._tactic_to_i.get(tactic.ident, None)
+    
+    def is_training_tactic(self, tactic_i: int) -> bool:
+        """Check if tactic was seen during training (i.e. is in the graph constants file)"""
+        return tactic_i < self._train_tactics
+    
+    def tactic_numargs(self, tactic_i: int) -> int:
+        """Check if tactic was seen during training (i.e. is in the graph constants file)"""
+        return self._tactic_i_to_numargs[tactic_i]
+    
+    def tactic_name(self, tactic_i: int) -> str:
+        # useful for debugging
+        return self._tactic_i_to_string[tactic_i]
+
+    def add_new_tactic(self, tactic) -> None:
+        tactic_i = len(self._tactic_i_to_hash)
+        self._tactic_i_to_hash.append(tactic.ident)
+        self._tactic_to_i[tactic.ident] = tactic_i
+
 
 class PredictServer:
     def __init__(self,
@@ -516,30 +565,93 @@ class PredictServer:
         self.config = config
         self.log_cnts = log_cnts
         self.profiler = profiler
-        self.current_allowed_tactics = None
+        self._context_stack = []
+        # while we are using msg.tactics we must have entered a context right before prediction
+        # to read `msg.tactics`` to in order to set `current_allowed_tactics`
+        # TODO(jrute): Remove this property if stop using `msg.tactics``
+        self.inside_context = False
+        self.current_allowed_tactics: List[int] = []
         self.response_history = response_history
-        self.msg_stack = []
 
-    def _calculate_current_allowed_tactics(self, msg : GlobalContextMessage):
+        self.knn_proofstep_limit = config.knn_proofstep_limit
+
+        if self.config.exclude_tactics is not None:
+            # TODO(jrute): To support excluded tactics, we need
+            # to either require all excluded tactics are already registered
+            # since that is the only place where we have tactic names
+            # otherwise we have to turn on tactic.base_text which we could
+            # do in tactician, but that would slow things down
+            raise Exception("--exclude-tactics not supported")
+            with Path(config.exclude_tactics).open('r') as yaml_file:
+                excluded_tactics = yaml.load(yaml_file, Loader=yaml.SafeLoader)
+            logger.info(f'excluding tactics {self.excluded_tactics}')
+        else:
+            excluded_tactics = []
+        self.excluded_tactics = set(excluded_tactics)
+        
+        self.max_tactic_args = config.max_tactic_args
+
+    def _push_context(self):
+        """Record lengths of lists so can backtrack to previous states. (Dual method to `_pop_context`.)"""
+        self._context_stack.append({
+            "num_allowed_tactics": len(self.current_allowed_tactics),
+        })
+        self.inside_context = True
+    
+    def _pop_context(self):
+        """Backtrack context to previous state. (Dual method to `_push_context`.)"""
+        prev_ctx_state = self._context_stack.pop()
+        # while using msg.tactics to set self.current_allowed_tactics this isn't very useful,
+        # since we rewrite current_allowed_tactics before every prediction action
+        # but after we avoid msg.tactics, (and instead loop over the proofs) this will be the right approach
+        self.current_allowed_tactics = self.current_allowed_tactics[prev_ctx_state["num_allowed_tactics"]:]
+
+        self.inside_context = False
+
+    def _is_current_allowed_tactic(self, tactic_i: int) -> bool:
+        # current_allowed_tactics only include tactics with trained embeddings
+        if not self.data_server.is_training_tactic(tactic_i):
+            return False
+        if self.data_server.tactic_name(tactic_i) in self.excluded_tactics:
+            return False
+        if self.max_tactic_args is not None and self.data_server.tactic_numargs(tactic_i) > self.max_tactic_args:
+            return False
+        return True
+
+    def _align_tactics(self, msg : GlobalContextMessage):
+        if not msg.tactics:
+            # no tactics, so we are using the new way to get tactics
+            return
+        
+        # TODO(jrute): Remove when stop using msg.tactics
         self.current_allowed_tactics = []
         for tactic in msg.tactics:
             tactic_i = self.data_server.tactic_to_i(tactic)
-            if tactic_i is not None:
+            if tactic_i is None:
+                continue
+            if self._is_current_allowed_tactic(tactic_i):
                 self.current_allowed_tactics.append(tactic_i)
 
     def _enter_coq_context(self, msg : GlobalContextMessage):
+        """
+        Enter a coq context handling any new definitions and tactics.
+        
+        This is reversible with `_exit_coq_context`
+        """
 
-        self.msg_stack.append(msg)
-        self._calculate_current_allowed_tactics(msg)
+        # register start of context
+        self._push_context()
+        self.data_server.push_context()
+        self.model.push_context()
 
         # definition alignment
-        
         self.data_server.align_definitions(msg.definitions.definitions(full = False))
 
+        # allocate space
         num_labels = self.data_server.num_nodes_total
-        logger.info(f"allocating space for {num_labels} defs")
+        logger.info(f"allocating space for {num_labels} defs and {self.knn_proofstep_limit} additional proofstates")
         with self.log_cnts.measure_build_network_time():
-            self.model.allocate_definitions(num_labels)
+            self.model.allocate_definitions(num_labels, self.knn_proofstep_limit)
 
         # definition recalculation
         if self.config.update == "all":
@@ -603,13 +715,97 @@ class PredictServer:
                 logger.info(f"Definition clusters updated.")
             else:
                 logger.info(f"No cluster to update.")
+        
+        # tactic alignment
+        # TODO(jrute): Remove when we stop using msg.tactics for tactic alignment
+        self._align_tactics(msg)
 
+        # find proofsteps
+        # TODO(jrute): Support excluding tactics with excluded_tactics (see note above)
+        # TODO(jrute): This code will not do anything until switching to newer version of pytact
+        proofstep_data = []
+        visited_tactics = []
+        visited_tactics_set = set()
+        for d in msg.definitions.definitions(full=False):  # already in reverse order
+            if d.proof is not None:
+                for proofstep in d.proof:
+                    if proofstep.tactic is not None:
+                        tactic = proofstep.tactic
+
+                        for outcome in proofstep.outcomes:
+                            tactic_arity = len(outcome.tactic_arguments)
+                            if self.max_tactic_args and tactic_arity > self.max_tactic_args:
+                                continue
+
+                            proof_state = outcome.before
+
+                            # record proofstep
+                            if len(proofstep_data) < self.knn_proofstep_limit:
+                                proofstep_data.append({
+                                    "proof_state": proof_state,
+                                    "tactic": tactic
+                                })
+                                recorded_proofstate = True
+                            else:
+                                recorded_proofstate = False
+                            
+                            # record tactic
+                            if tactic.ident not in visited_tactics_set:
+                                visited_tactics.append({
+                                    "tactic": tactic,
+                                    "arity": tactic_arity,
+                                    "recorded_proofstate": recorded_proofstate
+                                })
+                                visited_tactics_set.add(tactic.ident)
+        # want most recent proofs last so we reverse proof step data
+        proofstep_data.reverse()
+        visited_tactics.reverse()
+
+        # register new tactics
+        all_allowed_tactics = set(self.current_allowed_tactics)
+        for t in visited_tactics:
+            tactic = t["tactic"]
+            tactic_arity = t["arity"]
+            recorded_proofstate = t["recorded_proofstate"]
+
+            tactic_id = self.data_server.tactic_to_i(tactic)
+            if tactic_id is None:
+                # only register new tactics if in a proof state we are recording
+                if recorded_proofstate:
+                    self.data_server.add_new_tactic(tactic)
+                    tactic_id = self.data_server.tactic_to_i(tactic)
+                    self.model.add_new_tactic(tactic_id, tactic_arity)
+            elif tactic_id not in all_allowed_tactics:
+                if self._is_current_allowed_tactic(tactic_id):
+                    self.current_allowed_tactics.append(tactic_id)
+                all_allowed_tactics.add(tactic_id)
+
+
+        with self.log_cnts.measure_process_proof_step_time(len(proofstep_data)):
+            if proofstep_data:
+                logger.info(f"Updating recent proofstates...")
+                if self.config.progress_bar:
+                    proofstep_data = tqdm.tqdm(proofstep_data)
+
+                for proofstep in proofstep_data:
+                    proof_state = proofstep["proof_state"]
+                    tactic = proofstep["tactic"]
+
+                    self.profiler.step("proofstep")
+                    proof_state_graph = self.data_server.proofstate(proof_state.root, proof_state.context)
+                    tactic_id = self.data_server.tactic_to_i(tactic)
+                    assert tactic_id is not None
+                    self.model.compute_new_proofstep(proof_state_graph, tactic_id)
+
+                logger.info(f"Recent proofstate updated.")
+            else:
+                logger.info(f"No recent proofstates to update.")
+    
     def _exit_coq_context(self):
-
-        self.data_server.pop()
-        msg = self.msg_stack.pop()
-        self._calculate_current_allowed_tactics(msg)
-
+        self._pop_context()
+        self.data_server.pop_context()
+        self.model.pop_context()
+    
     @contextmanager
     def coq_context(self, msg: GlobalContextMessage):
         self._enter_coq_context(msg)
@@ -617,7 +813,7 @@ class PredictServer:
         self._exit_coq_context()
 
     def predict(self, proof_state: ProofState) -> TacticPredictionsGraph:
-        if self.current_allowed_tactics is None:
+        if not self.inside_context:
             raise Exception("Cannot predict outside 'with predict_server.coq_context()'")
 
         proof_state_graph = self.data_server.proofstate(proof_state.root, proof_state.context)
@@ -811,7 +1007,77 @@ def parse_args() -> argparse.Namespace:
                         type=Path,
                         default=None,
                         help="a list of tactic names to exclude from predictions")
+    
+    parser.add_argument('--max-tactic-args', '--max_tactic_args',
+                        type=int,
+                        default=255,
+                        help="exclude any tactic with more than this many arguments (default: 255)")
 
+    parser.add_argument('--hard-code-arg-pred-logit-temp', '--hard_code_arg_pred_logit_temp',
+                        default=False,
+                        action='store_true',
+                        help="For debugging only. (Needed for compatibility with a particular previously trained model which had a bug.)")
+    
+    parser.add_argument('--knn-proofstep-limit', '--knn_proofstep_limit',
+                        type=int,
+                        default=0,
+                        help="Number of recent proof states to use for k-NN tactic prediction (0 disables k-NN), defaults to 0")
+    
+    parser.add_argument('--knn-keys-ignore-tactic-head', '--knn_keys_ignore_tactic_head',
+                        default=False,
+                        action='store_true',
+                        help="Use pre-tactic-head embeddings for key embeddings in k-NN tactic prediction")
+    
+    parser.add_argument('--knn-logit-normalize-mean', '--knn_logit_normalize_mean',
+                        default=False,
+                        action='store_true',
+                        help="Normalize logits mean to 0 (independently for knn and trained tactics)")
+    
+    parser.add_argument('--knn-logit-normalize-max', '--knn_logit_normalize_max',
+                        default=False,
+                        action='store_true',
+                        help="Use same max score for top predictions from each of knn and trained tactics")
+    
+    parser.add_argument('--knn-logit-normalize-prob', '--knn_logit_normalize_prob',
+                        default=False,
+                        action='store_true',
+                        help="Normalize logits to be a log probability distribution (independently for knn and trained tactics)")
+    
+    parser.add_argument('--knn-logit-normalize-var', '--knn_logit_normalize_var',
+                        default=False,
+                        action='store_true',
+                        help="Normalize knn logits to have same variance as trained tactic logits")
+    
+    parser.add_argument('--knn-logit-normalize-std', '--knn_logit_normalize_std',
+                        type=float,
+                        default=None,
+                        help="Normalize knn logits to have specific standard deviation, defaults to None")
+    
+    parser.add_argument('--knn-logit-temp', '--knn_logit_temp',
+                        type=float,
+                        default=None,
+                        help="Logit temperature for k-NN tactic prediction, defaults to None")
+    
+    parser.add_argument('--knn-only', '--knn_only',
+                        default=False,
+                        action='store_true',
+                        help="Don't use learned tactic embeddings as keys for tactic prediction (`knn_proofstep_limit` must be positive)")
+    
+    parser.add_argument('--knn-duplicate-reduction', '--knn_duplicate_reduction',
+                        type=str,
+                        default="none",
+                        help="How to combine logits if the same tactic is selected multiple times (options: 'none', 'mean', 'sum', 'max', 'softmax', 'frequency', 'order'), defaults to 'none'")
+    
+    parser.add_argument('--knn-use-learned-tactic-embeddings-for-arg-prediction', '--knn_use_learned_tactic_embeddings_for_arg_prediction',
+                        default=False,
+                        action='store_true',
+                        help="Use a learned tactic embedding (if one exists) for argument prediction instead of the embedding from the k-NN proof state example")
+    
+    parser.add_argument('--knn-dist', '--knn_dist',
+                        type=str,
+                        default="inner_prod",
+                        help="The distance to use in the knn (options: 'inner_prod', 'cosine', 'euclidean'), defaults to 'inner_prod'")
+    
     parser.add_argument('--paranoic-data-server', '--paranoic_data_server',
                         default=False,
                         action='store_true',
@@ -834,6 +1100,18 @@ def parse_args() -> argparse.Namespace:
                         type=int, default=15,
                         help='Prediction step to stop profiling (exclusive) (default: 15).')
 
+    parser.add_argument('--proofstep-profiler-logdir', '--proofstep_profiler_logdir',
+                        type=Path, default=None,
+                        help='Supply logdir to profile the proofstep processing')
+
+    parser.add_argument('--proofstep-profiler-start', '--proofstep_profiler_start',
+                        type=int, default=10,
+                        help='Proofstep processing steps to start profiling (default: 10).')
+    
+    parser.add_argument('--proofstep-profiler-end', '--proofstep_profiler_end',
+                        type=int, default=15,
+                        help='Proofstep processing steps to stop profiling (exclusive) (default: 15).')
+    
     parser.add_argument('--def-profiler-logdir', '--def_profiler_logdir',
                         type=Path, default=None,
                         help='Supply logdir to profile the definition steps')
@@ -873,21 +1151,30 @@ def load_model(config: argparse.Namespace, log_levels: dict) -> Predict:
             config.cpu_thread_count
         )
 
-        if config.exclude_tactics is not None:
-            with Path(config.exclude_tactics).open('r') as yaml_file:
-                exclude_tactics = yaml.load(yaml_file, Loader=yaml.SafeLoader)
-            logger.info(f'excluding tactics {exclude_tactics}')
-        else:
-            exclude_tactics = None
-
         logger.info("importing TFGNNPredict class...")
         from graph2tac.tfgnn.predict import TFGNNPredict
-        model = TFGNNPredict(log_dir=Path(config.model).expanduser().absolute(),
-                             tactic_expand_bound=config.tactic_expand_bound,
-                             search_expand_bound=config.search_expand_bound,
-                             debug_dir=config.debug_predict,
-                             checkpoint_number=config.checkpoint_number,
-                             exclude_tactics=exclude_tactics)
+        model = TFGNNPredict(
+            log_dir=Path(config.model).expanduser().absolute(),
+            tactic_expand_bound=config.tactic_expand_bound,
+            search_expand_bound=config.search_expand_bound,
+            tactic_inference_knn_config={
+                "knn_proofstep_limit": config.knn_proofstep_limit,
+                "knn_keys_ignore_tactic_head": config.knn_keys_ignore_tactic_head,
+                "knn_logit_normalize_mean": config.knn_logit_normalize_mean,
+                "knn_logit_normalize_max": config.knn_logit_normalize_max,
+                "knn_logit_normalize_prob": config.knn_logit_normalize_prob,
+                "knn_logit_normalize_var": config.knn_logit_normalize_var,
+                "knn_logit_normalize_std": config.knn_logit_normalize_std,
+                "knn_logit_temp": config.knn_logit_temp,
+                "knn_only": config.knn_only,
+                "knn_duplicate_reduction": config.knn_duplicate_reduction,
+                "knn_use_learned_tactic_embeddings_for_arg_prediction": config.knn_use_learned_tactic_embeddings_for_arg_prediction,
+                "knn_dist": config.knn_dist,
+            },
+            debug_dir=config.debug_predict,
+            checkpoint_number=config.checkpoint_number,
+            hard_code_arg_pred_logit_temp=config.hard_code_arg_pred_logit_temp,
+        )
     elif config.arch == 'hmodel':
         logger.info("importing HPredict class..")
         from graph2tac.loader.hmodel import HPredict
@@ -930,9 +1217,9 @@ def main_with_return_value() -> ResponseHistory:
 
     log_cnts = LoggingCounters(process_uuid=process_uuid)
     profiler = Profiler(
-        logdir={"pred": config.pred_profiler_logdir, "def": config.def_profiler_logdir},
-        start={"pred": config.pred_profiler_start, "def": config.def_profiler_start},
-        end={"pred": config.pred_profiler_end, "def": config.def_profiler_end},
+        logdir={"pred": config.pred_profiler_logdir, "def": config.def_profiler_logdir, "proofstep": config.proofstep_profiler_logdir},
+        start={"pred": config.pred_profiler_start, "def": config.def_profiler_start, "proofstep": config.proofstep_profiler_start},
+        end={"pred": config.pred_profiler_end, "def": config.def_profiler_end, "proofstep": config.proofstep_profiler_end},
     )
     with log_cnts.measure_build_network_time():
         model = load_model(config, log_levels)
