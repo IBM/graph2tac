@@ -911,7 +911,7 @@ class TacticInferenceTask(tf.keras.layers.Layer):
                 # [batch, tac_hdim]
                 query_embs_ = query_embs
             elif self.knn_head is not None:
-                query_embs_ = self.knn_head(key_embs)
+                query_embs_ = self.knn_head(query_embs)
             else:
                 # [batch, hidden_hdim]
                 query_embs_ = hidden_state
