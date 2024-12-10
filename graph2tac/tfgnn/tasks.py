@@ -425,6 +425,226 @@ class ResizableArray(tf.keras.layers.Layer):
             )
 
 
+
+
+class Temp(tf.keras.layers.Layer):
+    def __init__(self, init_temp: float, name="temp"):
+        super().__init__(name=name)
+        self.temp = tf.Variable(initial_value=init_temp, trainable=True)
+    
+    def call(self, logits: tf.Tensor):
+        return logits / self.temp
+
+
+class QueryKeyMult(tf.keras.layers.Layer):
+    def __init__(self):
+        super().__init__(name="query_key_mult")
+
+    def call(self, query, keys):
+        #tf.print("tf_query", x)
+        #tf.print("tf_keys", y)
+        x = query
+        y = keys
+        # normalize
+        x = x / tf.norm(x, keepdims=True, axis=-1)
+        y = y / tf.norm(y, keepdims=True, axis=-1)
+        #tf.print("tf_query_norm", x)
+        #tf.print("tf_keys_norm", y)
+        # multiply
+        logits = tf.einsum("ik,ijk->ij", x, y)
+        # temp
+        #logits = logits / temp
+        #tf.print("tf_logits", logits)
+        # softmax
+        #logits = logits - tf.reduce_max(logits, axis=-1, keepdims=True)
+        #probs = tf.exp(logits)
+        #logits = logits - tf.math.log(tf.reduce_sum(probs, axis=-1, keepdims=True))
+        
+        # output
+        return logits
+
+
+class FeedForward(tf.keras.layers.Layer):
+    def __init__(self, num_layers: int, hdim: int, residual: bool, dropout: bool, name: str):
+        super().__init__(name=name)
+        self.layers = []
+        for _ in range(num_layers):
+            if dropout:
+                self.layers.append(tf.keras.layers.Dropout(rate=0.1))
+            self.layers.append(tf.keras.layers.Dense(hdim, activation="relu"))
+        self.residual = residual
+    
+    def call(self, inputs: tf.Tensor):
+        x0 = inputs
+        x = inputs
+        for layer in self.layers:
+            x: tf.Tensor = layer(x)
+        if self.residual:
+            x = x + x0
+        return x
+
+
+class SoftmaxCollapse(tf.keras.layers.Layer):
+    def __init__(self, num_tactics):
+        super().__init__(name="softmax_collapse")
+        # add one for special null tactic id
+        self.num_tactics = num_tactics + 1
+    
+    def call(
+            self, 
+            tactic_logits: tf.Tensor,  # [batch, history]
+            tactic_ids: tf.Tensor,     # [batch, history]
+    ):
+        batch_size = tf.shape(tactic_logits)[0]
+        history_size = tf.shape(tactic_logits)[1]
+
+        # flatten the arrays
+        # and make tactic ids distinct across batch ids
+        # so that when we combine like tactic ids, we don't combine across batch ids
+        # [batch, 1]
+        offset = tf.expand_dims(tf.range(batch_size, dtype=tf.int64) * self.num_tactics, axis=-1)
+        # [batch * history]
+        tactic_ids = tf.reshape(tf.cast(tactic_ids, dtype=tf.int64) + offset, shape=[batch_size * history_size])
+        tactic_logits = tf.reshape(tactic_logits, shape=[batch_size * history_size])
+        
+        # [batch * all_tactics]
+        maxs = tf.math.unsorted_segment_max(tactic_logits, tactic_ids, batch_size * self.num_tactics)
+        # [batch * history]
+        maxs_ = tf.gather(maxs, tactic_ids)
+        tactic_probs = tf.exp(tactic_logits - maxs_)
+        # [batch * all_tactics]
+        tactic_probs = tf.math.unsorted_segment_sum(tactic_probs, tactic_ids, batch_size * self.num_tactics)
+        tactic_logits = tf.math.log(tactic_probs) + maxs
+
+        # [batch, all_tactics]
+        predictions = tf.reshape(tactic_logits, shape=[batch_size, self.num_tactics])
+        return predictions
+    
+
+class SoftmaxCombine(tf.keras.layers.Layer):
+    def __init__(self, ratio):
+        super().__init__(name="softmax_combine")
+        # add one for special null tactic id
+        self.ratio = ratio
+    
+    def call(
+        self, 
+        knn_predictions: tf.Tensor,   # [batch, tactics+1]
+        cls_predictions: tf.Tensor, # [batch, tactics+1]
+    ):
+        # make log probs
+        knn_predictions = tf.math.log_softmax(knn_predictions)
+        cls_predictions = tf.math.log_softmax(cls_predictions)
+
+        # scale by ratio
+        knn_predictions = knn_predictions + tf.math.log(self.ratio)
+        cls_predictions = cls_predictions + tf.math.log(1-self.ratio)
+
+        # subtract max for numerical stability
+        maxs = tf.maximum(knn_predictions, cls_predictions)
+        knn_predictions = knn_predictions - maxs
+        cls_predictions = cls_predictions - maxs
+
+        # add in prob space
+        predictions = tf.math.log(tf.exp(knn_predictions) + tf.exp(cls_predictions))
+
+        # add back maxs
+        predictions = predictions + maxs
+
+        return predictions
+
+
+class ModelBuilder:
+    def __init__(
+        self,
+        num_tactics: int,
+        hdim: int,
+        query_emb_layer: None | FeedForward, 
+        key_emb_layer: None | FeedForward, 
+        class_emb_layer: None | FeedForward,
+        class_layer: None | tf.keras.layers.Dense,
+        knn_class_prob_ratio: float,
+        temp_layer: None | Temp,
+    ):
+        """Build model
+
+        :param hdim: Size of hidden layer
+        :param query_emb_layer: The trainable query layer used for the knn model.  If None, use initial query embeddings.
+        :param key_emb_layer: The trainable query layer used for the knn model.  If None, use initial key embeddings.
+        :param class_emb_layer: The trainable classifier embedding layer.  If None, use initial query embeddings.
+        :param class_layer: Classification dense layer.  (If None, don't use classification.)
+        :param knn_class_prob_ratio: Ratio to mix probs for knn and classifer.  If 1.0 only train knn.  If 0.0 only train classifier.
+        :param temp_layer: The tempature parameter layer.
+        
+        knn_classifer_weight
+        """
+        self.num_tactics = num_tactics
+        self.hdim = hdim
+        self.query_emb_layer = query_emb_layer
+        self.key_emb_layer = key_emb_layer
+        self.class_emb_layer = class_emb_layer
+        self.class_layer = class_emb_layer
+        self.temp_layer = temp_layer
+        self.knn_class_prob_ratio = knn_class_prob_ratio
+        self.class_layer = class_layer
+        
+        assert 0.0 <= self.knn_class_prob_ratio and self.knn_class_prob_ratio <= 1.0, self.knn_class_prob_ratio
+        self.use_knn = (self.knn_class_prob_ratio > 0.0)
+        self.use_class = (self.knn_class_prob_ratio < 1.0)
+        if self.use_class:
+            assert class_layer is not None
+            assert class_layer.units == self.num_tactics + 1
+
+        if self.use_knn:
+            assert temp_layer is not None
+    
+    def build_prediction_model(self) -> tf.keras.Model:
+        hdim = self.hdim
+        # training model store embeddings explicitly to reduce memory in training 
+        query = tf.keras.layers.Input(shape=(hdim,), dtype=tf.float32)
+        keys = tf.keras.layers.Input(shape=(1000, hdim), dtype=tf.float32)
+        tactic_ids = tf.keras.layers.Input(shape=(1000,), dtype=tf.int32)
+        
+        if self.use_knn and self.query_emb_layer is not None:
+            knn_query = self.query_emb_layer(query)
+        else:
+            knn_query = query
+        
+        if self.use_knn and self.key_emb_layer is not None:
+            knn_keys = self.key_emb_layer(keys)
+        else:
+            knn_keys = keys
+        
+        if self.use_class and self.class_emb_layer is not None:
+            class_query = self.class_emb_layer(query)
+        else:
+            class_query = query
+
+        if self.use_knn:
+            assert self.temp_layer is not None
+            logits = QueryKeyMult()(knn_query, knn_keys)
+            logits = self.temp_layer(logits)
+            knn_prediction = SoftmaxCollapse(self.num_tactics)(logits, tactic_ids)
+        
+        if self.use_class:
+            assert self.class_layer is not None
+            class_prediction = self.class_layer(class_query)
+        
+        if not self.use_knn:
+            prediction = class_prediction
+        elif not self.use_class:
+            prediction = knn_prediction
+        else:
+            SoftmaxCombine(ratio=self.knn_class_prob_ratio)(knn_prediction, class_prediction)
+            prediction = self.knn_class_prob_ratio * knn_prediction + (1-self.knn_class_prob_ratio) * class_prediction
+
+        model = tf.keras.Model(inputs=[query, keys, tactic_ids], outputs=prediction)
+
+        return model
+
+
+
+
 class TacticInferenceTask(tf.keras.layers.Layer):
     """
     This layer controls (base) tactic prediction during inference,
@@ -449,6 +669,7 @@ class TacticInferenceTask(tf.keras.layers.Layer):
         knn_duplicate_reduction: str = "none",
         knn_use_learned_tactic_embeddings_for_arg_prediction: bool = False,
         knn_dist: str = "inner_prod",
+        knn_trained_model: None|Path = None,
         name="tactic_inference",
         **kwargs
     ):
@@ -472,6 +693,7 @@ class TacticInferenceTask(tf.keras.layers.Layer):
         :param knn_duplicate_reduction: How to combine logits if the same tactic is selected multiple times (options: "none", "mean", "sum", "max", "softmax", "frequency", "order"), defaults to "none"
         :param knn_use_learned_tactic_embeddings_for_arg_prediction: Use a learned tactic embedding (if one exists) for argument prediction instead of the embedding from the k-NN proof state example, defaults to False
         :param knn_dist: The distance to use in the knn.  Options: "inner_prod", "cosine", "euclidean".
+        :param knn_trained_model: Optional path to trained knn model (default None).
         :param name: layer name, defaults to "tactic_inference"
         """
         super().__init__(name=name, **kwargs)
@@ -539,6 +761,43 @@ class TacticInferenceTask(tf.keras.layers.Layer):
         # the embeddings and tactic id for each new example
         self.proof_step_embeddings = ResizableArray(value_shape=(hdim,), value_dtype=tf.float32, init_tensor_size=initial_tensor_size)
         self.proof_step_tactic_ids = ResizableArray(value_shape=tuple(), value_dtype=tf.int32, init_tensor_size=initial_tensor_size)
+
+        if knn_trained_model is not None:
+            assert self.knn_keys_ignore_tactic_head
+            assert self.knn_logit_temp is None   # use my own trained temp layer
+            assert not self.knn_logit_normalize_var
+            assert not self.knn_logit_normalize_std
+
+            # TODO: Don't hardcode this stuff!
+            query_layer = FeedForward(hdim=hdim, num_layers=3, residual=True, dropout=True, name="tactic_knn_query")
+            key_layer = query_layer  # FeedForward(hdim=dim, num_layers=3, residual=True, dropout=True, name="tactic_knn_key")
+            temp_layer = Temp(init_temp=0.03)
+
+            # build model only so that I can load the weights for the model
+            knn_pred_model = ModelBuilder(
+                num_tactics=0,  # not needed here
+                hdim=hdim,
+                query_emb_layer=query_layer,
+                key_emb_layer=key_layer,
+                temp_layer=temp_layer,
+                class_emb_layer=None,
+                class_layer=None,
+                knn_class_prob_ratio=1.0,
+            ).build_prediction_model()
+            
+            # load weights
+            assert knn_trained_model.suffix == ".h5", knn_trained_model.suffix
+            knn_pred_model.load_weights(knn_trained_model)
+            # done with the model
+
+            # extract needed layers
+            self.knn_logit_temp = temp_layer.get_weights()[0]
+            self.knn_head = key_layer
+        else:
+            self.knn_head = None
+
+            
+
 
     def allocate_space(self, increase: int) -> bool:
         increased1 = self.tactic_id_to_arg_count.check_and_resize_if_needed(length_increase=increase)
@@ -651,6 +910,8 @@ class TacticInferenceTask(tf.keras.layers.Layer):
             if not self.knn_keys_ignore_tactic_head:
                 # [batch, tac_hdim]
                 query_embs_ = query_embs
+            elif self.knn_head is not None:
+                query_embs_ = self.knn_head(key_embs)
             else:
                 # [batch, hidden_hdim]
                 query_embs_ = hidden_state
@@ -659,16 +920,21 @@ class TacticInferenceTask(tf.keras.layers.Layer):
             start = tf.maximum(0, end - self.knn_proofstep_limit)
             # [limit, hdim]
             key_embs = self.proof_step_embeddings.get_slice(start, end)
+            if self.knn_head is not None:
+                key_embs_ = self.knn_head(key_embs)
+            else:
+                key_embs_ = key_embs
+
             # [limit,]
             tactic_ids = self.proof_step_tactic_ids.get_slice(start, end)
             if self.knn_dist == "inner_prod":
                 # [limit, batch]
-                tactic_logits = tf.einsum("ik,jk->ji", query_embs_, key_embs)
+                tactic_logits = tf.einsum("ik,jk->ji", query_embs_, key_embs_)
             elif self.knn_dist == "cosine":
                 # [batch, hdim]
                 query_embs_ = query_embs_ / tf.norm(query_embs_, axis=-1, keepdims=True)
                 # [limit, hdim]
-                key_embs_ = key_embs / tf.norm(key_embs, axis=-1, keepdims=True)
+                key_embs_ = key_embs / tf.norm(key_embs_, axis=-1, keepdims=True)
                 # [limit, batch]
                 tactic_logits = tf.einsum("ik,jk->ji", query_embs_, key_embs_)
             elif self.knn_dist == "euclidean":
@@ -679,9 +945,9 @@ class TacticInferenceTask(tf.keras.layers.Layer):
                     # [1, batch]
                     -tf.expand_dims(tf.einsum("jk,jk->j", query_embs_, query_embs_), axis=0) +
                     # [limit, 1]
-                    -tf.expand_dims(tf.einsum("ik,ik->i", key_embs, key_embs), axis=1) +
+                    -tf.expand_dims(tf.einsum("ik,ik->i", key_embs_, key_embs_), axis=1) +
                     # [limit, batch]
-                    2 * tf.einsum("ik,jk->ji", query_embs_, key_embs)
+                    2 * tf.einsum("ik,jk->ji", query_embs_, key_embs_)
                 )
             else:
                 raise Exception(f"Unsupported knn_dist: {self.knn_dist}")

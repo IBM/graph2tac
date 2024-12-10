@@ -1078,6 +1078,11 @@ def parse_args() -> argparse.Namespace:
                         default="inner_prod",
                         help="The distance to use in the knn (options: 'inner_prod', 'cosine', 'euclidean'), defaults to 'inner_prod'")
     
+    parser.add_argument('--knn-trained-model', '--knn_trained_model',
+                        type=Path,
+                        default=None,
+                        help="Path to trained knn model")
+    
     parser.add_argument('--paranoic-data-server', '--paranoic_data_server',
                         default=False,
                         action='store_true',
@@ -1170,6 +1175,7 @@ def load_model(config: argparse.Namespace, log_levels: dict) -> Predict:
                 "knn_duplicate_reduction": config.knn_duplicate_reduction,
                 "knn_use_learned_tactic_embeddings_for_arg_prediction": config.knn_use_learned_tactic_embeddings_for_arg_prediction,
                 "knn_dist": config.knn_dist,
+                "knn_trained_model": config.knn_trained_model,
             },
             debug_dir=config.debug_predict,
             checkpoint_number=config.checkpoint_number,
