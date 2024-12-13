@@ -879,7 +879,11 @@ class TacticInferenceTask(tf.keras.layers.Layer):
             # [tactic_cxt, tac_hdim]
             key_embs = tf.gather(tac_embs, indices=tactic_ctx_ids, batch_dims=0)
             # [tactic_cxt, batch]
-            tactic_logits = tf.einsum("ik,jk->ji", query_embs, key_embs)
+            with tf.control_dependencies([
+                tf.debugging.assert_all_finite(query_embs, message="Tactic Query embs have NaN"),
+                tf.debugging.assert_all_finite(key_embs, message="Tactic Key embs have NaN")
+            ]):
+                tactic_logits = tf.einsum("ik,jk->ji", query_embs, key_embs)
             
             if self.knn_logit_normalize_var:
                 # store std for use in normalizing variance of the knn logits
@@ -893,14 +897,18 @@ class TacticInferenceTask(tf.keras.layers.Layer):
                 # [limit, batch]
                 tactic_logits = tactic_logits - tf.reduce_mean(tactic_logits, axis=0, keepdims=True)
             elif self.knn_logit_normalize_prob:
-                # log softmax to normalize logits to be log probabilities
-                # [limit, batch]
-                tactic_logits = tactic_logits - tf.reduce_max(tactic_logits, axis=0, keepdims=True)
-                tactic_exp_logits = tf.exp(tactic_logits)
-                # [1, batch]
-                tactic_cum_prob = tf.expand_dims(tf.reduce_sum(tactic_exp_logits, axis=0), axis=0)
-                # [limit, batch]
-                tactic_logits = tactic_logits - tf.math.log(tactic_cum_prob)
+                exp_tactic_logits = tf.exp(tactic_logits - tf.reduce_max(tactic_logits, axis=-1, keepdims=True))
+                with tf.control_dependencies([
+                    tf.debugging.assert_all_finite(exp_tactic_logits, message="G2T Tactic logits have NaN")
+                ]):
+                    # log softmax to normalize logits to be log probabilities
+                    # [limit, batch]
+                    tactic_logits = tactic_logits - tf.reduce_max(tactic_logits, axis=0, keepdims=True)
+                    tactic_exp_logits = tf.exp(tactic_logits)
+                    # [1, batch]
+                    tactic_cum_prob = tf.expand_dims(tf.reduce_sum(tactic_exp_logits, axis=0), axis=0)
+                    # [limit, batch]
+                    tactic_logits = tactic_logits - tf.math.log(tactic_cum_prob)
             
             all_tactic_embs.append(key_embs)
             all_tactic_logits.append(tactic_logits)
@@ -936,7 +944,13 @@ class TacticInferenceTask(tf.keras.layers.Layer):
                 # [limit, hdim]
                 key_embs_ = key_embs / tf.norm(key_embs_, axis=-1, keepdims=True)
                 # [limit, batch]
-                tactic_logits = tf.einsum("ik,jk->ji", query_embs_, key_embs_)
+                
+                with tf.control_dependencies([
+                    tf.debugging.assert_all_finite(query_embs_, message="KNN queries have NaN"),
+                    tf.debugging.assert_all_finite(key_embs_, message="KNN keys have NaN"),
+                ]):
+                    tactic_logits = tf.einsum("ik,jk->ji", query_embs_, key_embs_)
+                
             elif self.knn_dist == "euclidean":
                 # use negative euclidean distance
                 # -(x - y)**2 = -x**2 - y**2 + 2xy
@@ -956,11 +970,15 @@ class TacticInferenceTask(tf.keras.layers.Layer):
                 # [limit, batch]
                 tactic_logits = tactic_logits / self.knn_logit_temp
             elif self.knn_logit_normalize_var:
-                # [limit, batch]
-                # add epsilon to std to avoid rare std = 0 case
-                std = tf.expand_dims(std, axis=0) + .000001
-                knn_std = tf.math.reduce_std(tactic_logits, axis=0, keepdims=True) + .000001
-                tactic_logits = tactic_logits * std / knn_std
+                exp_tactic_logits = tf.exp(tactic_logits - tf.reduce_max(tactic_logits, axis=-1, keepdims=True))
+                with tf.control_dependencies([
+                    tf.debugging.assert_all_finite(exp_tactic_logits, message="KNN 1 Tactic logits have NaN")
+                ]):
+                    # [limit, batch]
+                    # add epsilon to std to avoid rare std = 0 case
+                    std = tf.expand_dims(std, axis=0) + .000001
+                    knn_std = tf.math.reduce_std(tactic_logits, axis=0, keepdims=True) + .000001
+                    tactic_logits = tactic_logits * std / knn_std
             elif self.knn_logit_normalize_std is not None:
                 # [limit, batch]
                 # add epsilon to std to avoid rare std = 0 case
@@ -975,14 +993,18 @@ class TacticInferenceTask(tf.keras.layers.Layer):
                 # [limit, batch]
                 tactic_logits = tactic_logits - tf.reduce_mean(tactic_logits, axis=0, keepdims=True)
             elif self.knn_logit_normalize_prob:
-                # log softmax to normalize logits to be log probabilities
-                # [limit, batch]
-                tactic_logits = tactic_logits - tf.reduce_max(tactic_logits, axis=0, keepdims=True)
-                tactic_exp_logits = tf.exp(tactic_logits)
-                # [1, batch]
-                tactic_cum_prob = tf.expand_dims(tf.reduce_sum(tactic_exp_logits, axis=0), axis=0)
-                # [limit, batch]
-                tactic_logits = tactic_logits - tf.math.log(tactic_cum_prob)
+                exp_tactic_logits = tf.exp(tactic_logits - tf.reduce_max(tactic_logits, axis=-1, keepdims=True))
+                with tf.control_dependencies([
+                    tf.debugging.assert_all_finite(exp_tactic_logits, message="KNN 2 Tactic logits have NaN")
+                ]):
+                    # log softmax to normalize logits to be log probabilities
+                    # [limit, batch]
+                    tactic_logits = tactic_logits - tf.reduce_max(tactic_logits, axis=0, keepdims=True)
+                    tactic_exp_logits = tf.exp(tactic_logits)
+                    # [1, batch]
+                    tactic_cum_prob = tf.expand_dims(tf.reduce_sum(tactic_exp_logits, axis=0), axis=0)
+                    # [limit, batch]
+                    tactic_logits = tactic_logits - tf.math.log(tactic_cum_prob)
             
             if not self.knn_keys_ignore_tactic_head:
                 # [limit, tac_hdim]
@@ -1000,7 +1022,14 @@ class TacticInferenceTask(tf.keras.layers.Layer):
         # [selected_tactics, tac_hdim]
         tactic_embs = tf.concat(all_tactic_embs, axis=0)
         # [selected_tactics, batch]
-        tactic_logits = tf.concat(all_tactic_logits, axis=0)
+
+        exp_tactic_logits0 = tf.exp(all_tactic_ids[0] - tf.reduce_max(all_tactic_ids[0], axis=-1, keepdims=True))
+        exp_tactic_logits1 = tf.exp(all_tactic_ids[-1] - tf.reduce_max(all_tactic_ids[-1], axis=-1, keepdims=True))
+        with tf.control_dependencies([
+            tf.debugging.assert_all_finite(exp_tactic_logits0, message="G2T final Tactic logits have NaN"),
+            tf.debugging.assert_all_finite(exp_tactic_logits1, message="KNN final Tactic logits have NaN"),
+        ]):
+            tactic_logits = tf.concat(all_tactic_logits, axis=0)
         # [selected_tactics, ]
         tactic_ids = tf.concat(all_tactic_ids, axis=0)
 
@@ -1067,24 +1096,28 @@ class TacticInferenceTask(tf.keras.layers.Layer):
             # Convert the logits to probabilities and then sum the probabilities across the same tactic
             # Embeddings are a weighted average of the probabilities
 
-            # [output_tactics,], [selected_tactics, ]
-            tactic_ids, segment_ix = tf.unique(tactic_ids)
-            num_tactics = tf.shape(tactic_ids)[0]
-            
-            # [output_tactics, batch]
-            maxs = tf.math.unsorted_segment_max(tactic_logits, segment_ix, num_tactics)
-            # [selected_tactics, batch]
-            maxs_ = tf.gather(maxs, segment_ix)
-            tactic_probs = tf.exp(tactic_logits - maxs_)
-            # [selected_tactics, batch, tac_hdim]
-            tactic_embs = tf.tile(tf.expand_dims(tactic_embs, axis=1), multiples=[1, batch_size, 1])
-            tactic_embs = tactic_embs * tf.expand_dims(tactic_probs, axis=2)
-            # [output_tactics, batch]
-            tactic_probs = tf.math.unsorted_segment_sum(tactic_probs, segment_ix, num_tactics)
-            tactic_logits = tf.math.log(tactic_probs) + maxs
-            # [output_tactics, batch, tac_hdim]
-            tactic_embs = tf.math.unsorted_segment_sum(tactic_embs, segment_ix, num_tactics)
-            tactic_embs = tactic_embs / tf.expand_dims(tactic_probs, axis=2)
+            exp_tactic_logits = tf.exp(tactic_logits - tf.reduce_max(tactic_logits, axis=-1, keepdims=True))
+            with tf.control_dependencies([
+                tf.debugging.assert_all_finite(exp_tactic_logits, message="Combined Tactic logits have NaN")
+            ]):
+                # [output_tactics,], [selected_tactics, ]
+                tactic_ids, segment_ix = tf.unique(tactic_ids)
+                num_tactics = tf.shape(tactic_ids)[0]
+                
+                # [output_tactics, batch]
+                maxs = tf.math.unsorted_segment_max(tactic_logits, segment_ix, num_tactics)
+                # [selected_tactics, batch]
+                maxs_ = tf.gather(maxs, segment_ix)
+                tactic_probs = tf.exp(tactic_logits - maxs_)
+                # [selected_tactics, batch, tac_hdim]
+                tactic_embs = tf.tile(tf.expand_dims(tactic_embs, axis=1), multiples=[1, batch_size, 1])
+                tactic_embs = tactic_embs * tf.expand_dims(tactic_probs, axis=2)
+                # [output_tactics, batch]
+                tactic_probs = tf.math.unsorted_segment_sum(tactic_probs, segment_ix, num_tactics)
+                tactic_logits = tf.math.log(tactic_probs) + maxs
+                # [output_tactics, batch, tac_hdim]
+                tactic_embs = tf.math.unsorted_segment_sum(tactic_embs, segment_ix, num_tactics)
+                tactic_embs = tactic_embs / tf.expand_dims(tactic_probs, axis=2)
         
         elif self.knn_duplicate_reduction == "frequency":
             # Ignore the logits and use the log of the tactic frequencies
