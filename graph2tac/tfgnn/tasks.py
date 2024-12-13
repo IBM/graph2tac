@@ -1023,8 +1023,8 @@ class TacticInferenceTask(tf.keras.layers.Layer):
         tactic_embs = tf.concat(all_tactic_embs, axis=0)
         # [selected_tactics, batch]
 
-        exp_tactic_logits0 = tf.exp(all_tactic_ids[0] - tf.reduce_max(all_tactic_ids[0], axis=-1, keepdims=True))
-        exp_tactic_logits1 = tf.exp(all_tactic_ids[-1] - tf.reduce_max(all_tactic_ids[-1], axis=-1, keepdims=True))
+        exp_tactic_logits0 = tf.exp(all_tactic_logits[0] - tf.reduce_max(all_tactic_logits[0], axis=-1, keepdims=True))
+        exp_tactic_logits1 = tf.exp(all_tactic_logits[-1] - tf.reduce_max(all_tactic_logits[-1], axis=-1, keepdims=True))
         with tf.control_dependencies([
             tf.debugging.assert_all_finite(exp_tactic_logits0, message="G2T final Tactic logits have NaN"),
             tf.debugging.assert_all_finite(exp_tactic_logits1, message="KNN final Tactic logits have NaN"),
