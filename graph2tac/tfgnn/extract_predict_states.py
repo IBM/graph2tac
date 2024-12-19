@@ -1,7 +1,8 @@
 from collections import defaultdict
 import gzip
+import itertools
 import json
-from typing import Any, Optional
+from typing import Any, Iterable, Optional
 
 import argparse
 import pickle
@@ -258,6 +259,9 @@ class DataExtractor:
         for i, name in enumerate(self.model.graph_constants.label_to_names):
             self.name_to_is[name].append(i)
 
+        self.name_data: dict[int, dict[str, Any]] = {}
+        self.visited_names: dict[int, list[int]] = {}
+
         # verify that the alignment is the same
         # TODO(jrute): Make it so that we don't have to run on the exact same data used for training
         assert len(self.data_server._node_i_to_name) == len(self.model.graph_constants.label_to_names), "Dataset (from data) and graph constants (from model) don't align"
@@ -273,32 +277,92 @@ class DataExtractor:
         #    model.compute_new_definitions([df])
         #    #print("Names", df.definition_names)
     
+    def name_to_name_id(
+        self,
+        name: bytes,
+        global_cxt: list[int]
+    ):
+        """Get the name id from the name.
+
+        Since names aren't always unique and the name id is not stored in the metadata,
+        we have to infer the name id from the available possible ids and the global context.
+        The name id should be the first id with this name greater than the node ids.
+
+        :param name: The byte name of the current proofstate
+        :param global_cxt: The ids in the global context elements
+        """
+        name_str = name.decode("utf8")
+        indices = self.name_to_is[name_str]  # sorted list
+        max_cxt_id = max(global_cxt)
+        for index in indices:
+            if index <= max_cxt_id:
+                continue
+            else:
+                break
+        assert index > max_cxt_id, f"No index for {name_str} available larger than the maximum node id {max_cxt_id}. Indices: {indices}"
+        return index
+
+    @staticmethod
+    def sorted_list_to_list_of_ranges(l: list) -> list[list[int]]:
+        # if l is sorted and no duplicates, then the difference between x and the index i is a group id
+        groups = (list(group) for _, group in itertools.groupby(enumerate(l), key=lambda p: p[1] - p[0]))
+        intervals = [[group[0][1], group[-1][1]+1] for group in groups]
+        return intervals
+
+    def process_name_data(
+        self,
+        proof_state: LoaderProofstate,
+    ) -> int:
+        #name_bytes = proof_state.metadata.name
+        #cxt = [int(cxt_id) for cxt_id in proof_state.context.global_context]
+        #name_id = self.name_to_name_id(name_bytes, cxt)
+        name_id = proof_state.metadata.definition_index
+        step_id = int(proof_state.metadata.step)
+        
+        if name_id not in self.visited_names:
+            name_bytes = proof_state.metadata.name
+            cxt = [int(cxt_id) for cxt_id in proof_state.context.global_context]
+            cxt = sorted(cxt)
+            self.name_data[name_id] = {
+                "name_id": name_id,
+                "name": name_bytes.decode("utf8"),
+                "global_context_ranges": self.sorted_list_to_list_of_ranges(cxt)
+            }
+            
+            self.visited_names[name_id] = [step_id]
+        else:
+            #cxt = sorted(cxt)
+            #cxt = self.sorted_list_to_list_of_ranges(cxt)
+            #if name_id in self.name_data:
+            #    assert cxt == self.name_data[name_id]["global_context_ranges"], (name_bytes, cxt, self.name_data[name_id])
+            if step_id in self.visited_names[name_id]:
+                #name_bytes = proof_state.metadata.name
+                #print("WARNING", f"Visited more than once: {name_bytes} (id {name_id}), step {step_id}", flush=True)
+                pass
+            else:
+                self.visited_names[name_id].append(step_id)
+
+        return name_id
+    
     def compute_and_process_datapoint(
         self,
         i: int,
         split: str,
         proof_state: LoaderProofstate,
         action: LoaderAction,
+        name_id: int,
     ) -> tuple[dict[str, Any], npt.NDArray[np.float32]]:
         #self.model.compute_new_proofstep(
         #    proof_state=proof_state,
         #    tactic_id=action.tactic_id
         #)
         emb = self.model._compute_proofstate_emb(proof_state).numpy()
-        name = proof_state.metadata.name.decode("utf8")
-        indices = self.name_to_is[name]
-        min_i = max(proof_state.graph.nodes) + 1
-        for index in indices:
-            if index < min_i:
-                continue
-        assert index >= min_i, (min_i, indices)
         datapoint = {
             "id": int(i),
-            "metadata_name_id": index,
+            "metadata_name_id": name_id,
             "metadata_step": int(proof_state.metadata.step),
             "tactic_id": int(action.tactic_id),
             "split": split,
-            "global_context": [int(cxt_id) for cxt_id in proof_state.context.global_context]
         }
         # TODO(jrute): The tactic_inference_tack and _pop_tactic_embs is specific to the tfgnn model
         #emb = self.model.tactic_inference_task.proof_step_embeddings.get_value(self.model.tactic_inference_task.proof_step_embeddings.length-1) # type: ignore
@@ -315,12 +379,17 @@ class DataExtractor:
             for x in self.model.graph_constants.tactic_index_to_string:
                 print(x, file=f)
         
-    def save_data(self, file_ix: int, data: list[dict[str, Any]], embeddings: npt.ArrayLike):
+    def save_data(self, file_ix: int, name_data: dict[int, dict[str, Any]], data: list[dict[str, Any]], embeddings: npt.ArrayLike):
         data_jsonl_gz_file = self.output_dir / f"data/data{file_ix}.jsonl.gz"
         with gzip.open(data_jsonl_gz_file, "wb") as f:
             file_contents = "\n".join(json.dumps(x) for x in data)
             f.write(file_contents.encode())
 
+        data_jsonl_gz_file = self.output_dir / f"name_data/name_data{file_ix}.jsonl.gz"
+        with gzip.open(data_jsonl_gz_file, "wb") as f:
+            file_contents = "\n".join(json.dumps(x) for x in name_data.values())
+            f.write(file_contents.encode())
+        
         np.save(self.output_dir / f"embeddings/embeddings{file_ix}.npy", np.array(embeddings))
 
     def compute_and_save_data(self, limit: Optional[int], file_size: int):
@@ -337,25 +406,35 @@ class DataExtractor:
                 if limit is not None and cnt >= limit:
                     break
 
+                # this updates self.name_data with the name, name_id, and context
+                # the name_id is not unique to a proof state
+                name_id = self.process_name_data(
+                    proof_state=proof_state
+                )
+
                 datapoint, emb = self.compute_and_process_datapoint(
                     i=i,
                     split=split,
                     proof_state=proof_state,
-                    action=action
+                    action=action,
+                    name_id=name_id,
                 )
                 data.append(datapoint)
                 embeddings.append(emb)
 
                 # to save memory, periodically save data
                 if len(data) == file_size:
-                    self.save_data(file_ix, data, embeddings)
+                    self.save_data(file_ix, self.name_data, data, embeddings)
                     file_ix += 1
+                    # reset data
+                    self.name_data = {}
                     data = []
                     embeddings = []
                     #tracker.print_diff()
+                
 
         if data:
-            self.save_data(file_ix, data, embeddings)
+            self.save_data(file_ix, self.name_data, data, embeddings)
 
 
 def main():

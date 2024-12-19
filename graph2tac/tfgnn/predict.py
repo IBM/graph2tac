@@ -807,6 +807,7 @@ class TFGNNPredict(Predict):
             ),
             metadata = ProofstateMetadata(
                 name = "",
+                definition_index = 0,
                 step = 0,
                 is_faithful = False,
             ),

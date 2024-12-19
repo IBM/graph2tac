@@ -602,8 +602,9 @@ class DataServer(AbstractDataServer):
 
         metadata = ProofstateMetadata(
             name=definition.name.encode('utf-8'),
+            definition_index=self._node_to_node_i[definition.node],
             step=index,
-            is_faithful=is_faithful
+            is_faithful=is_faithful,
         )
 
         proofstate = LoaderProofstate(

@@ -22,6 +22,7 @@ LoaderGraph, LoaderGraphSpec = namedtuple_with_spec(
 ProofstateMetadata, ProofstateMetadataSpec = namedtuple_with_spec(
     "ProofstateMetadata",
     name = tf.TensorSpec([], tf.string),
+    definition_index = tf.TensorSpec([], tf.int64),
     step = tf.TensorSpec([], tf.int64),
     is_faithful = tf.TensorSpec([], tf.int64),
 )
