@@ -1,0 +1,40 @@
+benchmark:
+  conda_env:
+    python: "3.10"
+    setup_cmds:
+    - conda install -y -c conda-forge opam xxhash bubblewrap pkg-config gxx sysroot_linux-64==2.17 gmp capnproto=0.10.1
+  opam_env:
+    setup_cmds:
+    - opam update
+    - opam pin add dune 3.16.1  # needed to prevent an installation error involving pkgconf
+  benchmarks:
+
+  - benchmark_id: tfgnn_opam-training_main_no-names_opam_update-new-defs_knn-only_learned-embs-for-args_softmax_cosine_learned-knn-head
+    spec_repo: git+ssh://git@github.com/coq-tactician/coq-graph2tac-trained
+    spec_branch: jrute/knn-experiments
+    spec:
+      coq_tactician_commit: 9224b136ee7823d4776301035d9455f56c8c16b1
+      coq_tactician_api_commit: 301cd02019189601b7089ef712d6bed8d6a91e60  # proofs
+      model_source_url: http://64.71.146.254:8000/SFyud_C5TmEq7AwnK9jaLsfTFMzgBl54cQ0pl2FJB-x9o2Hk24F4jO_W75RqGdOJ/weights/2023-05-26_C_tfgnn_v15_opam-training_main_no-names_continued_epoch247.746f36f4d45c9557f9d4ec62a0c1e07e.tar.gz
+      model_md5sum: 746f36f4d45c9557f9d4ec62a0c1e07e
+      graph2tac_path: git+https://github.com/IBM/graph2tac.git@1805230d43032687bc5102c723bd16598f6c594d  #jrute/test-merge-with-proofs14 # using trained knn
+      injection_lines:
+        - 'Set Tactician Neural Executable "g2t-server --arch tfgnn --model %{share}%/%{name}%/model --log_level=summary --tf_log_level=critical --cpu-thread-count 1 --tactic_expand_bound=256 --search_expand_bound=256 --update_new_definitions --max_tactic_args=10 --knn-proofstep-limit=1000 --knn-dist=cosine --knn-only --knn-duplicate-reduction=softmax --knn-use-learned-tactic-embeddings-for-arg-prediction --knn-keys-ignore-tactic-head --knn-trained-model=/dccstor/mathzero/debug_memory_leak/knn_data_hidden3/models/knn_model_1755469.h5".'
+      description: tfgnn_opam-training_main_no-names_opam_update-new-defs_knn-only_learned-embs-for-args_softmax_cosine_learned-knn-head
+    job:
+      job_runner: "jbsub"
+      cpus: 25
+      gpus: 0
+      queue: "x86_24h"
+      mem_gb: 300
+      require: ""
+    benchmark_settings:
+      benchmark-target: coq-graph2tac
+      benchmark-time: 600
+      delay-benchmark: ""
+      max-requests: 1
+      max-running: 10
+      bench-inject: "'Set Tactician Neural Autocache.'"
+      pins: ["lwt.5.1.1", "capnp-rpc-unix.1.2.2", "dune.3.7.1", "ocaml.4.11.2", "coq-tactician-stdlib.8.11.dev", "coq-bignums.8.11.0", "coq-mathcomp-ssreflect.1.14.0", "coq-mathcomp-fingroup.1.14.0", "coq-equations.1.2.4+8.11", "coq-ext-lib.0.11.7", "coq-mathcomp-finmap.1.5.1", "coq-mathcomp-algebra.1.14.0", "coq-metacoq-template.1.0~beta2+8.11", "coq-error-handlers.1.2.0", "coq-paramcoq.1.1.3+coq8.11", "coq-gaia-theory-of-sets.1.15", "coq-list-plus.1.1.0", "coq-simple-io.1.8.0", "coq-menhirlib.20190924", "coq-ott.0.33", "coq-stdpp.1.5.0", "coq-cunit.1.0.0", "coq-coqprime.1.0.5", "coq-list-string.2.1.2", "coq-iris.3.4.0", "coq-quickchick.1.6.4", "coq-function-ninjas.1.0.0", "coq-flocq.3.4.3", "coq-mathcomp-bigenough.1.0.1", "coq-iris-string-ident.0.1.0", "coq-metacoq-pcuic.1.0~beta2+8.11", "coq-moment.1.2.1", "coq-aac-tactics.8.11.0", "coq-flocq-quickchick.1.0.2", "coq-gaia-schutte.1.15", "coq-deriving.0.1.0", "coq-fourcolor.1.2.5", "coq-generic-environments.8.11.0", "coq-mathcomp-multinomials.1.5.5", "coq-mathcomp-solvable.1.14.0", "coq-metacoq-safechecker.1.0~beta2+8.11", "coq-mi-cho-coq.1.0.0", "coq-mathcomp-field.1.14.0", "coq-antivalence.1.0.1", "coq-paco.4.1.1", "coq-hammer-tactics.1.3.2+8.11", "coq-gaia-ordinals.1.15", "coq-mathcomp-character.1.14.0", "coq-extructures.0.3.1", "coq-io.4.0.0", "coq-reglang.1.1.3", "coq-coqtail.8.14", "coq-mathcomp-real-closed.1.1.2", "coq-metacoq-erasure.1.0~beta2+8.11", "coq-hoare-tut.8.11.1", "coq-chapar.8.13.0", "coq-bertrand.8.12.0", "coq-huffman.8.12.0", "coq-itree.4.0.0", "coq-type-infer.0.1.0", "coq-compcert.3.7~coq-platform~open-source", "coq-pocklington.8.12.0", "coq-coqutil.0.0.2", "coq-coquelicot.3.2.0", "coq-hydra-battles.0.4", "coq-relation-algebra.1.7.4", "coq-gappa.1.5.3", "coq-coqoban.8.13.0", "coq-io-system.2.4.1", "coq-geometric-algebra.0.8.11", "coq-io-hello-world.1.2.0", "coq-regexp-brzozowski.1.0", "coq-almost-full.8.14.0", "coq-ltac-iter.1.1.2", "coq-coqeal.1.1.0", "coq-alea.8.11.0", "coq-zorns-lemma.10.0.1", "coq-atbr.8.11.0", "coq-gaia-numbers.1.15", "coq-reduction-effects.0.1.4", "coq-jsast.2.0.0", "coq-mathcomp-abel.1.2.1", "coq-qarith-stern-brocot.8.12.0", "coq-dpdgraph.0.6.7", "coq-vst.2.6", "coq-semantics.8.14.0", "coq-goedel.8.13.0", "coq-itree-io.0.1.0", "coq-high-school-geometry.8.12.0", "coq-chick-blog.1.0.1", "coq-metacoq-translations.1.0~beta2+8.11", "coq-jmlcoq.8.15.0", "coq-giskard.1.0", "coq-rsa.8.8.0", "coq-autosubst.1.7", "coq-smpl.8.11", "coq-buchberger.8.11.0", "coq-functional-algebra.1.0.2", "coq-color.1.8.2", "coq-math-classes.8.15.0", "coq-stalmarck.8.11.0", "coq-record-update.0.3.1", "coq-iterable.1.0.0", "coq-dijkstra.0.1.0", "coq-rewriter.0.0.2", "coq-libhyps.2.0.6"]
+      include: /dccstor/mathzero/model_runs/runs/2024-10-10_B_benchmark_tfgnn_opam_v15_nonames_knn_2/opam_test_thms_2000_2.txt
+      coq-project: coq-bits.1.1.0 coq-qcert.2.2.0 coq-ceres.0.4.0 coq-corn.8.16.0 coq-bytestring.0.9.0 coq-hammer.1.3.2+8.11 coq-gaia-stern.1.15 coq-mathcomp-apery.1.0.1 coq-tlc.20200328 coq-iris-heap-lang.3.4.0 coq-printf.2.0.0 coq-smtcoq.2.0+8.11 coq-topology.10.0.1 coq-haskell.1.0.0 coq-bbv.1.3 coq-poltac.0.8.11 coq-mathcomp-odd-order.1.14.0 coq-hott.8.11
